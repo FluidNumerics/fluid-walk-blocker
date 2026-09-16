@@ -32,9 +32,11 @@ pattern = "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*$"
 [tool.hatch.build.targets.wheel]
 packages = ["src/walk_blocker"]
 
+# Only tracked paths may be force-included: hatchling fails the build on a
+# missing source, and an empty directory is not in git however present it is
+# on one developer's disk (review round 2 on PR #1). `node/` and `schema/`
+# join this table when they hold files (Milestones 4 and 2).
 [tool.hatch.build.targets.wheel.force-include]
-"node" = "walk_blocker/_node"
-"schema" = "walk_blocker/_schema"
 "VERSION" = "walk_blocker/_VERSION"
 
 [tool.pytest.ini_options]

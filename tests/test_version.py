@@ -15,8 +15,11 @@ from walk_blocker import paths  # noqa: E402
 def test_version_file_is_bare_semver():
     with open(os.path.join(ROOT, "VERSION"), encoding="ascii") as fh:
         raw = fh.read()
-    assert raw.endswith("\n") and raw.count("\n") == 1
-    assert paths.VERSION_RE.match(raw.strip())
+    # Stricter than hatch's own pattern in pyproject.toml, which tolerates
+    # trailing whitespace: the FILE is pinned bare here even though every
+    # reader is defensive. Do not "fix" the two into agreement.
+    assert raw.endswith("\n") and "\n" not in raw[:-1]
+    assert paths.VERSION_RE.match(raw[:-1]), repr(raw)
 
 
 def test_the_package_reports_the_version_file():

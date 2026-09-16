@@ -187,5 +187,5 @@ Trevor's pronouns are **xe/xem/xyr**; use them in every written output.
 | Markdown lint | `uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md` |
 | IP hygiene (real gate at Milestone 1) | `python3 tools/check_no_site_literals.py` (also a CI job) |
 
-Rows tagged with a milestone do not work yet; `CLAUDE.md` is the authority on
-which tools exist.
+Rows tagged with a milestone do not work yet, or run only as a placeholder
+that says so; `CLAUDE.md` is the authority on which tools exist.

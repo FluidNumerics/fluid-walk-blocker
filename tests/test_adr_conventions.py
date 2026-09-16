@@ -71,6 +71,12 @@ def test_every_narrows_line_quotes_text_its_target_still_contains():
         for target, clause in NARROWS.findall(_read(path)):
             seen += 1
             target_text = _read(_by_number(target))
+            # A quote must be a clause, not a fragment: a three-word phrase is
+            # a substring of almost any body by coincidence, so existence would
+            # prove nothing. Every live quote has at least five words.
+            assert len(_words(clause).split()) >= 5, (
+                "ADR-%s's Narrows quote %r is too short to identify a clause"
+                % (_number(path), clause))
             body = target_text.split("\n## Context", 1)[1]
             # The quote must be a substring of the narrowed record's BODY, not
             # merely of its Status note about being narrowed. Compare words,

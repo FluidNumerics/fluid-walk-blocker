@@ -19,6 +19,11 @@ Conventions (delete this comment in a real ADR):
   measurement, say the class of measurement and write "measured at a
   reference deployment", then fill in "Re-measure when".
 - Filesystem type names (wekafs, nfs4, lustre, gpfs) are vocabulary and fine.
+- A **Narrows:** line quotes a full clause of the target's body, not a
+  fragment; `tests/test_adr_conventions.py` checks the quote resolves.
+- Adding an ADR, or giving one the closing paragraph, means updating the
+  expected count and the settled set in `tests/test_adr_conventions.py`;
+  its failure message says which.
 - Quote a rejected alternative's strongest form. A strawman is re-proposed.
 -->
 

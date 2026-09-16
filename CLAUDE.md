@@ -36,8 +36,10 @@ docstring example or an ADR sentence that names a real site is a defect.
 **The node never reads `site.toml`.** Site values are compiled into the
 artifacts by `walk-blocker build`. Do not add a runtime config read, an env
 var that supplies a site value, or a "convenience" path lookup on the node.
-The `WALK_BLOCKER_*` seams are test seams, audited when they change the
-outcome, and they gain no siblings. See ADR-0013.
+`WALK_BLOCKER_UNSCOPED` is the documented, audited escape hatch of an
+advisory guard (ADR-0001), not a test seam. The other `WALK_BLOCKER_*`
+variables are test seams, audited when they change the outcome, and they gain
+no siblings. See ADR-0013.
 
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
@@ -210,11 +212,12 @@ uv run walk-blocker build --site examples/site.example.toml --out examples/paylo
 shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job   # (Milestone 4)
 uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
-python3 tools/check_no_site_literals.py                 # IP hygiene, same as CI (Milestone 1)
+python3 tools/check_no_site_literals.py                 # IP hygiene, same as CI (placeholder until Milestone 1: runs, scans nothing)
 ```
 
-Commands marked with a milestone do not work yet; they name the shape the
-tooling will take so the docs do not have to be rewritten when it lands.
+Commands marked with a milestone do not work yet, or run only as a placeholder
+that says so; they name the shape the tooling will take so the docs do not
+have to be rewritten when it lands.
 
 CI runs the suite on Python 3.9–3.12 in an enterprise-Linux container as a
 non-root user, so that when the shell and permission tests arrive with the
