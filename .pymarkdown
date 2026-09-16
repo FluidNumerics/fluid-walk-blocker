@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "line-length": {
+      "enabled": false
+    },
+    "heading-style": {
+      "enabled": false
+    }
+  }
+}

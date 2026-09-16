@@ -1,0 +1,30 @@
+---
+# GitHub Actions workflows are the only YAML this repo has, and yamllint's
+# "default" preset was written for YAML in general, not that dialect
+# specifically -- two of its defaults fire on things GitHub Actions requires,
+# not on anything wrong:
+#
+#   - `on:` is a literal top-level key every workflow needs. YAML 1.1 reads
+#     the bareword `on` as the boolean true, which is the exact footgun that
+#     made an earlier workflow need a comment explaining it -- but it is a MAP
+#     KEY here, not a value, and GitHub's own parser treats it as the literal
+#     string "on" regardless. `check-keys: false` stops the truthy check from
+#     re-litigating a key spelling GitHub Actions itself mandates; `on` stays
+#     in `allowed-values` so a stray bareword truthy VALUE (`foo: yes`) is
+#     still caught.
+#   - `document-start` wants a leading `---`. Vanishingly few real-world GitHub
+#     Actions workflows carry one, GitHub's own docs and starter templates
+#     never do, and requiring it here would be a repo-specific convention
+#     imposed on a file format that doesn't use it anywhere else.
+extends: default
+
+rules:
+  document-start: disable
+  truthy:
+    allowed-values: ["true", "false", "on"]
+    check-keys: false
+  # A pytest node id quoted in full in ci.yml can run long, precisely on
+  # purpose. 100 gives that room
+  # (80) enough to stop catching a line that has actually grown too long.
+  line-length:
+    max: 100
