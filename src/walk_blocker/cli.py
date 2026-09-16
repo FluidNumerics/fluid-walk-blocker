@@ -2,7 +2,9 @@
 
 `validate` and `schema` are Milestone 2; `survey` runs the node's own
 `survey.py` in place so the same code an administrator runs on the node can
-be tried against a saved mount table here. `build` arrives in Milestone 4.
+be tried against a saved mount table here. `build` compiles a site into the
+node payload, or with `--check` compares a payload against what it would
+build (ADR-0013).
 """
 import argparse
 import importlib.util
@@ -12,7 +14,7 @@ import sys
 
 import jsonschema
 
-from . import __version__, config, paths
+from . import __version__, build, config, paths
 
 
 def _load_survey_module():
@@ -81,6 +83,10 @@ def cmd_survey(args):
     return 0
 
 
+def cmd_build(args):
+    return build.build(args.site, args.out, check=args.check)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="walk-blocker",
@@ -105,6 +111,15 @@ def build_parser():
     p.add_argument("--all", action="store_true", help="include pseudo filesystems")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_survey)
+
+    p = sub.add_parser("build", help="compile a site.toml into the node payload")
+    p.add_argument("--site", required=True, metavar="FILE")
+    p.add_argument("--out", required=True, metavar="DIR",
+                   help="payload directory; rebuilt if it carries the build marker")
+    p.add_argument("--check", action="store_true",
+                   help="compare DIR against a fresh render and write nothing; "
+                        "exit 1 if they differ")
+    p.set_defaults(func=cmd_build)
     return parser
 
 
