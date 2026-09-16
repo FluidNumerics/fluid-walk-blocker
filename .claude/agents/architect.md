@@ -185,7 +185,7 @@ Trevor's pronouns are **xe/xem/xyr**; use them in every written output.
 | Schema valid (Milestone 2) | `uv run walk-blocker validate --site examples/site.example.toml` |
 | Shell lint (Milestone 4) | `shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job` |
 | Markdown lint | `uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md` |
-| IP hygiene (real gate at Milestone 1) | `python3 tools/check_no_site_literals.py` (also a CI job) |
+| IP hygiene | `python3 tools/check_no_site_literals.py --require-terms --quiet` (also a CI job; `tools/README-ip-gate.md`) |
 
 Rows tagged with a milestone do not work yet, or run only as a placeholder
 that says so; `CLAUDE.md` is the authority on which tools exist.

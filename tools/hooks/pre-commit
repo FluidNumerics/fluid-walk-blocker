@@ -1,0 +1,11 @@
+#!/bin/sh
+# Enable once per clone:  git config core.hooksPath tools/hooks
+# Scans the STAGED file names' working-tree content against the structural
+# patterns, and against the customer term list when one is present locally.
+# The summary line says terms=on|off so a structural-only run is never
+# mistaken for a full one. CI is the authority; this is the early warning.
+set -eu
+top=$(git rev-parse --show-toplevel)
+git diff --cached --name-only -z --diff-filter=ACMR |
+    python3 "$top/tools/check_no_site_literals.py" --root "$top" --files-from - --quiet \
+        ${WALK_BLOCKER_REQUIRE_TERMS:+--require-terms}

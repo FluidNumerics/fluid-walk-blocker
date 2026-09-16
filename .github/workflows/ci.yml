@@ -60,10 +60,36 @@ jobs:
         run: uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 
   ip-hygiene:
-    # Placeholder until Milestone 1 lands the real gate. It exits 0 and
-    # says so, so nobody reads a green check here as a scan that happened.
+    # Two lists (tools/README-ip-gate.md): structural patterns committed in
+    # the repo, customer terms supplied ONLY as a secret. The term list is
+    # written to a 0600 file under RUNNER_TEMP for the duration of the job and
+    # removed in an always() step. The scanner reports customer hits by
+    # position only and --quiet hides even structural matches, so nothing
+    # derived from the secret reaches the log. A fork PR gets no secrets: the
+    # job then exits 3 and fails loudly rather than passing structurally.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: IP-hygiene gate (placeholder)
-        run: python3 tools/check_no_site_literals.py
+
+      - name: Materialise the customer term list
+        id: terms
+        env:
+          FORBIDDEN_TERMS: ${{ secrets.FORBIDDEN_TERMS }}
+        run: |
+          set -u
+          umask 077
+          f=$(mktemp -p "$RUNNER_TEMP" terms.XXXXXX)
+          printf '%s\n' "$FORBIDDEN_TERMS" > "$f"
+          [ -s "$f" ] || { echo "FORBIDDEN_TERMS is empty or unavailable" >&2; exit 3; }
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the tracked tree
+        env:
+          TERMS: ${{ steps.terms.outputs.path }}
+        run: python3 tools/check_no_site_literals.py --require-terms --quiet --terms "$TERMS"
+
+      - name: Destroy the term list
+        if: always()
+        env:
+          TERMS: ${{ steps.terms.outputs.path }}
+        run: rm -f "$TERMS"
