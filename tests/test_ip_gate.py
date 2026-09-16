@@ -83,6 +83,22 @@ def test_a_line_hitting_both_lists_reports_the_customer_term_and_nothing_else(sa
     assert "10.0.0.1" not in r.stdout + r.stderr
 
 
+@pytest.mark.parametrize("prefix,newline", [(b"\xef\xbb\xbf", b"\n"), (b"", b"\r\n"),
+                                            (b"\xef\xbb\xbf", b"\r\n")],
+                         ids=["bom", "crlf", "bom+crlf"])
+def test_a_term_file_with_a_bom_or_crlf_still_matches(tmp_path, prefix, newline):
+    # Either shape is what an editor on another platform produces. The first
+    # term must not compile with U+FEFF or a carriage return glued on.
+    terms = tmp_path / "terms.txt"
+    terms.write_bytes(prefix + b"widget-corp-login" + newline + b"other-made-up" + newline)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a.md").write_text("see widget-corp-login\n", encoding="utf-8")
+    r = scan(tree, terms)
+    assert r.returncode == gate.EXIT_FINDINGS, r.stderr
+    assert r.stdout.strip() == "a.md:1: customer-term"
+
+
 def test_a_short_waiver_reason_does_not_count(sandbox):
     tree, terms = sandbox
     (tree / "a.md").write_text("addr 10.0.0.1  # site-literal-ok: ok\n", encoding="utf-8")

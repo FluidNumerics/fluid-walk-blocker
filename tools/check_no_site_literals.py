@@ -46,7 +46,7 @@ def load_patterns(path):
     `allow * GLOB`) exempts paths from one category or all of them."""
     rules, allow = [], {}
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             lines = fh.read().splitlines()
     except OSError as exc:
         die("cannot read patterns: %s" % exc)
@@ -76,7 +76,11 @@ def load_terms(path):
     log and every screen."""
     out = []
     try:
-        with open(path, encoding="utf-8") as fh:
+        # utf-8-sig strips a byte-order mark. Without it the first term
+        # compiles with U+FEFF glued to its front and never matches, while
+        # the summary still says terms=on -- a silent fail-open (review
+        # round 2 on the gate's PR). splitlines() already absorbs CRLF.
+        with open(path, encoding="utf-8-sig") as fh:
             lines = fh.read().splitlines()
     except OSError as exc:
         die("cannot read term list: %s" % exc.__class__.__name__)
