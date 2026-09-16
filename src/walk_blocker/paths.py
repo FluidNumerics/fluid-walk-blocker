@@ -44,6 +44,29 @@ def node_dir():
     )
 
 
+def readme_file():
+    """The repo README, shipped in the payload: the hook block every login
+    shell sources points users at it to explain why their PATH changed."""
+    return _first_existing(
+        os.path.join(_CHECKOUT_ROOT, "README.md"),
+        os.path.join(_HERE, "README.md"),
+    )
+
+
+def docs_dir():
+    """`docs/`, shipped beside the README because its reading order is a
+    list of files under it."""
+    return _first_existing(
+        os.path.join(_CHECKOUT_ROOT, "docs"),
+        os.path.join(_HERE, "docs"),
+    )
+
+
+def rules_file():
+    """`search_rules.py`, copied verbatim into the payload for the reaper."""
+    return os.path.join(_HERE, "search_rules.py")
+
+
 def read_version():
     """The one hand-written version, validated to the shape every generated
     artifact will embed inside single quotes. A version that is not

@@ -1,0 +1,144 @@
+# walk-blocker site configuration -- a FICTIONAL site, "Example HPC".
+#
+# Every value in this file is compiled into the payload by `walk-blocker
+# build` (ADR-0013). Nothing on the node reads this file at run time: the
+# shim, the reaper, `walk-job` and `deploy.py` all carry these values as
+# literals. A change here is a rebuild and a redeploy, reviewed as a diff.
+#
+# Nothing below describes a real deployment. Copy it, then replace every
+# value with what your own site measured (see docs/site-config.md).
+
+schema_version = 1
+
+[site]
+display_name = "Example HPC login node"
+docs_url = "https://docs.example.org/hpc/walk-blocker"
+contact = "hpc-help@example.org"
+
+[filesystems]
+# Types treated as expensive by default, worst first. Glob-aware. Loosen a
+# single small mount with a [[filesystems.mounts]] override below; never by
+# shortening this list, which loosens every mount at once (ADR-0016).
+remote_fstypes = [
+  "lustre", "wekafs", "beegfs", "gpfs", "ceph",
+  "nfs4", "nfs", "cifs", "smb3", "glusterfs", "panfs",
+  "fuse.*", "9p", "sshfs", "s3fs", "daos",
+]
+remote_proxy = true         # also `host:` sources and _netdev / addr= options
+maxdepth_allowed = 2        # global depth ceiling for a bounded walk
+unscoped_depth = 2          # roots this shallow are refused when walked unbounded
+depth_allowance_max = 8     # no per-mount ceiling may exceed this
+mount_table = "/proc/mounts"
+
+# Home directories: measured cheaper at depth than the scratch filesystem
+# (ADR-0007's method, run from the datamover partition; record kept beside
+# this file, not in the generic tree).
+[[filesystems.mounts]]
+path = "/home"
+class = "expensive"
+maxdepth = 4
+
+# A small NFS export of installed software. Cheap to walk in full; the
+# survey output that justified this sits beside this file.
+[[filesystems.mounts]]
+path = "/opt/site-tools"
+class = "cheap"
+
+[install]
+# All on local disk, never on a filesystem under investigation.
+prefix = "/usr/local/lib/walk-blocker"
+spool_dir = "/var/log/walk-blocker"
+audit_filename = "searchguard-audit.jsonl"
+unit_dir = "/etc/systemd/system"
+staging_parent = "/run"
+tool_search_path = [
+  "/usr/local/sbin", "/usr/local/bin",
+  "/usr/sbin", "/usr/bin", "/sbin", "/bin",
+]
+
+# Which shells, and which gate, comes from a census of this site's login
+# shells (ADR-0008), not from the shells' documentation.
+[hooks.bash]
+enabled = true
+# Debian-family location; RHEL-family uses /etc/bashrc. verify_hooks decides
+# whether the block actually fires for `ssh host 'cmd'` -- this file only
+# says where it is written.
+file = "/etc/bash.bashrc"
+package = "bash"
+gate = "required"
+
+[hooks.zsh]
+enabled = true
+# Debian-family location; RHEL-family uses /etc/zshenv.
+file = "/etc/zsh/zshenv"
+package = "zsh"
+gate = "required"
+
+[hooks.fish]
+enabled = true
+file = "/etc/fish/conf.d/walk-blocker.fish"
+gate = "best-effort"
+
+[trusted_binaries]
+logger = "/usr/bin/logger"
+awk = "/usr/bin/awk"
+id = "/usr/bin/id"
+date = "/usr/bin/date"
+timeout = "/usr/bin/timeout"
+sh = "/bin/sh"
+python3 = "/usr/bin/python3"
+bfs = "/usr/bin/bfs"
+
+[slurm]
+partition = "datamover"
+qos = "low"
+default_time = "1:00:00"        # low on purpose; raising it is a visible choice
+default_mem = "8G"              # load-bearing on an unlimited-default partition
+sbatch_glob = "/opt/slurm/*/bin/sbatch"
+nice = 19
+output_pattern = "walk-job-%j.out"
+min_job_age_s = 300
+extra_job_tools = ["job-report"]
+
+[shim]
+unwrapped_tools = ["fzf", "sk"]
+
+[reaper]
+cgroup_root = "/sys/fs/cgroup/user.slice"
+slice_prefix = "user-"
+slice_suffix = ".slice"
+# cgroup leaf name -> descriptive origin label; first match wins. One entry
+# per ssh transport or container runtime this site runs (ADR-0003).
+origins = [
+  { pattern = '^session-\d+\.scope$',      label = "ssh_seated" },
+  { pattern = '^session-c\d+\.scope$',     label = "ssh_seatless" },
+  { pattern = '^docker-[0-9a-f]+\.scope$', label = "container" },
+  { pattern = '^[^/]+\.service$',          label = "systemd_service" },
+  { pattern = '^init\.scope$',             label = "init" },
+]
+traversal_budget_s = 900
+fanout_n = 4
+io_stall_fraction = 0.01        # differenced over one poll window, never cumulative
+cpu_stall_fraction = 0.50
+kill_grace_s = 10
+max_kills = 10
+settle_s = 10.0
+audit_max_bytes = 10485760
+stream_filters = ["tail"]
+
+[timer]
+# This node is shared. Before choosing this slot, survey the node:
+#   - as root:            systemctl list-timers --all
+#   - for EVERY account:  systemctl --user list-timers
+#   - and the site's cron.
+# Pick a minute AND a second that no calendar neighbour uses; a per-minute
+# collector leaves the second field as the only separation. Monotonic timers
+# (OnUnitActiveSec and friends) drift and cannot be dodged by a slot -- note
+# which ones exist and accept the overlap knowingly.
+on_calendar = "*:07,17,27,37,47,57:30"
+randomized_delay_sec = 0        # jitter would undo the chosen slot
+accuracy_sec = "1s"
+persistent = false
+timeout_start_sec = 240         # >= relink + kill budgets; validate computes the floor
+relink_timeout_s = 30
+relink_kill_after_s = 10

@@ -93,3 +93,28 @@ jobs:
         env:
           TERMS: ${{ steps.terms.outputs.path }}
         run: rm -f "$TERMS"
+
+  build-check:
+    # `examples/payload/` is a build product (ADR-0013): `--check` is the
+    # oracle for staleness, and two builds into fresh directories must be
+    # byte-identical or the oracle is not one. The placeholder grep skips
+    # the verbatim prose, where ADR-0013 names the `@@KEY@@` convention.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Two builds of the example site are byte-identical
+        run: |
+          uv run walk-blocker build --site examples/site.example.toml --out "$RUNNER_TEMP/a"
+          uv run walk-blocker build --site examples/site.example.toml --out "$RUNNER_TEMP/b"
+          diff -r "$RUNNER_TEMP/a" "$RUNNER_TEMP/b"
+
+      - name: The committed example payload is current
+        run: |
+          uv run walk-blocker build --site examples/site.example.toml \
+            --out examples/payload --check
+
+      - name: No unfilled placeholder in any generated file
+        run: |
+          ! grep -r '@@' examples/payload --exclude-dir=docs --exclude=README.md

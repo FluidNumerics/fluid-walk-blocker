@@ -211,9 +211,9 @@ issues and docs.
 
 ```sh
 uv run --group dev pytest tests/ -q                     # the suite
-uv run walk-blocker validate --site site.toml           # schema + semantic checks (Milestone 2)
-uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check   # (Milestone 4)
-shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job   # (Milestone 4)
+uv run walk-blocker validate --site site.toml           # schema + semantic checks
+uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check
+shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh   # walk-job joins at Milestone 5
 uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 python3 tools/check_no_site_literals.py --require-terms --quiet   # IP hygiene, same as CI; see tools/README-ip-gate.md

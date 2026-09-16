@@ -1,0 +1,33 @@
+{
+  "files": {
+    "README.md": "ce845aea94fae7bfb601ae9243210cc4dcecb1ddeca7f4352d964fd3cbe14fa4",
+    "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
+    "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
+    "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
+    "docs/adr/0004-root-owned-deploy-only.md": "bef6a7c04abd9f41409a4a6c57e5ad04b3c03fcf3f44e4fbaca5ad6a535352b8",
+    "docs/adr/0005-argumentless-deploy.md": "b0684bafabea5a24ba5e5c537ce60894b0f59db4888da4ab1062e775a58f0f25",
+    "docs/adr/0006-user-owned-source-tree.md": "05fd3cf27441fc4f5de819bf1a32bd31d468ec782c3a5b2741eb6040e36aa6ce",
+    "docs/adr/0007-no-namespace-index.md": "d66dea3351d500d75488b836bcc9cbddf909dd873d78a6cfae259de7b61e9118",
+    "docs/adr/0008-hook-shells-are-config.md": "6d0a7bf3c5b777dd9be91b12723d5680f391c898b7e48ad4c453831c37c88b0d",
+    "docs/adr/0009-psi-corroborates-it-does-not-gate.md": "47542bf4587dbf37e0c672e5c98f55011be272bcbdeca54d2e06cc207ce80954",
+    "docs/adr/0010-opaque-traversal-names-tools.md": "42a23e906336484707814f4b31a211ec52a32531639c5a6968f49a1324f38353",
+    "docs/adr/0011-layer2-senses-stdin.md": "10e671088f49f678af765e927ed713c04a34966eccb2e4358bff0cb326ca6260",
+    "docs/adr/0012-audit-trail-is-readable.md": "3d2c00e8bd05e2796732871aacce33bb6975b6a4bbd634bcb76c517b0173a8e3",
+    "docs/adr/0013-site-config-compiled-at-build.md": "545f6cda53c3760fbdd95da6a8a17bc24729470befc65e60b36ce3caaab70d4a",
+    "docs/adr/0014-decisions-not-evidence.md": "987b7c9f876ab954a1eb42e29e083fc630495d46bab7a1da1fd85323bc0a78a1",
+    "docs/adr/0015-node-runtime.md": "4566e2e056cfec24074554a9adecf51e9664b5d994cf4df8712ce975008a6289",
+    "docs/adr/0016-mount-policy-three-tiers.md": "9458f7216f21a87de22c81b18bafbbf66401cd636def514107abd1faaad9fb9a",
+    "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
+    "docs/evidence.md": "df5748114b0d5a7bbf24baa204539f1be93da6a5b774ecf2266b5518a20a1473",
+    "docs/site-config.md": "0a221db2ee96d36aefacc8f6d3a584d3e1614b9275fbcb81ac6aee6ad34c6e74",
+    "search_rules.py": "f637acf7f352920beec731ccf099924c907e3749f2a6d1a4840d5b99048f67f5",
+    "shim/guard.sh": "7ad156fba8f3bbf32a6f46af06fe0641dc25310cf0b0f528a51887359683cd4b",
+    "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
+    "site.toml": "929953109541e8bfe44f00c3a765bbbf08536d905595ff63e18a9f9fbbda910c",
+    "survey.py": "140e1fc28737a62fe18e42d48f72cc128121c72bd123579f2567471af0f46d0a"
+  },
+  "schema_version": 1,
+  "site_sha256": "929953109541e8bfe44f00c3a765bbbf08536d905595ff63e18a9f9fbbda910c",
+  "version": "0.1.0",
+  "walk_blocker_version": "0.1.0"
+}

@@ -1,0 +1,285 @@
+"""`walk-blocker build`: compile `site.toml` into the node payload (ADR-0013).
+
+The whole payload is rendered in memory first -- a map of payload-relative
+path to `(bytes, mode)` -- and only then written or compared. Rendering in
+memory is what makes `--check` a pure comparison that never writes, and it
+is what makes the output deterministic: nothing here reads a clock or a
+hostname, every file's mode is set explicitly, and the same inputs render to
+the same bytes.
+
+Payload layout (Milestone 4; `reaper.py`, `deploy.py`, `shim/install.sh` and
+`walk-job` join it in later milestones):
+
+    .walk-blocker-build     build marker: this directory may be rebuilt
+    README.md               the repo README, verbatim
+    docs/...                the docs tree, verbatim
+    search_rules.py         the rule table, verbatim (the reaper imports it)
+    survey.py               node/survey.py, verbatim
+    site.toml               the input, byte for byte, as a record
+    site.lock.json          schema/tool/payload versions and a hash per file
+    shim/guard.sh           rendered from the rule table and site.toml (0755)
+    shim/wrapped_names.sh   rendered likewise (0644)
+
+A build refuses an output directory it did not create: one that exists, is
+not empty, and has no `.walk-blocker-build` marker. One that carries the
+marker is wiped and rebuilt. The payload is assembled beside the target and
+renamed into place, so a failed build leaves the previous payload intact.
+"""
+import os
+import shutil
+import stat
+import sys
+import tempfile
+
+import jsonschema
+
+from . import __version__, config, paths, stamp
+from .render import manifest
+
+try:
+    from .render.shim import render_shim, render_wrapped_names
+except ModuleNotFoundError as _exc:  # pragma: no cover - transitional
+    # The shim renderer lands beside this module; until it does, the rest of
+    # the payload builds and the shim files are omitted with a warning.
+    # Only the module's own absence is tolerated, never an error inside it.
+    if _exc.name != "walk_blocker.render.shim":
+        raise
+    render_shim = render_wrapped_names = None
+
+BUILD_MARKER = ".walk-blocker-build"
+
+MODE_FILE = 0o644
+MODE_EXEC = 0o755
+MODE_DIR = 0o755
+
+# Payload-relative paths that are executed directly rather than sourced or
+# imported. Everything else is 0644.
+EXECUTABLE = frozenset(["shim/guard.sh"])
+
+EXIT_OK, EXIT_DIFFERS, EXIT_ERROR = 0, 1, 2
+
+
+class BuildError(Exception):
+    """Anything that stops a build: a config error, a refusal, a defect in a
+    generated text. The message is the whole report."""
+
+
+def _read(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _load_site(site_path):
+    """`config.load_site`, with each failure class worded as `validate`
+    words it. Kept here rather than imported from `cli` so this module has
+    no dependency on the command-line layer."""
+    try:
+        return config.load_site(site_path)
+    except config.ConfigError as exc:
+        raise BuildError("%s: %s: %s" % (site_path, exc.path, exc.message))
+    except jsonschema.ValidationError as exc:
+        pointer = "/" + "/".join(str(p) for p in exc.absolute_path)
+        raise BuildError("%s: %s: %s" % (site_path, pointer, exc.message))
+    except (OSError, ValueError) as exc:  # unreadable file, TOML syntax
+        raise BuildError("%s: %s" % (site_path, exc))
+
+
+def _tree_files(root):
+    """Every regular file under `root`, as sorted relative POSIX paths.
+    Hidden entries and `__pycache__` are not payload."""
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames
+                             if not d.startswith(".") and d != "__pycache__")
+        for name in filenames:
+            if name.startswith(".") or name.endswith(".pyc"):
+                continue
+            full = os.path.join(dirpath, name)
+            found.append(os.path.relpath(full, root).replace(os.sep, "/"))
+    return sorted(found)
+
+
+def _generated(rel, text):
+    """A rendered text is checked for an unfilled `@@PLACEHOLDER@@`, then
+    encoded."""
+    if "@@" not in text:
+        return text.encode("utf-8")
+    raise BuildError("%s: rendered text still contains '@@' (an unfilled placeholder)" % rel)
+
+
+def _verbatim(rel, source, consumers):
+    """A file copied byte for byte. It may carry a stamp marker only if
+    `CONSUMERS` lists it -- otherwise the marker would never be stamped and
+    never be checked, and the literal on the node would be whatever the
+    source last said."""
+    data = _read(source)
+    if rel not in consumers:
+        try:
+            markers = stamp.find_markers(data.decode("utf-8"))
+        except UnicodeDecodeError:
+            markers = []
+        if markers:
+            raise BuildError("%s: carries a `%s` marker (line %d) but is not in "
+                             "stamp.CONSUMERS; add the row or drop the marker"
+                             % (rel, stamp.MARKER, markers[0].lineno))
+    return data
+
+
+def render_payload(site, site_bytes, version, warn=None):
+    """The payload as `{relpath: (bytes, mode)}`, manifest and marker
+    included. `warn` receives one-line notices about what was omitted."""
+    warn = warn or (lambda msg: None)
+    files = {}
+
+    def put(rel, data, mode=MODE_FILE):
+        if rel in files:
+            raise BuildError("%s: emitted twice" % rel)
+        files[rel] = (data, mode)
+
+    put("site.toml", site_bytes)
+    put("README.md", _read(paths.readme_file()))
+    docs = paths.docs_dir()
+    for rel in _tree_files(docs):
+        put("docs/" + rel, _read(os.path.join(docs, rel)))
+    put("search_rules.py", _verbatim("search_rules.py", paths.rules_file(), stamp.CONSUMERS))
+    put("survey.py", _verbatim("survey.py", os.path.join(paths.node_dir(), "survey.py"),
+                               stamp.CONSUMERS))
+
+    # Stamped consumers: the source is the same relative path under node/.
+    # Empty in Milestone 4; see the comment on `stamp.CONSUMERS`.
+    values = stamp.SiteValues(site, version)
+    for rel, required in sorted(stamp.CONSUMERS.items()):
+        kind = "py" if rel.endswith(".py") else "sh"
+        text = _read(os.path.join(paths.node_dir(), rel)).decode("utf-8")
+        try:
+            text = stamp.stamp_text(text, values, kind)
+            findings = stamp.check_text(text, values, kind, required)
+        except stamp.StampError as exc:
+            raise BuildError("%s: %s" % (rel, exc))
+        if findings:
+            raise BuildError("%s: %s" % (rel, "; ".join(findings)))
+        put(rel, _generated(rel, text), MODE_EXEC if rel in EXECUTABLE else MODE_FILE)
+
+    if render_shim is None:
+        warn("shim renderer not available; shim/ omitted from this payload")
+    else:
+        policy = site.policy()
+        put("shim/guard.sh", _generated("shim/guard.sh",
+                                        render_shim(policy, site, version)), MODE_EXEC)
+        put("shim/wrapped_names.sh", _generated("shim/wrapped_names.sh",
+                                                render_wrapped_names(policy, site, version)))
+
+    hashed = {rel: data for rel, (data, _mode) in files.items()}
+    lock = manifest.render_manifest(site_bytes, version, site.lookup("schema_version"),
+                                    __version__, hashed)
+    put(manifest.FILENAME, manifest.manifest_bytes(lock))
+    put(BUILD_MARKER, ("%s\n" % version).encode("ascii"))
+    return files
+
+
+def _refuse_unless_ours(out_dir):
+    """A non-empty directory without the marker was not made by a build."""
+    if not os.path.exists(out_dir):
+        return
+    if not os.path.isdir(out_dir):
+        raise BuildError("%s: exists and is not a directory" % out_dir)
+    if os.listdir(out_dir) and not os.path.exists(os.path.join(out_dir, BUILD_MARKER)):
+        raise BuildError("%s: refusing to overwrite a non-empty directory that has no "
+                         "%s marker; a build only replaces what a build made"
+                         % (out_dir, BUILD_MARKER))
+
+
+def _write_tree(root, files):
+    for rel in sorted(files):
+        data, mode = files[rel]
+        target = os.path.join(root, *rel.split("/"))
+        parent = os.path.dirname(target)
+        if not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(target, "wb") as fh:
+            fh.write(data)
+        os.chmod(target, mode)
+    for dirpath, dirnames, _filenames in os.walk(root):
+        for d in dirnames:
+            os.chmod(os.path.join(dirpath, d), MODE_DIR)
+    os.chmod(root, MODE_DIR)
+
+
+def _write_payload(out_dir, files):
+    """Assemble beside `out_dir`, then swap it in. The temp dir is a sibling
+    so the rename is a rename and not a copy across filesystems."""
+    out_dir = os.path.abspath(out_dir)
+    parent = os.path.dirname(out_dir)
+    if not os.path.isdir(parent):
+        os.makedirs(parent)
+    staging = tempfile.mkdtemp(prefix=".walk-blocker-build.", dir=parent)
+    try:
+        _write_tree(staging, files)
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir)
+        os.rename(staging, out_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def _on_disk(out_dir):
+    """`{relpath: (bytes, mode)}` for everything under `out_dir`, hidden
+    files included: `--check` must see the marker and any stray file."""
+    found = {}
+    for dirpath, _dirnames, filenames in os.walk(out_dir):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, out_dir).replace(os.sep, "/")
+            found[rel] = (_read(full), stat.S_IMODE(os.lstat(full).st_mode))
+    return found
+
+
+def compare(expected, actual):
+    """One line per difference between a rendered payload and a directory.
+    Empty means identical, bytes and modes both."""
+    lines = []
+    for rel in sorted(set(expected) | set(actual)):
+        if rel not in actual:
+            lines.append("missing: %s" % rel)
+        elif rel not in expected:
+            lines.append("extra: %s" % rel)
+        else:
+            (want, want_mode), (have, have_mode) = expected[rel], actual[rel]
+            if want != have:
+                lines.append("differs: %s" % rel)
+            elif want_mode != have_mode:
+                lines.append("mode: %s is %04o, expected %04o" % (rel, have_mode, want_mode))
+    return lines
+
+
+def build(site_path, out_dir, check=False, out=None, err=None):
+    """Build `site_path` into `out_dir`, or with `check` compare the two
+    without writing. Returns the process exit code: 0 built or identical,
+    1 `check` found a difference, 2 config error, refusal or build defect."""
+    out = sys.stdout if out is None else out
+    err = sys.stderr if err is None else err
+    try:
+        site = _load_site(site_path)
+        try:
+            version = paths.read_version()
+        except (OSError, ValueError) as exc:
+            raise BuildError(str(exc))
+        if not check:
+            _refuse_unless_ours(out_dir)
+        files = render_payload(site, _read(site_path), version,
+                               warn=lambda msg: err.write("walk-blocker build: %s\n" % msg))
+        if check:
+            if not os.path.isdir(out_dir):
+                out.write("missing: %s (not a directory)\n" % out_dir)
+                return EXIT_DIFFERS
+            lines = compare(files, _on_disk(out_dir))
+            for line in lines:
+                out.write(line + "\n")
+            return EXIT_DIFFERS if lines else EXIT_OK
+        _write_payload(out_dir, files)
+        out.write("%s: built %d files into %s\n" % (site_path, len(files), out_dir))
+        return EXIT_OK
+    except BuildError as exc:
+        err.write("walk-blocker build: %s\n" % exc)
+        return EXIT_ERROR

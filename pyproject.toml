@@ -40,6 +40,8 @@ packages = ["src/walk_blocker"]
 "VERSION" = "walk_blocker/_VERSION"
 "schema" = "walk_blocker/schema"
 "node" = "walk_blocker/node"
+"README.md" = "walk_blocker/README.md"
+"docs" = "walk_blocker/docs"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

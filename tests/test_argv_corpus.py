@@ -19,10 +19,10 @@ not pass or fail depending on the day. Widening it is a matter of adding
 fragments, and the `WALK_BLOCKER_CORPUS_SCALE` environment variable raises the
 count per tool for a deeper run when someone is hunting.
 
-Until Milestone 4 lands the generated shim, the agreement half is skipped at
-collection and only the table half runs: every generated argv must be judged
-without error, deterministically, with the two stdin readings differing only
-where the grammar says they may.
+Two halves. The table half: every generated argv must be judged without
+error, deterministically, with the two stdin readings differing only where the
+grammar says they may. The agreement half: the rendered shim, driven under the
+node's shell, must return the table's verdict for every generated argv.
 """
 
 import os
@@ -32,7 +32,7 @@ import pytest
 
 from walk_blocker import search_rules as R
 from argv_cases import FAST_CWD
-from conftest import resolve_cwd
+from conftest import resolve_cwd, run_shim
 
 
 @pytest.fixture(autouse=True)
@@ -269,9 +269,8 @@ def test_generated_argv_is_judged_by_the_table(corpus_argv, cwd, mounts, policy,
         assert tty is not None, corpus_argv
 
 
-@pytest.mark.skip(reason="shim arrives in Milestone 4")
 @pytest.mark.parametrize("cwd", ["/var/tmp", FAST_CWD], ids=["cheap", "fast"])
-def test_generated_argv_agrees_on_both_consumers(corpus_argv, cwd, mounts, policy, node_fs):
+def test_generated_argv_agrees_on_both_consumers(corpus_argv, cwd, mounts, policy, node_fs, shim_env):
     """Table and generated shim must return the same verdict, argv by argv.
 
     The shim is driven with a PIPE on stdin, so the table is asked the same
@@ -279,8 +278,25 @@ def test_generated_argv_agrees_on_both_consumers(corpus_argv, cwd, mounts, polic
     make every no-operand ugrep row diverge by construction rather than by
     defect -- the same reason those rows are not in the hand-written matrix.
 
-    Re-enable by deleting the skip mark once `run_shim` exists in conftest;
-    a mismatch matching a KNOWN_DIVERGENCES entry is an xfail, anything else
+    A mismatch matching a KNOWN_DIVERGENCES entry is an xfail, anything else
     a failure.
     """
-    raise AssertionError("unreachable until the shim exists")
+    real_cwd = resolve_cwd(cwd, node_fs)
+    table = R.check(corpus_argv, real_cwd, mounts, policy, stdin_is_tty=False) is not None
+
+    result = run_shim(shim_env, corpus_argv, cwd=cwd)
+    shim = result.returncode == R.EXIT_REFUSED
+
+    if table != shim:
+        for issue, matches in KNOWN_DIVERGENCES.items():
+            if matches(corpus_argv):
+                pytest.xfail("known divergence: %s" % issue)
+
+    assert table == shim, (
+        "table=%s shim=%s for: %s (cwd %s)\nstderr: %s"
+        % ("REFUSE" if table else "ALLOW", "REFUSE" if shim else "ALLOW",
+           " ".join(repr(a) for a in corpus_argv), real_cwd,
+           result.stderr.decode()[:400]))
+    if not shim:
+        assert result.returncode == 0, result.stderr.decode()
+        assert b"RAN" in result.stdout, "guard did not exec the real binary"

@@ -180,10 +180,10 @@ Trevor's pronouns are **xe/xem/xyr**; use them in every written output.
 |---|---|
 | Tests | `uv run --group dev pytest tests/ -q` |
 | One test | `uv run --group dev pytest tests/test_version.py::NAME -q` |
-| Compile site config (Milestone 4) | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload` |
-| Artifacts not stale (Milestone 4) | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check` |
-| Schema valid (Milestone 2) | `uv run walk-blocker validate --site examples/site.example.toml` |
-| Shell lint (Milestone 4) | `shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job` |
+| Compile site config | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload` |
+| Artifacts not stale | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check` |
+| Schema valid | `uv run walk-blocker validate --site examples/site.example.toml` |
+| Shell lint | `shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh` (walk-job joins at Milestone 5) |
 | Markdown lint | `uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md` |
 | IP hygiene | `python3 tools/check_no_site_literals.py --require-terms --quiet` (also a CI job; `tools/README-ip-gate.md`) |
 
