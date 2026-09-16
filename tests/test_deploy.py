@@ -1,0 +1,2906 @@
+"""deploy.py's orchestration: the root+approval gate, what it hands to
+install.sh and systemd, and the literals it reads instead of arguments.
+
+install.sh's own correctness (the hooks, the symlink farm, verification) is
+tests/test_install.py's job. Here we check that deploy.py asks for the right
+things in the right order, refuses the same things in preview and in
+execute, and writes correct unit files -- so systemctl calls are recorded
+rather than actually run (no real systemd in CI), matching how `_is_root` is
+monkeypatched rather than requiring real root.
+
+The module under test is the STAMPED deployer (see `_deploy_helpers`): the
+in-tree `node/deploy.py` with a fictional site's values compiled in,
+imported from a scratch directory the way the payload lays it out. Every
+path a test moves a constant to is under tmp; every literal the shape tests
+read is the example site's (ADR-0014).
+"""
+
+import argparse
+import io
+import os
+import py_compile
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+import pytest
+
+from _deploy_helpers import (EXAMPLE_SITE, REQUIRED_SOURCES, ROOT,
+                             load_stamped_deploy, site_values, source_text,
+                             stamped_text, write_stamped_deploy)
+from _install_helpers import Layout, stamped_install
+import walk_blocker
+from walk_blocker import build, stamp
+
+VALUES = site_values()
+deploy = load_stamped_deploy(VALUES)
+
+# The interpreter the node actually has (ADR-0015), where this machine has
+# one; the test interpreter otherwise, so the check still runs.
+NODE_PYTHON = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
+
+PATH_FLAGS = ("--prefix", "--unit-dir", "--spool-dir", "--audit",
+              "--bashrc-file", "--zshenv-file", "--fish-conf-file")
+
+
+def recording_run(calls, active_units=(), enabled_units=()):
+    """A `run` stub that records commands and models systemd honestly.
+
+    Both state queries are answered with the state WORD, because that is
+    what deploy.py reads. For `is-active`, a non-zero exit can also mean a
+    bus error, so the exit code alone cannot distinguish "not running" from
+    "could not tell". Defaults model the common case: nothing running,
+    nothing enabled. Pass `active_units` for a unit that refused to stop,
+    `enabled_units` for one whose `disable` left the enablement symlink
+    behind -- the shape that used to slip past an is-active-only check.
+    """
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        calls.append(cmd)
+        returncode, stdout = 0, ""
+        if cmd[:2] == ["systemctl", "is-active"]:
+            if cmd[-1] in active_units:
+                returncode, stdout = 0, "active\n"
+            else:
+                returncode, stdout = 3, "inactive\n"
+        elif cmd[:2] == ["systemctl", "show"]:
+            if cmd[2] in enabled_units:
+                returncode, stdout = 0, "enabled\n"
+            else:
+                returncode, stdout = 0, "disabled\n"
+        return subprocess.CompletedProcess(cmd, returncode, stdout, "")
+    return fake_run
+
+
+def pass_uninstall_checks(monkeypatch, prefix):
+    """Satisfy the uninstall guards: trusted chain, and a marked directory.
+
+    The chain is stubbed for the same reason as on the install path -- a tmp
+    tree's ancestors are user-owned -- but the marker is a real file, since
+    that check is about what is on disk.
+    """
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    os.makedirs(prefix, exist_ok=True)
+    open(os.path.join(prefix, deploy.PAYLOAD_MARKER), "w").close()
+    # The teardown runs the DEPLOYED helper, so it has to be there.
+    staged = os.path.join(prefix, "shim")
+    os.makedirs(staged, exist_ok=True)
+    for name in ("install.sh", "wrapped_names.sh"):
+        open(os.path.join(staged, name), "w").close()
+
+
+def pass_prefix_checks(monkeypatch):
+    """Stub the path-trust checks to their post-install answers.
+
+    Ownership is driven by real uids, and a test running as an ordinary user
+    in a tmp directory can satisfy neither the chain nor `unowned_by`: every
+    ancestor of `tmp_path` is owned by the test user, which is exactly what
+    the chain check is for. Each has its own tests below.
+
+    WHAT THIS STUB HIDES: with it in place no test can exercise the REAL
+    traversability check through `system_execute`/`system_preview`. Use
+    `pass_ownership_checks()` with the `traversable_root` fixture when the
+    caller-level behaviour of the real check is what is under test.
+    """
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    # pytest's tmp_path parent is 0700, so it is genuinely not traversable
+    # by other users -- the check is right and the fixture is not the shape
+    # it judges.
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    # not_a_default() is deliberately NOT stubbed: the autouse _test_paths
+    # fixture moves the constants to this tmp tree, so the real check runs
+    # and passes for the right reason.
+
+
+def pass_ownership_checks(monkeypatch):
+    """`pass_prefix_checks()` MINUS the traversability stub. Ownership
+    cannot be satisfied by an unprivileged test, so those two stay stubbed;
+    traversability can be, given a tree whose ancestors really are
+    traversable (`traversable_root`), and leaving it real is the point."""
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+
+
+def unowned_by_here(tree):
+    """`deploy.unowned_by` driven against the running user's own uid. The
+    check exists to prove root ownership, which a test cannot create; what
+    it can prove is the logic -- symlink escape, unreadable subtree, loose
+    mode -- without privilege. Same dependency-injection reasoning ADR-0004
+    records for `_is_root`."""
+    return deploy.unowned_by(str(tree), uid=os.getuid())
+
+
+@pytest.fixture(autouse=True)
+def _test_paths(tmp_path, monkeypatch):
+    """Point the compiled locations at this test's tmp tree.
+
+    deploy.py has no path flags, so THIS is the entire test seam: the code
+    reads module constants and the tests move them (ADR-0005). Autouse,
+    because a test that forgot them would try to install into the example
+    site's literal prefix for real.
+    """
+    monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(tmp_path / "prefix"))
+    monkeypatch.setattr(deploy, "DEFAULT_UNIT_DIR", str(tmp_path / "unit-dir"))
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(tmp_path / "var-log"))
+    monkeypatch.setattr(deploy, "DEFAULT_BASHRC_FILE", str(tmp_path / "bashrc"))
+    monkeypatch.setattr(deploy, "DEFAULT_ZSHENV_FILE", str(tmp_path / "zshenv"))
+    monkeypatch.setattr(deploy, "DEFAULT_FISH_CONF_FILE",
+                        str(tmp_path / "fish-conf.fish"))
+    # stage_payload() stages under STAGING_PARENT, which is not writable by
+    # a test in production. Same seam as the six above.
+    staging_parent = tmp_path / "run"
+    staging_parent.mkdir(exist_ok=True)
+    monkeypatch.setattr(deploy, "STAGING_PARENT", str(staging_parent))
+
+
+@pytest.fixture
+def traversable_root():
+    """A tree an ordinary user really can traverse, unlike `tmp_path`.
+
+    pytest hands out `tmp_path` under a 0700 per-user directory, so the real
+    `untraversable_for_users()` flags its ancestors and is right to. This
+    needs `o+x` on EVERY ancestor -- a directory under `/tmp` has that.
+    `dir="/tmp"` is PINNED rather than left to `tempfile`'s default: with no
+    `dir=` the parent comes from TMPDIR, which is the exact defect
+    `STAGING_PARENT` exists to avoid. The precondition is still asserted,
+    because pinning the parent does not prove the parent is traversable.
+    """
+    root = tempfile.mkdtemp(prefix="walk-blocker-caller-", dir="/tmp")
+    try:
+        os.chmod(root, 0o755)
+        assert not deploy.untraversable_for_users(root), (
+            "this fixture's whole purpose is a traversable chain; %s is not one"
+            % root)
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _args(tmp_path, **overrides):
+    """An args namespace as main() would build it -- from the constants.
+    Reading deploy.default_paths() rather than restating the paths is what
+    stops the fixture above and this helper from drifting apart: a test that
+    overrides one value is visibly disagreeing with the installer, which is
+    exactly what not_a_default() is there to catch."""
+    ns = argparse.Namespace(dry_run=False, **deploy.default_paths())
+    for key, value in overrides.items():
+        setattr(ns, key, value)
+    return ns
+
+
+def _move_constants(monkeypatch, root, spool=None):
+    """Point every compiled location under `root` (a `traversable_root`),
+    the way the autouse fixture does for tmp_path."""
+    for attr, value in (("PREFIX", "prefix"), ("UNIT_DIR", "unit-dir"),
+                        ("BASHRC_FILE", "bashrc"), ("ZSHENV_FILE", "zshenv"),
+                        ("FISH_CONF_FILE", "fish.conf")):
+        monkeypatch.setattr(deploy, "DEFAULT_" + attr, os.path.join(root, value))
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR",
+                        spool or os.path.join(root, "var-log"))
+    staging = os.path.join(root, "run")
+    os.makedirs(staging, exist_ok=True)
+    monkeypatch.setattr(deploy, "STAGING_PARENT", staging)
+
+
+def _previewed_command(out):
+    """The constructed root command from a preview's output."""
+    return next(l for l in out.splitlines()
+                if "--i-have-approval" in l
+                and os.path.join(deploy.REPO, "deploy.py") in l)
+
+
+# --------------------------------------------------------------------------
+# the stamped module
+# --------------------------------------------------------------------------
+
+def test_the_stamped_constants_are_carried_into_the_module(monkeypatch):
+    """Every marker line resolves to the site's value, in the type the
+    build emits: a bool stays a bool and an int an int, so `Persistent=`
+    and the timeout arithmetic read the value and not its spelling. The
+    autouse fixture is undone first, or this asserts things about
+    tmp_path."""
+    monkeypatch.undo()
+    for name, key in (("DEFAULT_PREFIX", "install.prefix"),
+                      ("DEFAULT_UNIT_DIR", "install.unit_dir"),
+                      ("DEFAULT_SPOOL_DIR", "install.spool_dir"),
+                      ("DEFAULT_AUDIT_FILENAME", "install.audit_filename"),
+                      ("STAGING_PARENT", "install.staging_parent"),
+                      ("DEFAULT_BASHRC_FILE", "hooks.bash.file"),
+                      ("DEFAULT_ZSHENV_FILE", "hooks.zsh.file"),
+                      ("DEFAULT_FISH_CONF_FILE", "hooks.fish.file"),
+                      ("TIMER_SLOT", "timer.on_calendar"),
+                      ("TIMER_ACCURACY_SEC", "timer.accuracy_sec"),
+                      ("TRUSTED_TIMEOUT", "trusted_binaries.timeout"),
+                      ("TRUSTED_SH", "trusted_binaries.sh"),
+                      ("TRUSTED_PYTHON3", "trusted_binaries.python3"),
+                      ("DISPLAY_NAME", "site.display_name")):
+        assert getattr(deploy, name) == VALUES["site.toml:" + key], name
+        assert isinstance(getattr(deploy, name), str), name
+    for name, key in (("TIMER_RANDOMIZED_DELAY_SEC", "timer.randomized_delay_sec"),
+                      ("TIMEOUT_START_SEC", "timer.timeout_start_sec"),
+                      ("RELINK_TIMEOUT_S", "timer.relink_timeout_s"),
+                      ("RELINK_KILL_AFTER_S", "timer.relink_kill_after_s")):
+        assert getattr(deploy, name) == VALUES["site.toml:" + key], name
+        assert type(getattr(deploy, name)) is int, name
+    for name, key in (("HOOK_ENABLED_BASH", "hooks.bash.enabled"),
+                      ("HOOK_ENABLED_ZSH", "hooks.zsh.enabled"),
+                      ("HOOK_ENABLED_FISH", "hooks.fish.enabled"),
+                      ("TIMER_PERSISTENT", "timer.persistent")):
+        assert getattr(deploy, name) is VALUES["site.toml:" + key], name
+    assert deploy.__version__ == walk_blocker.__version__
+
+
+def test_the_in_tree_file_carries_sentinels_not_a_sites_values():
+    """The tree is generic. Every marker line in `node/deploy.py` holds a
+    placeholder the build replaces, so no location or slot in the tree can
+    be mistaken for a site's, and a payload that was never stamped is
+    unmistakable."""
+    for marker in stamp.find_markers(source_text()):
+        assert marker.value.startswith("'@@") and marker.value.endswith("@@'"), (
+            marker.name, marker.value)
+
+
+def test_the_consumers_row_matches_the_markers_in_the_file():
+    """Three spellings of one set: the `CONSUMERS` row the build enforces,
+    the `REQUIRED_SOURCES` this suite pins, and the markers actually in the
+    file. A source in one and not the others is a literal nobody stamps or
+    nobody checks."""
+    in_file = set(m.source for m in stamp.find_markers(source_text()))
+    assert in_file == set(REQUIRED_SOURCES)
+    assert set(stamp.CONSUMERS["deploy.py"]) == set(REQUIRED_SOURCES)
+    assert "deploy.py" in build.EXECUTABLE
+
+
+def test_deploy_and_install_sh_are_stamped_from_the_same_keys():
+    """The install <-> install.sh pair. Both files carry the spool, the
+    audit filename and every hook file as literals, stamped from the same
+    keys by the same build -- so the relink cannot re-assert a mode on one
+    directory while the install asserts it on another, which is the
+    divergence a hand-maintained default in each file allowed."""
+    shared = {"site.toml:install.prefix", "site.toml:install.spool_dir",
+              "site.toml:install.audit_filename",
+              "site.toml:hooks.bash.file", "site.toml:hooks.bash.enabled",
+              "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.enabled",
+              "site.toml:hooks.fish.file", "site.toml:hooks.fish.enabled"}
+    assert shared <= set(stamp.CONSUMERS["deploy.py"])
+    assert shared <= set(stamp.CONSUMERS["shim/install.sh"])
+
+
+def test_a_stale_marker_is_reported_by_check_text():
+    """`--check` is the oracle (ADR-0013): a payload stamped for one prefix
+    and checked against a site that now says another is stale, by name."""
+    text = stamped_text(VALUES)
+    moved = dict(VALUES)
+    moved["site.toml:install.prefix"] = "/opt/elsewhere/walk-blocker"
+    findings = stamp.check_text(text, moved, "py", REQUIRED_SOURCES)
+    assert len(findings) == 1, findings
+    assert findings[0].startswith("stale: ") and "DEFAULT_PREFIX" in findings[0]
+    assert "site.toml:install.prefix" in findings[0]
+
+
+def test_a_missing_marker_is_louder_than_a_stale_one():
+    """A marker that is renamed or deleted stops being stamped and stops
+    being checked at the same instant, which is the one failure the gate
+    must never report as success."""
+    lines = [l for l in stamped_text(VALUES).splitlines(True)
+             if "GENERATED from site.toml:timer.on_calendar" not in l]
+    findings = stamp.check_text("".join(lines), VALUES, "py", REQUIRED_SOURCES)
+    assert findings == ["missing: no `# GENERATED from site.toml:timer.on_calendar` marker"]
+
+
+def test_deploy_is_runnable_by_the_nodes_own_interpreter(tmp_path):
+    """No PEP 723 header and no `uv run` shebang: neither exists on the
+    node, and this script runs there. Byte-compiled under the node's own
+    interpreter, so a construct the workstation's Python accepts and the
+    node's does not is caught here (ADR-0015)."""
+    header = source_text()[:400]
+    assert header.startswith("#!/usr/bin/env python3\n")
+    assert "uv run" not in header
+    assert "/// script" not in header
+    proc = subprocess.run([NODE_PYTHON, "-m", "py_compile",
+                           os.path.join(deploy.REPO, "deploy.py")],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    py_compile.compile(os.path.join(deploy.REPO, "deploy.py"), doraise=True,
+                       cfile=str(tmp_path / "deploy.pyc"))
+
+
+def test_version_answers_without_a_mode():
+    """`--version` is neither a mode nor a path: it answers on its own, on
+    the node's interpreter, and names the payload's one version."""
+    proc = subprocess.run([NODE_PYTHON, os.path.join(deploy.REPO, "deploy.py"),
+                           "--version"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "walk-blocker %s" % walk_blocker.__version__
+
+
+@pytest.fixture(scope="module")
+def built_payload(tmp_path_factory):
+    out = tmp_path_factory.mktemp("build") / "payload"
+    o, e = io.StringIO(), io.StringIO()
+    code = build.build(EXAMPLE_SITE, str(out), out=o, err=e)
+    assert code == 0, e.getvalue()
+    return out
+
+
+def test_the_built_payload_ships_deploy_py_executable_and_stamped(built_payload):
+    """The build's own product: `deploy.py` at the payload root, 0755, byte-
+    compiling under the node's interpreter, current for the site it was
+    built from, and answering `--version` from the payload directory."""
+    path = built_payload / "deploy.py"
+    assert stat.S_IMODE(os.lstat(str(path)).st_mode) == 0o755
+    text = path.read_text()
+    assert "@@" not in text
+    site = walk_blocker.config.load_site(EXAMPLE_SITE)
+    values = stamp.SiteValues(site, walk_blocker.__version__)
+    assert stamp.check_text(text, values, "py", stamp.CONSUMERS["deploy.py"]) == []
+    proc = subprocess.run([NODE_PYTHON, str(path), "--version"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "walk-blocker %s" % walk_blocker.__version__
+    compiled = subprocess.run([NODE_PYTHON, "-m", "py_compile", str(path)],
+                              capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stderr
+
+
+# --------------------------------------------------------------------------
+# the gate
+# --------------------------------------------------------------------------
+
+def test_deploy_system_preview_does_not_execute(tmp_path, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    args = _args(tmp_path)
+    rc = deploy.system_preview(args)
+    assert rc == 0
+    assert not os.path.exists(args.prefix)
+    assert not os.path.exists(args.bashrc_file)
+    assert not os.path.exists(args.unit_dir)
+    assert not os.path.exists(args.spool_dir)
+
+
+def test_preview_names_a_command_that_can_actually_run(
+        tmp_path, capsys, monkeypatch):
+    """The preview is the one instruction handed to a root operator on a
+    node with no `uv`. `sh deploy.py` is not a command; the interpreter
+    named is the compiled one the unit itself runs under."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    deploy.system_preview(_args(tmp_path))
+    out = capsys.readouterr().out
+
+    assert "%s %s --system --i-have-approval" % (
+        deploy.TRUSTED_PYTHON3, os.path.join(deploy.REPO, "deploy.py")) in out
+    assert "sh %s" % os.path.join(deploy.REPO, "deploy.py") not in out
+
+
+def test_the_preview_runs_the_payloads_own_installer_preview(tmp_path, monkeypatch):
+    """From the payload directory, with no path flags, through the trusted
+    shell: install.sh carries the same literals and needs to be told
+    nothing."""
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_preview(_args(tmp_path)) == 0
+    assert calls == [[deploy.TRUSTED_SH,
+                      os.path.join(deploy.REPO, "shim", "install.sh"), "--system"]]
+
+
+def test_deploy_system_refuses_without_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path)
+    rc = deploy.system_execute(args)
+    assert rc == 3
+    assert not os.path.exists(args.prefix)
+    assert not os.path.exists(args.unit_dir)
+
+
+def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
+    """Reversing a control is the safer direction, so it needs proof of root
+    but not the extra --i-have-approval ceremony installing does."""
+    args = _args(tmp_path)
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    assert deploy.system_uninstall(args) == 3
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 0
+    assert any(c[:3] == ["systemctl", "disable", "--now"] for c in calls)
+    assert any("--uninstall" in c for c in calls)
+
+
+def test_the_cli_refuses_the_path_flags_it_used_to_accept():
+    """The guarantee is that the command cannot be pointed elsewhere, not
+    that it validates being pointed elsewhere. argparse exits 2."""
+    for flag in PATH_FLAGS:
+        proc = subprocess.run(
+            [sys.executable, os.path.join(deploy.REPO, "deploy.py"),
+             "--system", flag, "/tmp/somewhere"],
+            capture_output=True, text=True)
+        assert proc.returncode == 2, flag
+        assert "unrecognized arguments" in proc.stderr, flag
+        assert flag in proc.stderr, flag
+
+
+def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
+        traversable_root):
+    """The preview path, end to end, as this unprivileged user: a stamped
+    deployer beside a stamped installer, both for a fictional site laid out
+    under a traversable root. It prints the plan, names the approved
+    command, prints the rendered units, and leaves the tree exactly as it
+    found it. No stub anywhere: this is the run an operator does first."""
+    payload = os.path.join(traversable_root, "payload")
+    layout = Layout(traversable_root,
+                    prefix=os.path.join(traversable_root, "prefix"),
+                    bashrc=os.path.join(traversable_root, "bashrc"),
+                    zshenv=os.path.join(traversable_root, "zshenv"),
+                    fishconf=os.path.join(traversable_root, "fish-conf.fish"),
+                    spool=os.path.join(traversable_root, "var-log"),
+                    toolbin=os.path.join(traversable_root, "usrbin"),
+                    mount_table=os.path.join(traversable_root, "mounts"))
+    stamped_install(traversable_root, dest=os.path.join(payload, "shim"),
+                    layout=layout)
+    values = site_values(**{
+        "install.prefix": str(layout.prefix),
+        "install.spool_dir": str(layout.spool),
+        "install.unit_dir": os.path.join(traversable_root, "unit-dir"),
+        "install.staging_parent": os.path.join(traversable_root, "run"),
+        "hooks.bash.file": str(layout.bashrc),
+        "hooks.zsh.file": str(layout.zshenv),
+        "hooks.fish.file": str(layout.fishconf),
+    })
+    script = write_stamped_deploy(values, payload)
+
+    def snapshot():
+        seen = set()
+        for base, dirs, files in os.walk(traversable_root):
+            for name in dirs + files:
+                seen.add(os.path.join(base, name))
+        return seen
+
+    before = snapshot()
+    proc = subprocess.run([NODE_PYTHON, script, "--system"],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert snapshot() == before, "a preview must leave the tree untouched"
+    assert not os.path.exists(str(layout.prefix))
+    assert not os.path.exists(str(layout.spool))
+
+    out = proc.stdout
+    assert "%s %s --system --i-have-approval" % (deploy.TRUSTED_PYTHON3, script) in out
+    for flag in PATH_FLAGS:
+        assert flag not in _previewed_line(out, script)
+    # install.sh's own preview was relayed, and its standalone command was not.
+    assert "System-wide install of walk-blocker Layer 1" in out
+    assert not [l for l in out.splitlines()
+                if l.lstrip("# ").strip().startswith("sh ")
+                and "install.sh" in l and "--i-have-approval" in l]
+    # The units, rendered with this site's values.
+    assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in out
+    assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
+        deploy.TRUSTED_PYTHON3, layout.prefix, layout.spool) in out
+
+
+def _previewed_line(out, script):
+    return next(l for l in out.splitlines()
+                if "--i-have-approval" in l and script in l)
+
+
+# --------------------------------------------------------------------------
+# unowned_by
+# --------------------------------------------------------------------------
+
+def test_unowned_by_accepts_a_tree_owned_by_the_expected_uid(tmp_path):
+    tree = tmp_path / "payload"
+    (tree / "shim").mkdir(parents=True)
+    (tree / "shim" / "guard.sh").write_text("#!/bin/sh\n")
+    (tree / "shim" / "guard.sh").chmod(0o755)
+    (tree / "reaper.py").write_text("x\n")
+    (tree / "reaper.py").chmod(0o644)
+
+    assert unowned_by_here(tree) == []
+
+
+def test_unowned_by_fails_closed_on_a_subtree_it_cannot_inspect(tmp_path):
+    """A tree it could not read must never come back clean: `os.walk`
+    swallows an unlistable directory unless you pass onerror."""
+    tree = tmp_path / "payload"
+    (tree / "hidden").mkdir(parents=True)
+    (tree / "hidden" / "install.sh").write_text("#!/bin/sh\n")
+    (tree / "hidden").chmod(0o000)
+    try:
+        offenders = unowned_by_here(tree)
+        assert offenders, "an uninspectable subtree reported no offenders"
+        assert any("could not be inspected" in why for _, why in offenders), \
+            offenders
+    finally:
+        (tree / "hidden").chmod(0o755)
+
+
+def test_unowned_by_rejects_a_symlink_pointing_out_of_the_prefix(tmp_path):
+    """`cp -a` copies a symlink as a symlink, `chown -R` reassigns only the
+    link, and `chmod -R` skips links -- so a root-owned link to a
+    user-writable file passed, and systemd executes the target."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "target.sh").write_text("#!/bin/sh\necho surprise\n")
+
+    tree = tmp_path / "payload"
+    (tree / "shim").mkdir(parents=True)
+    escaping = tree / "shim" / "install.sh"
+    escaping.symlink_to(outside / "target.sh")
+
+    offenders = unowned_by_here(tree)
+    assert [(p, why) for p, why in offenders
+            if p == str(escaping) and "escapes the prefix" in why], offenders
+
+
+def test_unowned_by_allows_a_symlink_that_stays_inside_the_prefix(tmp_path):
+    """install.sh's own symlink farm points at $prefix/shim/guard.sh. An
+    in-tree link is fine: the walk reaches its target separately."""
+    tree = tmp_path / "payload"
+    (tree / "shim").mkdir(parents=True)
+    guard = tree / "shim" / "guard.sh"
+    guard.write_text("#!/bin/sh\n")
+    guard.chmod(0o755)
+    (tree / "bin").mkdir()
+    (tree / "bin" / "find").symlink_to(guard)
+
+    assert unowned_by_here(tree) == []
+
+
+def test_unowned_by_flags_a_foreign_owner_and_a_writable_mode(tmp_path):
+    tree = tmp_path / "payload"
+    (tree / "shim").mkdir(parents=True)
+    guard = tree / "shim" / "guard.sh"
+    guard.write_text("#!/bin/sh\n")
+
+    foreign = deploy.unowned_by(str(tree), uid=os.getuid() + 1)
+    assert [p for p, _ in foreign if p == str(guard)], foreign
+    assert all("owned by uid" in why for _, why in foreign), foreign
+
+    guard.chmod(0o775)
+    writable = unowned_by_here(tree)
+    assert [(p, why) for p, why in writable
+            if p == str(guard) and "writable beyond its owner" in why], writable
+
+
+def test_unowned_by_flags_setuid_in_a_tree_root_executes_from(tmp_path):
+    tree = tmp_path / "payload"
+    tree.mkdir()
+    odd = tree / "helper"
+    odd.write_text("#!/bin/sh\n")
+    odd.chmod(0o4755)
+    assert [why for _, why in unowned_by_here(tree) if "setuid" in why], \
+        unowned_by_here(tree)
+
+
+def test_unowned_by_checks_an_installed_file_not_only_a_directory(tmp_path):
+    """`os.walk` yields nothing for a file, so the entries that go in as
+    files would have passed unexamined."""
+    lone = tmp_path / "reaper.py"
+    lone.write_text("x\n")
+    lone.chmod(0o644)
+    assert unowned_by_here(lone) == []
+
+    lone.chmod(0o666)
+    assert [why for _, why in unowned_by_here(lone)
+            if "writable beyond its owner" in why], "a loose mode passed"
+
+    assert deploy.unowned_by(str(lone), uid=os.getuid() + 1), \
+        "a foreign owner passed"
+
+
+# --------------------------------------------------------------------------
+# ownership, staging and the install order
+# --------------------------------------------------------------------------
+
+def test_preview_prints_exactly_the_ownership_commands_execution_runs(
+        tmp_path, monkeypatch, capsys):
+    """These drifted once in the predecessor: the preview advertised a
+    recursive chown of the prefix after execution had been scoped to the
+    installed entries, so it documented the foot-gun the code avoids."""
+    args = _args(tmp_path)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    deploy.system_preview(args)
+    previewed = capsys.readouterr().out
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 0
+
+    executed = [c for c in calls
+                if c[:2] in (["chown", "-R"], ["chmod", "-R"])]
+    assert executed == deploy.ownership_commands(args.prefix), executed
+    for cmd in executed:
+        assert " ".join(cmd) in previewed, "not in the preview: %s" % cmd
+    assert "chown -R root:root %s\n" % args.prefix not in previewed
+
+
+def test_recursive_mutations_are_aimed_at_the_installed_entries_not_the_prefix(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    recursive = [c for c in calls if c[:2] in (["chown", "-R"], ["chmod", "-R"])]
+    assert recursive, calls
+    for cmd in recursive:
+        target = cmd[-1]
+        assert target != args.prefix, "aimed at the prefix itself: %s" % cmd
+        assert os.path.basename(target) in deploy.INSTALLED_ENTRIES, cmd
+    for entry in deploy.INSTALLED_ENTRIES:
+        assert any(c[-1] == os.path.join(args.prefix, entry)
+                   for c in recursive), entry
+
+
+def _installs_of(calls, args, name):
+    target = os.path.join(args.prefix, name)
+    return [c for c in calls if c[0] == "install" and c[-1] == target]
+
+
+def test_the_readme_is_installed_where_the_hook_blocks_point(tmp_path,
+                                                             monkeypatch):
+    """The hook blocks tell every user to read $PREFIX/README.md. 0644,
+    since it is read and never executed; in INSTALLED_ENTRIES so the
+    ownership pass covers it and a rejected install removes it."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    installs = _installs_of(calls, args, "README.md")
+    assert len(installs) == 1, calls
+    assert "0644" in installs[0], installs[0]
+    assert installs[0][-2].endswith("README.md")
+    assert "README.md" in deploy.INSTALLED_ENTRIES
+
+
+def test_walk_job_is_installed_executable(tmp_path, monkeypatch):
+    """The command every Layer 1 refusal advertises has to be ON the node,
+    and executable by the users install.sh links it for -- not only by the
+    root that installed it."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    installs = _installs_of(calls, args, "walk-job")
+    assert len(installs) == 1, calls
+    assert "0755" in installs[0], installs[0]
+    assert installs[0][-2].endswith("walk-job")
+    assert "walk-job" in deploy.INSTALLED_ENTRIES
+
+
+def test_the_site_record_and_the_survey_are_installed_readable(tmp_path,
+                                                               monkeypatch):
+    """site.toml and site.lock.json are the record of what was built --
+    `cat` them to learn what is deployed (ADR-0013) -- and survey.py is run
+    by an admin through the interpreter, so none of the three is
+    executable. All in INSTALLED_ENTRIES, so the ownership pass covers them
+    and a rejected install removes them."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    for name in ("site.toml", "site.lock.json", "survey.py", "search_rules.py"):
+        installs = _installs_of(calls, args, name)
+        assert len(installs) == 1, (name, calls)
+        assert installs[0][:3] == ["install", "-m", "0644"], installs[0]
+        assert installs[0][-2].endswith(name)
+        assert name in deploy.INSTALLED_ENTRIES
+    assert _installs_of(calls, args, "reaper.py")[0][:3] == ["install", "-m", "0755"]
+
+
+def test_every_payload_source_is_an_installed_entry_and_vice_versa():
+    """What is copied is what is owned, chmodded and removed on refusal.
+    The marker is the one installed entry that is not a payload source: it
+    is generated into the snapshot."""
+    sources = set(rel for rel, _d, _m in deploy.PAYLOAD_SOURCES)
+    assert sources | {deploy.PAYLOAD_MARKER} == set(deploy.INSTALLED_ENTRIES)
+    for rel, is_dir, _mode in deploy.PAYLOAD_SOURCES:
+        real = os.path.join(ROOT, "examples", "payload", rel)
+        assert os.path.isdir(real) == is_dir, rel
+
+
+def test_the_copy_does_not_preserve_the_payloads_ownership(tmp_path, monkeypatch):
+    """`cp -a` as root chowns each new file to the SOURCE's owner, and an
+    already-open descriptor keeps its access across a later chown."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    copies = [c for c in calls if c[0] == "cp"]
+    assert copies, calls
+    for cmd in copies:
+        assert "--no-preserve=ownership" in cmd, cmd
+
+
+def test_the_payload_is_staged_root_only_and_widened_only_when_clean(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    staged = next(c for c in calls if c[:2] == ["install", "-d"])
+    assert "0700" in staged, staged
+    widen = next(i for i, c in enumerate(calls)
+                 if c[:2] == ["chmod", "0755"] and c[-1] == args.prefix)
+    installer = next(i for i, c in enumerate(calls)
+                     if any("install.sh" in a for a in c))
+    assert widen < installer, "widened before the guard is wired up, not after"
+
+    strips = [c for c in calls if c[:2] == ["chmod", "-R"] and "a-s" in c]
+    assert len(strips) == len(deploy.INSTALLED_ENTRIES), strips
+
+
+def test_the_payload_is_made_readable_not_merely_unwritable(tmp_path,
+                                                             monkeypatch):
+    """`chmod -R go-w` only REMOVES bits. A payload unpacked under `umask
+    077` arrives at 0700, passes unowned_by, passes a root-run verify --
+    and then every user has a shim on PATH that none of them can execute."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    modes = [c for c in calls if c[:2] == ["chmod", "-R"]]
+    assert modes, calls
+    for entry in deploy.INSTALLED_ENTRIES:
+        target = os.path.join(args.prefix, entry)
+        adds = [c for c in modes
+                if c[-1] == target and any("a+rX" in a for a in c)]
+        assert adds, "no mode is SET for %s, only removed: %s" % (entry, modes)
+
+
+def test_a_symlinked_installed_entry_is_rejected_before_any_chmod(
+        tmp_path, monkeypatch):
+    """GNU `chmod -R` DEREFERENCES a symlink named as its operand, so a
+    payload whose `shim` or `docs` is a link would have these commands
+    rewrite modes throughout the target instead."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    os.makedirs(args.prefix, exist_ok=True)
+    open(os.path.join(args.prefix, deploy.PAYLOAD_MARKER), "w").close()
+    os.symlink(str(victim), os.path.join(args.prefix, "shim"))
+
+    assert deploy.system_execute(args) == 5
+    assert not any(c[:2] == ["chmod", "-R"] for c in calls), \
+        "no recursive chmod may run once an entry is a symlink"
+    assert not any(c[:2] == ["chown", "-R"] for c in calls), calls
+    assert [c for c in calls if c[:2] == ["rm", "-rf"]], calls
+
+
+def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [("%s/shim/guard.sh" % root, "owned by uid 1000")])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 5
+
+    removed = [c[-1] for c in calls if c[:2] == ["rm", "-rf"]]
+    for entry in deploy.INSTALLED_ENTRIES:
+        assert os.path.join(args.prefix, entry) in removed, entry
+    assert not any(c[:2] == ["chmod", "0755"] for c in calls), \
+        "a rejected prefix must stay root-only"
+
+
+def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
+        tmp_path, monkeypatch):
+    """The whole of ADR-0004 rests on this, so a failure stops the install
+    rather than being reported after the timer is already enabled."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [("%s/shim/guard.sh" % root, "owned by uid 1000")])
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 5
+
+    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(c[:2] == ["systemctl", "enable"] for c in calls), calls
+    assert not any(c[:2] == ["systemctl", "daemon-reload"] for c in calls), calls
+    assert [c for c in calls if c[:2] == ["systemctl", "stop"]], \
+        "the previous install's timer must be disarmed before the payload moves"
+    assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+
+
+def test_deploy_reasserts_root_ownership_before_anything_runs_it(
+        tmp_path, monkeypatch):
+    """The unit runs install.sh as root on every poll, so the chown has to
+    land before install.sh is invoked, not merely somewhere in the
+    sequence."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    pass_prefix_checks(monkeypatch)
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    def index_of(predicate):
+        return next(i for i, c in enumerate(calls) if predicate(c))
+
+    chown = index_of(lambda c: c[:2] == ["chown", "-R"] and "root:root" in c)
+    chmod = index_of(lambda c: c[:2] == ["chmod", "-R"] and any("go-w" in a for a in c))
+    installer = index_of(lambda c: any("install.sh" in arg for arg in c))
+    # Copies INTO THE PREFIX: the spool's `install -d` deliberately lands
+    # after the chown, and holds no payload.
+    last_copy = max(i for i, c in enumerate(calls)
+                    if c[0] in ("cp", "install")
+                    and any(a.startswith(args.prefix) for a in c))
+
+    assert last_copy < chown < installer, calls
+    assert chmod < installer, calls
+
+
+def test_the_ownership_check_covers_the_prefix_directory_itself(tmp_path,
+                                                                monkeypatch):
+    """Scoping the check to the installed entries would stop it examining
+    the prefix DIRECTORY, whose owner can replace shim/ after the check and
+    have the timer run it as root. The mutations stay scoped; the check
+    does not."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    checked = []
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: checked.append(root) or [])
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+    assert args.prefix in checked, checked
+
+
+def test_the_ownership_check_runs_again_after_the_installer(tmp_path,
+                                                            monkeypatch):
+    """install.sh creates $prefix/bin -- the directory that holds the shims
+    -- after the first assertion."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    checked = []
+    calls = []
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: checked.append(len(calls)) or [])
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    installer = next(i for i, c in enumerate(calls)
+                     if any("install.sh" in a for a in c))
+    assert len(checked) >= 2, "the check runs once, before install.sh"
+    assert any(at > installer for at in checked), \
+        "no ownership check after install.sh created $prefix/bin"
+
+
+def test_deploy_system_executes_when_root_and_approved(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    pass_prefix_checks(monkeypatch)
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    assert any(c[0] == "install" and args.prefix in c for c in calls), calls
+    assert any(
+        any("install.sh" in arg for arg in c)
+        and "--system" in c and "--i-have-approval" in c
+        for c in calls), calls
+    assert any(c[:2] == ["systemctl", "daemon-reload"] for c in calls)
+    assert any(c[:3] == ["systemctl", "enable", "--now"] for c in calls)
+
+    service_path = os.path.join(args.unit_dir, deploy.SERVICE_UNIT)
+    timer_path = os.path.join(args.unit_dir, deploy.TIMER_UNIT)
+    assert os.path.exists(service_path)
+    assert os.path.exists(timer_path)
+
+    service_text = open(service_path).read()
+    exec_start = next(
+        line for line in service_text.splitlines()
+        if line.startswith("ExecStart="))
+    assert "--report" in exec_start
+    assert "--kill" not in exec_start
+    assert args.prefix in service_text
+    assert "$HOME" not in service_text and "~" not in service_text
+
+    timer_text = open(timer_path).read()
+    assert "OnCalendar=%s" % deploy.TIMER_SLOT in timer_text
+    assert "RandomizedDelaySec=%d" % deploy.TIMER_RANDOMIZED_DELAY_SEC in timer_text
+
+
+def test_execute_runs_the_deployed_installer_without_path_flags(
+        tmp_path, monkeypatch):
+    """The install <-> install.sh pair: install.sh carries the same literals
+    from the same build, so deploy.py hands it a mode and nothing else --
+    from the DEPLOYED copy, through the trusted shell, on both arms."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+    installer = next(c for c in calls if any("install.sh" in a for a in c))
+    assert installer == [deploy.TRUSTED_SH,
+                         os.path.join(args.prefix, "shim", "install.sh"),
+                         "--system", "--i-have-approval"], installer
+
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls.clear()
+    assert deploy.system_uninstall(args) == 0
+    teardown = next(c for c in calls if any("install.sh" in a for a in c))
+    assert teardown == [deploy.TRUSTED_SH,
+                        os.path.join(args.prefix, "shim", "install.sh"),
+                        "--uninstall"], teardown
+
+
+def test_the_post_install_message_names_both_trails_and_the_record(
+        tmp_path, monkeypatch, capsys):
+    """Two audit trails, and the evidence for --kill needs both; plus the
+    two files that say what is installed without executing anything."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+    out = capsys.readouterr().out
+    assert "tail %s" % os.path.join(args.spool_dir, "reaper-audit.jsonl") in out
+    assert "journalctl -t walk-blocker -o json" in out
+    assert "cat %s" % os.path.join(args.prefix, deploy.PAYLOAD_MARKER) in out
+    assert "cat %s" % os.path.join(args.prefix, "site.lock.json") in out
+    assert "report-only" in out
+
+
+# --------------------------------------------------------------------------
+# the trust chain and traversability
+# --------------------------------------------------------------------------
+
+def test_untraversable_prefix_is_refused_even_though_it_is_trusted(tmp_path):
+    """Trusted is not the same as reachable: a root-owned prefix under a
+    0700 ancestor passes every validator, and every user's shell then
+    carries an unreachable directory on PATH."""
+    closed = tmp_path / "rootlike"
+    (closed / "walk-blocker").mkdir(parents=True)
+    closed.chmod(0o700)
+    try:
+        blocked = deploy.untraversable_for_users(str(closed / "walk-blocker"))
+        assert [(p, why) for p, why in blocked
+                if p == str(closed) and "no o+x" in why], blocked
+    finally:
+        closed.chmod(0o755)
+
+    closed.chmod(0o711)
+    try:
+        blocked = deploy.untraversable_for_users(str(closed / "walk-blocker"))
+        assert str(closed) not in [p for p, _ in blocked], blocked
+    finally:
+        closed.chmod(0o755)
+
+
+def test_untraversable_check_covers_the_prefix_and_the_spool(
+        tmp_path, monkeypatch):
+    """Both, and the unit directory neither: the trail must be readable by
+    the account that decides --kill (ADR-0012), and the unit directory is
+    the distribution's."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    checked = []
+    monkeypatch.setattr(
+        deploy, "untraversable_for_users",
+        lambda prefix: checked.append(prefix) or [])
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+    assert checked == [args.spool_dir, args.prefix], checked
+
+
+def test_untrusted_prefix_chain_accepts_a_chain_owned_all_the_way_down(tmp_path):
+    prefix = tmp_path / "a" / "b" / "walk-blocker"
+    prefix.mkdir(parents=True)
+    for d in (tmp_path / "a", tmp_path / "a" / "b", prefix):
+        d.chmod(0o755)
+    assert deploy.untrusted_prefix_chain(str(prefix), trusted_uids=(0, os.getuid())) == []
+
+
+def test_untrusted_prefix_chain_flags_a_writable_ancestor(tmp_path):
+    loose = tmp_path / "loose"
+    prefix = loose / "walk-blocker"
+    prefix.mkdir(parents=True)
+    loose.chmod(0o777)
+    try:
+        chain = deploy.untrusted_prefix_chain(str(prefix), trusted_uids=(0, os.getuid()))
+        assert [(p, why) for p, why in chain
+                if p == str(loose) and "writable by group or other" in why], chain
+    finally:
+        loose.chmod(0o755)
+
+
+def test_untrusted_prefix_chain_exempts_a_sticky_shared_directory(tmp_path):
+    shared = tmp_path / "shared"
+    prefix = shared / "walk-blocker"
+    prefix.mkdir(parents=True)
+    shared.chmod(0o1777)
+    try:
+        chain = deploy.untrusted_prefix_chain(str(prefix), trusted_uids=(0, os.getuid()))
+        assert [p for p, _ in chain] == [], chain
+    finally:
+        shared.chmod(0o755)
+
+
+def test_untrusted_prefix_chain_flags_a_symlinked_ancestor(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    chain = deploy.untrusted_prefix_chain(
+        str(link / "walk-blocker"), trusted_uids=(0, os.getuid()))
+    assert [(p, why) for p, why in chain
+            if p == str(link) and "symlink" in why], chain
+
+
+def test_untrusted_prefix_chain_ignores_components_not_yet_created(tmp_path):
+    assert deploy.untrusted_prefix_chain(
+        str(tmp_path / "not" / "yet" / "there"),
+        trusted_uids=(0, os.getuid())) == []
+
+
+def test_untrusted_prefix_chain_denies_the_sticky_exemption_to_the_prefix(
+        tmp_path):
+    """Sticky is enough for an ancestor but not for the prefix, where the
+    risk is others CREATING entries in it -- planting a marker to authorize
+    a root `rm -rf` of a sibling."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)
+    try:
+        as_prefix = deploy.untrusted_prefix_chain(
+            str(shared), trusted_uids=(0, os.getuid()))
+        assert [(p, why) for p, why in as_prefix
+                if p == str(shared) and "the prefix itself" in why], as_prefix
+
+        (shared / "walk-blocker").mkdir()
+        as_ancestor = deploy.untrusted_prefix_chain(
+            str(shared / "walk-blocker"), trusted_uids=(0, os.getuid()))
+        assert as_ancestor == [], as_ancestor
+    finally:
+        shared.chmod(0o755)
+
+
+def test_untrusted_prefix_chain_rejects_a_dangling_symlink_component(tmp_path):
+    """`os.path.exists()` FOLLOWS symlinks, so a dangling link read as
+    "missing" and never reached the lstat-based rejection."""
+    link = tmp_path / "prefix"
+    link.symlink_to(tmp_path / "target-does-not-exist-yet")
+    assert not os.path.exists(str(link))
+    assert os.path.lexists(str(link))
+
+    chain = deploy.untrusted_prefix_chain(str(link),
+                                          trusted_uids=(0, os.getuid()))
+    assert [(p, why) for p, why in chain
+            if p == str(link) and "symlink" in why], chain
+
+
+def test_untrusted_prefix_chain_refuses_a_missing_prefix_under_a_shared_parent(
+        tmp_path):
+    """The sticky bit protects existing entries; it does not reserve a
+    missing NAME."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)
+    try:
+        chain = deploy.untrusted_prefix_chain(
+            str(shared / "not-yet"), trusted_uids=(0, os.getuid()))
+        assert [(p, why) for p, why in chain
+                if p == str(shared) and "does not exist yet" in why], chain
+
+        (shared / "not-yet").mkdir()
+        assert deploy.untrusted_prefix_chain(
+            str(shared / "not-yet"), trusted_uids=(0, os.getuid())) == []
+    finally:
+        shared.chmod(0o755)
+
+
+def test_a_doubled_leading_slash_cannot_dodge_the_prefix_checks(tmp_path):
+    """`os.path.normpath` preserves EXACTLY two leading slashes."""
+    assert deploy.canonical_prefix("//var/tmp") == "/var/tmp"
+    assert deploy.canonical_prefix("///var/tmp") == "/var/tmp"
+    assert deploy.canonical_prefix("/usr//local//lib/x") == "/usr/local/lib/x"
+
+    plain = deploy.untrusted_prefix_chain("/var/tmp")
+    doubled = deploy.untrusted_prefix_chain("//var/tmp")
+    assert plain, "the single-slash spelling should already be refused"
+    assert [why for _, why in doubled], \
+        "the doubled spelling must be refused identically"
+    assert [p for p, _ in doubled] == [p for p, _ in plain]
+
+
+def test_the_canonical_prefix_is_what_every_command_acts_on(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    doubled = "/" + str(tmp_path / "prefix")
+    args = _args(tmp_path, prefix=doubled)
+    assert deploy.system_execute(args) == 0
+
+    assert args.prefix == str(tmp_path / "prefix"), args.prefix
+    for cmd in calls:
+        for arg in cmd:
+            assert "//" not in arg, cmd
+
+    service = open(os.path.join(args.unit_dir, deploy.SERVICE_UNIT)).read()
+    assert "//" not in service.replace("file://", ""), service
+
+
+def test_deploy_refuses_an_untrusted_path_before_touching_anything(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(
+        deploy, "untrusted_prefix_chain",
+        lambda prefix, trusted_uids=(0,): [("/tmp", "mode 0777 is writable by group or "
+                                        "other without the sticky bit")])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 6
+    assert calls == [], "nothing may run before the path is judged"
+    assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+
+
+def test_the_spool_and_unit_dir_get_the_prefix_treatment(tmp_path, monkeypatch):
+    """Both are root-write sinks beside the prefix: the spool is where the
+    root-run reaper writes, and the unit directory is where root writes a
+    unit it then executes. Moved through the CONSTANTS, so the real chain
+    check is what refuses rather than not_a_default()."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    loose.chmod(0o777)
+    try:
+        real = deploy.untrusted_prefix_chain
+        monkeypatch.setattr(
+            deploy, "untrusted_prefix_chain",
+            lambda path, trusted_uids=(0,): real(
+                path, trusted_uids=(0, os.getuid())))
+
+        monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(loose / "spool"))
+        assert deploy.system_execute(_args(tmp_path)) == 6
+        monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(tmp_path / "var-log"))
+        monkeypatch.setattr(deploy, "DEFAULT_UNIT_DIR", str(loose / "units"))
+        assert deploy.system_execute(_args(tmp_path)) == 6
+        assert calls == [], "nothing may run before the paths are judged"
+    finally:
+        loose.chmod(0o755)
+
+
+# --------------------------------------------------------------------------
+# the marker
+# --------------------------------------------------------------------------
+
+def test_deploy_refuses_a_populated_directory_that_is_not_its_own(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    shared = tmp_path / "usr-local-lookalike"
+    (shared / "docs").mkdir(parents=True)          # somebody else's docs
+    # The CONSTANT moves, not the namespace: an override would be refused
+    # by not_a_default() and this test would pass for the wrong reason.
+    monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(shared))
+    args = _args(tmp_path)
+
+    assert deploy.system_execute(args) == 6
+    assert not any(c[0] == "rm" for c in calls), calls
+
+    (shared / deploy.PAYLOAD_MARKER).write_text("")
+    calls.clear()
+    assert deploy.system_execute(args) == 0
+    assert any(c[0] == "rm" for c in calls)
+
+
+def test_deploy_marks_the_directory_as_its_own(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    marker = os.path.join(args.prefix, deploy.PAYLOAD_MARKER)
+    installs = [i for i, c in enumerate(calls) if c[0] == "install"]
+    marker_at = next(i for i, c in enumerate(calls) if marker in c)
+    removals = [i for i, c in enumerate(calls) if c[0] == "rm"]
+    assert marker_at < min(removals), \
+        "the marker must be written before anything is deleted"
+    assert min(installs) < marker_at
+
+
+def test_the_payload_marker_carries_the_version(tmp_path, monkeypatch):
+    """`cat $PREFIX/.walk-blocker-payload` answers "what is installed
+    here?" with no privilege and no execution. Generated into the snapshot,
+    so every filesystem effect of an install stays inside run()."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    staged = next(c[3] for c in calls
+                  if c[:2] == ["install", "-m"]
+                  and c[-1].endswith(deploy.PAYLOAD_MARKER))
+    with open(staged) as fh:
+        assert fh.read().strip() == deploy.__version__ == walk_blocker.__version__
+
+
+def test_the_marker_is_installed_before_the_code_it_describes(
+        tmp_path, monkeypatch):
+    """The marker is the answer that survives a payload interrupted
+    mid-install, which is only true while it is installed FIRST. The
+    DESTINATION is matched exactly: the staging copy installs the same
+    basenames first."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    def index_of(name):
+        target = os.path.join(args.prefix, name)
+        return next(i for i, c in enumerate(calls)
+                    if c[0] == "install" and c[-1] == target)
+
+    assert index_of(deploy.PAYLOAD_MARKER) < index_of("reaper.py")
+    assert index_of("reaper.py") < index_of("search_rules.py")
+
+
+def test_the_dry_run_names_the_version_and_writes_nothing(
+        tmp_path, monkeypatch):
+    """The marker is the ONE install line that does not go through run() on
+    the dry-run path, so both halves are pinned: the line is printed with
+    the version, and no marker install reaches run()."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path, dry_run=True)
+
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    rc = deploy.system_execute(args)
+    monkeypatch.undo()
+    assert rc == 0, out.getvalue()
+
+    marker = os.path.join(args.prefix, deploy.PAYLOAD_MARKER)
+    assert "would write: %s (walk-blocker %s)" % (
+        marker, deploy.__version__) in out.getvalue(), out.getvalue()
+    assert not [c for c in calls
+                if c[0] == "install" and c[-1].endswith(deploy.PAYLOAD_MARKER)]
+
+
+# --------------------------------------------------------------------------
+# the snapshot
+# --------------------------------------------------------------------------
+
+def test_the_install_copies_from_a_snapshot_not_the_payload_directory(
+        tmp_path, monkeypatch):
+    """The destination is root-owned from creation and verified, but that
+    authenticates the destination's METADATA, not the bytes that arrived."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path)
+
+    assert deploy.system_execute(args) == 0
+
+    into_prefix = [c for c in calls if c[0] in ("install", "cp")
+                   and c[-1].startswith(args.prefix)]
+    assert into_prefix, calls
+    from_repo = [c for c in into_prefix
+                 if any(a.startswith(deploy.REPO) for a in c[:-1])]
+    assert from_repo == [], from_repo
+
+    staged = next(i for i, c in enumerate(calls)
+                  if c[0] == "cp" and "walk-blocker-stage." in " ".join(c))
+    created = next(i for i, c in enumerate(calls)
+                   if c[0] == "install" and c[-1] == args.prefix)
+    assert staged < created, calls[:6]
+
+
+def test_the_snapshot_is_taken_after_the_checks_and_before_the_first_systemctl(
+        tmp_path, monkeypatch):
+    """ADR-0006's timing half: after everything that can refuse (pure
+    Python, none of it blocking) and before anything that can block."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(_args(tmp_path)) == 0
+
+    first_systemctl = next(i for i, c in enumerate(calls) if c[0] == "systemctl")
+    # Commands whose TARGET is under the staging parent: the snapshot being
+    # taken. The snapshot path also appears later as the SOURCE of every
+    # copy into the prefix, which is the other half of the same design.
+    staging = [i for i, c in enumerate(calls)
+               if c[-1].startswith(deploy.STAGING_PARENT + os.sep)]
+    assert staging, calls
+    assert max(staging) < first_systemctl, calls[:first_systemctl + 1]
+    assert all(c[0] in ("install", "cp") for c in calls[:first_systemctl]), \
+        "nothing but the snapshot runs before systemd is touched"
+
+
+def test_the_snapshot_covers_every_payload_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    staged = {arg for c in calls for arg in c if "walk-blocker-stage." in arg}
+    for relative, _is_dir, _mode in deploy.PAYLOAD_SOURCES:
+        assert any(p.endswith("/" + relative) for p in staged), relative
+
+
+def test_a_dry_run_creates_no_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    before = set(os.listdir("/tmp"))
+    args = _args(tmp_path, dry_run=True)
+    assert deploy.system_execute(args) == 0
+    new = {n for n in set(os.listdir("/tmp")) - before
+           if n.startswith("walk-blocker-stage.")}
+    assert new == set(), new
+    assert os.listdir(deploy.STAGING_PARENT) == []
+    assert deploy.stage_payload(dry_run=True) == deploy.REPO
+
+
+def test_the_source_tree_is_not_required_to_be_root_owned(tmp_path,
+                                                          monkeypatch):
+    """ADR-0006: a sysadmin unpacks the payload into a folder xe owns and
+    runs this as root. Refusing a non-root-owned source was proposed three
+    times and rejected each time; this pins the decision. REPO here really
+    is user-owned, so a check on the source would fire."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert os.stat(deploy.REPO).st_uid != 0 or os.getuid() == 0, \
+        "this test means nothing if the payload directory is already root's"
+    assert deploy.system_execute(_args(tmp_path)) == 0
+
+
+def test_the_snapshot_parent_is_pinned_not_taken_from_tmpdir(monkeypatch):
+    """tempfile's default parent comes from TMPDIR, so an environment
+    variable would decide where the root-owned 0700 snapshot lived."""
+    monkeypatch.undo()
+    assert deploy.STAGING_PARENT == VALUES["site.toml:install.staging_parent"]
+    source = source_text()
+    body = source[source.index("def stage_payload("):]
+    body = body[:body.index("\ndef ")]
+    assert "dir=STAGING_PARENT" in body, "mkdtemp must be given the parent"
+    assert "untrusted_prefix_chain(STAGING_PARENT)" in body, \
+        "the pinned parent is checked, not assumed"
+
+
+def test_an_untrusted_snapshot_parent_is_refused_not_worked_around(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        deploy, "untrusted_prefix_chain",
+        lambda p, trusted_uids=(0,): [(p, "owned by uid 1000")])
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    try:
+        deploy.stage_payload()
+    except SystemExit as exit_code:
+        assert exit_code.code == 6
+    else:
+        raise AssertionError("an untrusted staging parent must be refused")
+
+
+# --------------------------------------------------------------------------
+# systemd state
+# --------------------------------------------------------------------------
+
+def test_the_previous_timer_is_disarmed_before_the_payload_moves(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    stops = [i for i, c in enumerate(calls)
+             if c[:2] == ["systemctl", "stop"]
+             or c[:3] == ["systemctl", "disable", "--now"]]
+    # Scoped to the PREFIX: the staging snapshot also uses cp/install, but
+    # writes to a private root-only directory, not to anything the running
+    # timer executes.
+    first_mutation = min(i for i, c in enumerate(calls)
+                         if c[0] in ("rm", "cp", "install")
+                         and c[-1].startswith(args.prefix))
+    enables = [i for i, c in enumerate(calls)
+               if c[:2] == ["systemctl", "enable"]]
+    assert stops, calls
+    assert max(stops) < first_mutation, "disarm has to precede the rm -rf"
+    assert any(c[:3] == ["systemctl", "disable", "--now"] for c in calls), \
+        "stop alone leaves it enabled, so it re-arms at the next reboot"
+    assert min(enables) > max(stops), "re-armed only after validation"
+
+
+def test_deploy_aborts_when_a_unit_refuses_to_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run",
+                        recording_run(calls, active_units=(deploy.TIMER_UNIT,)))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 7
+    assert not any(c[0] in ("rm", "cp") and c[-1].startswith(args.prefix)
+                   for c in calls), \
+        "the payload must not move while a unit is still active"
+    assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+
+
+def test_deploy_refuses_a_timer_that_stopped_but_stayed_enabled(tmp_path,
+                                                                monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        deploy, "run",
+        recording_run(calls, enabled_units=(deploy.TIMER_UNIT,)))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 7
+    assert not any(c[0] in ("rm", "cp") and c[-1].startswith(args.prefix)
+                   for c in calls), \
+        "the payload must not move while the timer is still armed"
+
+
+def test_deploy_proceeds_when_the_timer_was_never_installed(tmp_path,
+                                                             monkeypatch):
+    """A from-scratch node has no timer at all -- the ordinary first-install
+    case -- and `show --value` answers "" for it, exit 0."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+
+    def never_installed(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        calls.append(cmd)
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
+        if cmd[:2] == ["systemctl", "show"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(deploy, "run", never_installed)
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+    assert any(c[0] == "cp" and c[-1].startswith(args.prefix) for c in calls), \
+        "the payload should have been installed, not refused"
+
+
+def _query_fails(calls):
+    def query_fails(cmd, check=True, capture=True, dry_run=False, env=None):
+        calls.append(cmd)
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
+        if cmd[:2] == ["systemctl", "show"]:
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "Failed to connect to bus: No such file "
+                          "or directory\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    return query_fails
+
+
+def test_deploy_refuses_when_the_enablement_query_itself_fails(tmp_path,
+                                                                monkeypatch):
+    """Empty stdout is the SAME shape whether the timer has no unit file
+    (safe) or the query itself failed. The returncode tells them apart."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", _query_fails(calls))
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 7
+    assert not any(c[0] in ("rm", "cp") and c[-1].startswith(args.prefix)
+                   for c in calls), \
+        "the payload must not move when enablement could not be determined"
+
+
+def test_uninstall_refuses_when_the_enablement_query_itself_fails(tmp_path,
+                                                                   monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", _query_fails(calls))
+    assert deploy.system_uninstall(args) == 7
+    assert not any("install.sh" in a for c in calls for a in c), \
+        "nothing may be torn down while enablement could not be determined"
+
+
+def test_uninstall_stops_the_service_not_just_the_timer(tmp_path, monkeypatch):
+    """A running service instance's ExecStartPre is `install.sh --relink`,
+    which would recreate the shims this uninstall just removed."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 0
+    stops = [c for c in calls if c[:2] == ["systemctl", "stop"]]
+    assert any(deploy.SERVICE_UNIT in c for c in stops), calls
+    probe = next(i for i, c in enumerate(calls)
+                 if c[:2] == ["systemctl", "is-active"])
+    removal = next(i for i, c in enumerate(calls)
+                   if any("install.sh" in a for a in c))
+    assert probe < removal, "confirm it is stopped before removing the shims"
+
+
+def test_uninstall_verifies_the_timer_not_only_the_service(tmp_path,
+                                                           monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    calls = []
+    monkeypatch.setattr(
+        deploy, "run",
+        recording_run(calls, active_units=(deploy.TIMER_UNIT,)))
+    assert deploy.system_uninstall(args) == 7
+    assert not any("install.sh" in a for c in calls for a in c), \
+        "nothing may be removed while the timer is live"
+
+    calls.clear()
+    monkeypatch.setattr(
+        deploy, "run",
+        recording_run(calls, enabled_units=(deploy.TIMER_UNIT,)))
+    assert deploy.system_uninstall(args) == 7, \
+        "stopped-but-enabled still leaves a loadable unit"
+
+    calls.clear()
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 0
+    assert any("install.sh" in a for c in calls for a in c)
+
+
+# --------------------------------------------------------------------------
+# uninstall
+# --------------------------------------------------------------------------
+
+def test_uninstall_runs_the_deployed_helper_not_the_payload_directory(
+        tmp_path, monkeypatch):
+    """deploy.py's bytes are fixed once loaded, but install.sh is opened
+    later and sources wrapped_names.sh later still, so the directory's owner
+    can replace either after the root operator started."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 0
+
+    installer = next(arg for c in calls for arg in c if "install.sh" in arg)
+    assert installer.startswith(args.prefix), installer
+    assert not installer.startswith(deploy.REPO), installer
+
+
+def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
+        tmp_path, monkeypatch, capsys):
+    """A fallback would reopen exactly the path being closed, so a missing
+    deployed helper is a refusal -- with the manual steps, naming the
+    enabled hook files."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 5
+    assert not [arg for c in calls for arg in c if "install.sh" in arg]
+    err = capsys.readouterr().err
+    for path in deploy.enabled_hook_files(args):
+        assert path in err, (path, err)
+    assert os.path.join(args.prefix, "bin") in err
+
+
+def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
+                                                                   monkeypatch):
+    """Both files, because install.sh SOURCES wrapped_names.sh into its own
+    shell -- so a swap of either is root execution."""
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    staged = tmp_path / "prefix" / "shim"
+    staged.mkdir(parents=True)
+    for name in ("install.sh", "wrapped_names.sh"):
+        (staged / name).write_text("")
+    prefix = str(tmp_path / "prefix")
+
+    monkeypatch.setattr(deploy, "unowned_by",
+                        lambda root, uid=0: [(root, "owned by uid %d" % os.getuid())])
+    assert deploy.uninstall_helper(prefix)[0] is None
+
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    helper, why = deploy.uninstall_helper(prefix)
+    assert why is None, why
+    assert helper == str(staged / "install.sh")
+
+    (staged / "install.sh").unlink()
+    os.symlink(str(tmp_path / "elsewhere.sh"), str(staged / "install.sh"))
+    assert deploy.uninstall_helper(prefix)[0] is None
+
+    (staged / "install.sh").unlink()
+    (staged / "install.sh").write_text("")
+    (staged / "wrapped_names.sh").unlink()
+    os.symlink(str(tmp_path / "other.sh"), str(staged / "wrapped_names.sh"))
+    assert deploy.uninstall_helper(prefix)[0] is None
+
+
+def _uninstall_with_a_planted_link(tmp_path, monkeypatch, attr):
+    """Plant a symlink to a 0600 secret where the hook file named by `attr`
+    would be, under a directory others can write, and run the uninstall.
+    Returns (rc, calls, secret, link)."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    secret = tmp_path / "secret"
+    secret.write_text("SECRET\n")
+    secret.chmod(0o600)
+    link = shared / "hookfile"
+    link.symlink_to(secret)
+
+    prefix = tmp_path / "p"
+    prefix.mkdir()
+    (prefix / deploy.PAYLOAD_MARKER).write_text("")
+
+    real = deploy.untrusted_prefix_chain
+    monkeypatch.setattr(
+        deploy, "untrusted_prefix_chain",
+        lambda path, trusted_uids=(0,): real(path,
+                                             trusted_uids=(0, os.getuid())))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    shared.chmod(0o777)          # the precondition: others can plant the link
+    try:
+        args = _args(tmp_path, prefix=str(prefix), **{attr: str(link)})
+        rc = deploy.system_uninstall(args)
+    finally:
+        shared.chmod(0o755)
+    return rc, calls, secret, link
+
+
+@pytest.mark.parametrize("attr", ["bashrc_file", "zshenv_file", "fish_conf_file"])
+def test_uninstall_validates_every_hook_file_it_writes_not_only_the_prefix(
+        tmp_path, monkeypatch, attr):
+    """`strip_block()` READS the hook file and replaces it with a
+    root-created 0644 regular file, so a symlink planted in a writable
+    directory had its target's contents copied out world-readable. Every
+    hook file, fish's drop-in included: it is `rm -f`'d on uninstall
+    regardless of its gate."""
+    rc, calls, secret, link = _uninstall_with_a_planted_link(tmp_path, monkeypatch, attr)
+    assert rc == 6
+    assert not any("install.sh" in a for c in calls for a in c), calls
+    assert secret.stat().st_mode & 0o777 == 0o600
+    assert os.path.islink(str(link)), "the link must be untouched"
+
+
+def test_a_disabled_hooks_file_is_still_validated_as_a_path(tmp_path, monkeypatch):
+    """Disabled means never written or stripped; it does not mean unchecked.
+    The cost is a stat, and a hand-edited copy that re-enables the hook
+    would otherwise reach strip_block() through an unvalidated path."""
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", False)
+    assert [shell for _a, shell, enabled in deploy.hook_table() if enabled] == \
+        ["bash", "zsh"]
+    rc, calls, secret, link = _uninstall_with_a_planted_link(
+        tmp_path, monkeypatch, "fish_conf_file")
+    assert rc == 6
+    assert calls == [], calls
+    assert os.path.islink(str(link))
+
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    fifo = tmp_path / "fifo"
+    os.mkfifo(str(fifo))
+    assert deploy.validate_root_write_paths(
+        _args(tmp_path, fish_conf_file=str(fifo)), attrs=("fish_conf_file",)) == 6
+
+
+def test_a_disabled_hook_is_not_named_where_the_operator_is_told_to_look(
+        tmp_path, monkeypatch, capsys):
+    """The manual-steps and the "check the hook files" messages list the
+    files install.sh actually writes on this site; naming a disabled hook's
+    file would send an operator to strip a block that was never there."""
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_ZSH", False)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    assert deploy.enabled_hook_files(args) == [args.bashrc_file, args.fish_conf_file]
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert args.bashrc_file in err and args.fish_conf_file in err
+    assert args.zshenv_file not in err
+
+
+def test_uninstall_reports_a_teardown_it_did_not_achieve(tmp_path,
+                                                          monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    calls = []
+
+    def rm_fails(cmd, check=True, capture=True, dry_run=False, env=None):
+        calls.append(cmd)
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
+        if cmd[:2] == ["systemctl", "show"]:
+            return subprocess.CompletedProcess(cmd, 0, "disabled\n", "")
+        if cmd[0] == "rm":
+            return subprocess.CompletedProcess(cmd, 1, "", "read-only fs")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(deploy, "run", rm_fails)
+    assert deploy.system_uninstall(args) == 8
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_uninstall(args) == 0, "a clean teardown still reports 0"
+
+
+def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    shared = tmp_path / "usr-local-lookalike"
+    (shared / "bin").mkdir(parents=True)
+    monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(shared))
+    assert deploy.system_uninstall(_args(tmp_path)) == 6
+    assert not any("install.sh" in arg for c in calls for arg in c), calls
+
+
+def test_uninstall_refuses_a_symlinked_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    link = tmp_path / "x"
+    link.symlink_to(tmp_path / "real")
+    (tmp_path / "real").mkdir()
+    open(str(link / deploy.PAYLOAD_MARKER), "w").close()
+
+    chain = deploy.untrusted_prefix_chain(str(link),
+                                          trusted_uids=(0, os.getuid()))
+    assert [why for _, why in chain if "symlink" in why], chain
+
+    assert deploy.system_uninstall(_args(tmp_path, prefix=str(link))) == 6
+    assert not any("install.sh" in arg for c in calls for arg in c), calls
+
+
+def test_uninstall_does_not_claim_removal_it_did_not_achieve(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    calls = []
+
+    def failing_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        calls.append(cmd)
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
+        if cmd[:2] == ["systemctl", "show"]:
+            return subprocess.CompletedProcess(cmd, 0, "disabled\n", "")
+        rc = 1 if any("install.sh" in a for a in cmd) else 0
+        return subprocess.CompletedProcess(cmd, rc, "", "")
+
+    monkeypatch.setattr(deploy, "run", failing_run)
+    assert deploy.system_uninstall(args) == 8
+    assert any("install.sh" in a for c in calls for a in c), calls
+
+
+def test_uninstall_refuses_a_prefix_that_would_delete_system_binaries(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(_args(tmp_path, prefix="/")) == 6
+    assert calls == [], "nothing may run before the prefix is judged"
+
+
+# --------------------------------------------------------------------------
+# unit files
+# --------------------------------------------------------------------------
+
+def exec_lines(prefix):
+    """The rendered service's directives starting with `prefix`, as
+    (directive, value) pairs."""
+    service, _timer = deploy.render_units("/PFX", "/SPOOL")
+    return [tuple(line.split("=", 1)) for line in service.splitlines()
+            if line.startswith(prefix)]
+
+
+def timer_lines():
+    _service, timer = deploy.render_units("/PFX", "/SPOOL")
+    return dict(tuple(line.split("=", 1)) for line in timer.splitlines()
+                if "=" in line and not line.startswith(("#", "[")))
+
+
+def test_unit_files_are_0644_regardless_of_the_root_shells_umask(tmp_path,
+                                                                  monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    old = os.umask(0)
+    try:
+        args = _args(tmp_path)
+        assert deploy.system_execute(args) == 0
+        for name in (deploy.SERVICE_UNIT, deploy.TIMER_UNIT):
+            mode = os.stat(os.path.join(args.unit_dir, name)).st_mode & 0o777
+            assert mode == 0o644, "%s is %o under umask 000" % (name, mode)
+    finally:
+        os.umask(old)
+
+
+def test_created_unit_dir_intermediates_are_not_world_writable(tmp_path,
+                                                               monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    old = os.umask(0)
+    try:
+        monkeypatch.setattr(deploy, "DEFAULT_UNIT_DIR",
+                            str(tmp_path / "new" / "units"))
+        args = _args(tmp_path)
+        assert deploy.system_execute(args) == 0
+        for path in (tmp_path / "new", tmp_path / "new" / "units"):
+            mode = path.stat().st_mode & 0o777
+            assert not mode & 0o022, "%s is %o" % (path, mode)
+    finally:
+        os.umask(old)
+
+
+def test_write_unit_reasserts_ownership_not_only_mode(tmp_path, monkeypatch):
+    unit = tmp_path / deploy.SERVICE_UNIT
+    unit.write_text("stale\n")
+
+    chowned = []
+    real_fchown = os.fchown
+    monkeypatch.setattr(
+        os, "fchown",
+        lambda fd, uid, gid: chowned.append((uid, gid)))
+    deploy.write_unit(str(unit), "[Unit]\n")
+    assert chowned == [(0, 0)], chowned
+    assert unit.read_text() == "[Unit]\n"
+    assert unit.stat().st_mode & 0o777 == 0o644
+
+    monkeypatch.setattr(os, "fchown", real_fchown)
+    deploy.write_unit(str(unit), "[Unit]\n")          # no raise as ourselves
+
+    def refuse(fd, uid, gid):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "fchown", refuse)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    try:
+        deploy.write_unit(str(unit), "[Unit]\n")
+        raise AssertionError("root must not swallow a failed fchown")
+    except PermissionError:
+        pass
+
+
+def test_a_unit_path_that_is_a_symlink_is_not_followed(tmp_path):
+    target = tmp_path / "precious"
+    target.write_text("do not truncate me\n")
+    link = tmp_path / deploy.SERVICE_UNIT
+    link.symlink_to(target)
+
+    with pytest.raises(OSError):
+        deploy.write_unit(str(link), "[Unit]\n")
+    assert target.read_text() == "do not truncate me\n"
+
+
+def test_the_reaper_ships_report_only():
+    """Promoting to --kill is a decision someone makes after reading real
+    findings. Checked against ExecStart specifically: `--kill-after` on the
+    unrelated ExecStartPre legitimately puts `--kill` elsewhere in the unit."""
+    _directive, command = exec_lines("ExecStart=")[0]
+    assert "--report" in command
+    assert "--kill" not in command
+
+
+def test_layer_2_does_not_depend_on_layer_1_housekeeping():
+    """The availability inversion: without the `-`, any refusal reachable
+    from install.sh's relink arm stopped the reaper -- the layer that exists
+    BECAUSE Layer 1 is bypassable made to depend on Layer 1's bookkeeping."""
+    pre = exec_lines("ExecStartPre=")
+    assert len(pre) == 1, pre
+    _directive, command = pre[0]
+    assert command.startswith("-"), (
+        "a Layer 1 refusal must not suppress ExecStart: %r" % command)
+
+
+def test_a_hung_relink_cannot_eat_the_units_start_timeout():
+    """The `-` ignores a non-zero EXIT, not a hang: so the bound is
+    explicit -- the compiled `timeout` binary, `--kill-after` from
+    `[timer].relink_kill_after_s`, the duration from
+    `[timer].relink_timeout_s`, the compiled shell, and the deployed
+    installer with no path flags. systemd does not search PATH, so every
+    command token is absolute."""
+    _directive, command = exec_lines("ExecStartPre=")[0]
+    words = command.lstrip("-").split()
+    assert words[0] == deploy.TRUSTED_TIMEOUT and words[0].startswith("/"), command
+    assert words[1] == "--kill-after=%d" % deploy.RELINK_KILL_AFTER_S, command
+    assert words[2] == str(deploy.RELINK_TIMEOUT_S) and int(words[2]) > 0, command
+    assert words[3] == deploy.TRUSTED_SH and words[3].startswith("/"), command
+    assert words[4] == "/PFX/shim/install.sh", command
+    assert words[5:] == ["--relink"], command
+
+
+def test_the_kill_after_grace_period_is_positive_and_bounded():
+    """`--kill-after` only helps if it is neither 0 nor large enough to
+    itself threaten the service's start budget alongside the initial wait."""
+    _directive, command = exec_lines("ExecStartPre=")[0]
+    words = command.lstrip("-").split()
+    grace = int(words[1].split("=", 1)[1])
+    duration = int(words[2])
+    assert 0 < grace, words[1]
+    timeout_start = int(dict(exec_lines("TimeoutStartSec="))["TimeoutStartSec"])
+    assert timeout_start == deploy.TIMEOUT_START_SEC
+    assert duration + grace < timeout_start, (
+        "timeout plus kill-after must stay clear of TimeoutStartSec: %r" % command)
+
+
+def test_the_reapers_own_exit_status_still_reaches_the_unit():
+    """The asymmetry is the point: exactly one Exec* directive tolerates
+    failure, and it is the housekeeping one."""
+    start = exec_lines("ExecStart=")
+    assert len(start) == 1, start
+    _directive, command = start[0]
+    assert not command.startswith("-"), (
+        "the finding alarm dies if the reaper's exit status is ignored")
+    words = command.split()
+    assert words[0] == deploy.TRUSTED_PYTHON3
+    assert words[1] == "/PFX/reaper.py"
+    assert words[2:] == ["--report", "--spool", "/SPOOL"], command
+    assert ("SuccessExitStatus", "0") in exec_lines("SuccessExitStatus=")
+
+    tolerant = [d for d, c in exec_lines("Exec") if c.startswith("-")]
+    assert tolerant == ["ExecStartPre"], tolerant
+
+
+def test_the_timer_carries_the_stamped_slot_and_settings(monkeypatch):
+    """The slot is site config chosen against the live schedule, and the
+    jitter and coalescing settings are what would undo it; all four come
+    from the compiled constants, and a change to any of them is carried."""
+    lines = timer_lines()
+    assert lines["OnCalendar"] == deploy.TIMER_SLOT == VALUES["site.toml:timer.on_calendar"]
+    assert lines["RandomizedDelaySec"] == str(deploy.TIMER_RANDOMIZED_DELAY_SEC)
+    assert lines["AccuracySec"] == deploy.TIMER_ACCURACY_SEC
+    assert lines["Persistent"] == "false"
+    assert lines["WantedBy"] == "timers.target"
+
+    monkeypatch.setattr(deploy, "TIMER_SLOT", "*:03,33:15")
+    monkeypatch.setattr(deploy, "TIMER_RANDOMIZED_DELAY_SEC", 5)
+    monkeypatch.setattr(deploy, "TIMER_ACCURACY_SEC", "500ms")
+    monkeypatch.setattr(deploy, "TIMER_PERSISTENT", True)
+    lines = timer_lines()
+    assert lines["OnCalendar"] == "*:03,33:15"
+    assert lines["RandomizedDelaySec"] == "5"
+    assert lines["AccuracySec"] == "500ms"
+    assert lines["Persistent"] == "true"
+
+
+def test_the_unit_descriptions_carry_the_sites_display_name():
+    service, timer = deploy.render_units("/PFX", "/SPOOL")
+    for text in (service, timer):
+        description = next(l for l in text.splitlines() if l.startswith("Description="))
+        assert deploy.DISPLAY_NAME in description, description
+        assert VALUES["site.toml:site.display_name"] in description
+
+
+def test_the_payload_does_not_live_on_the_filesystem_it_watches():
+    """A home directory may be on the filesystem under investigation."""
+    service, timer = deploy.render_units("/PFX", "/SPOOL")
+    for text in (service, timer):
+        assert "$HOME" not in text
+        assert "~" not in text
+    assert "never under a home directory" in deploy.__doc__
+
+
+def test_the_preview_prints_the_rendered_units_the_install_writes(
+        tmp_path, monkeypatch, capsys):
+    """Preview <-> execute parity on the units: the preview prints the two
+    unit files rendered from the same constants and paths the install
+    writes, line for line, with the site's values in them."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    args = _args(tmp_path)
+    assert deploy.system_preview(args) == 0
+    previewed = capsys.readouterr().out
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    assert deploy.system_execute(args) == 0
+    for name in (deploy.SERVICE_UNIT, deploy.TIMER_UNIT):
+        path = os.path.join(args.unit_dir, name)
+        written = open(path).read()
+        assert "# --- %s ---" % path in previewed
+        for line in written.rstrip("\n").splitlines():
+            assert line in previewed.splitlines(), line
+    assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in previewed
+    assert "TimeoutStartSec=%d" % VALUES["site.toml:timer.timeout_start_sec"] in previewed
+    assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
+        VALUES["site.toml:trusted_binaries.python3"], args.prefix, args.spool_dir) in previewed
+
+
+# --------------------------------------------------------------------------
+# hook files as root-write sinks
+# --------------------------------------------------------------------------
+
+def test_a_symlinked_bashrc_file_is_refused_before_it_is_read(tmp_path,
+                                                              monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    secret = tmp_path / "secret"
+    secret.write_text("PRIVATE\n")
+    secret.chmod(0o600)
+    link = tmp_path / "bashrc-link"
+    os.symlink(str(secret), str(link))
+
+    args = _args(tmp_path, bashrc_file=str(link))
+    assert deploy.validate_root_write_paths(
+        args, attrs=("bashrc_file",)) == 6
+    assert secret.read_text() == "PRIVATE\n"
+    assert stat.S_IMODE(os.stat(str(secret)).st_mode) == 0o600
+
+
+def test_a_dangling_bashrc_symlink_is_refused_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    link = tmp_path / "dangling"
+    os.symlink(str(tmp_path / "nope"), str(link))
+    args = _args(tmp_path, bashrc_file=str(link))
+    assert deploy.validate_root_write_paths(args, attrs=("bashrc_file",)) == 6
+
+
+def test_a_bashrc_that_is_not_a_regular_file_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    fifo = tmp_path / "fifo"
+    os.mkfifo(str(fifo))
+    args = _args(tmp_path, bashrc_file=str(fifo))
+    assert deploy.validate_root_write_paths(args, attrs=("bashrc_file",)) == 6
+
+
+def test_a_regular_or_absent_bashrc_file_is_accepted(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    plain = tmp_path / "bashrc"
+    plain.write_text("# existing\n")
+    assert deploy.validate_root_write_paths(
+        _args(tmp_path, bashrc_file=str(plain)), attrs=("bashrc_file",)) == 0
+    assert deploy.validate_root_write_paths(
+        _args(tmp_path, bashrc_file=str(tmp_path / "not-yet")),
+        attrs=("bashrc_file",)) == 0
+
+
+def test_a_bashrc_file_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
+    """`prepend_block` PRESERVES the existing contents, and install.sh's
+    verify then has the shell source the whole file AS ROOT -- so a
+    user-owned or group-writable hook file lets its owner choose what runs
+    during the deploy."""
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    bashrc = tmp_path / "bashrc"
+    bashrc.write_text("# somebody else's\n")
+
+    args = _args(tmp_path, bashrc_file=str(bashrc))
+    assert deploy.validate_root_write_paths(
+        args, attrs=("bashrc_file",)) == 6
+
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    assert deploy.validate_root_write_paths(
+        _args(tmp_path, bashrc_file=str(bashrc)),
+        attrs=("bashrc_file",)) == 0
+
+
+def test_an_absent_bashrc_file_needs_no_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    calls = []
+    monkeypatch.setattr(deploy, "unowned_by",
+                        lambda root, uid=0: calls.append(root) or [])
+    args = _args(tmp_path, bashrc_file=str(tmp_path / "not-yet"))
+    assert deploy.validate_root_write_paths(args, attrs=("bashrc_file",)) == 0
+    assert calls == [], "an absent file should not be ownership-checked"
+
+
+def test_irregular_target_ignores_a_directory_kind(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,): [])
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    assert deploy.validate_root_write_paths(
+        _args(tmp_path, unit_dir=str(unit_dir)), attrs=("unit_dir",)) == 0
+
+
+def test_validate_covers_every_compiled_location():
+    """PATH_KINDS and default_paths() name the same six locations, so a
+    location added to one and not the other -- the install <-> uninstall
+    divergence shape -- fails here."""
+    assert sorted(attr for attr, _kind in deploy.PATH_KINDS) == \
+        sorted(deploy.default_paths())
+    assert dict(deploy.PATH_KINDS) == {
+        "prefix": "dir", "spool_dir": "dir", "unit_dir": "dir",
+        "bashrc_file": "file", "zshenv_file": "file", "fish_conf_file": "file"}
+
+
+# --------------------------------------------------------------------------
+# the literals
+# --------------------------------------------------------------------------
+
+def test_a_non_default_unit_dir_is_refused_by_execute(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path, unit_dir=str(tmp_path / "elsewhere"))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], "refused before anything ran"
+    assert not os.path.exists(args.prefix)
+
+
+def test_a_non_default_unit_dir_is_refused_by_uninstall(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    prefix = str(tmp_path / "prefix")
+    pass_uninstall_checks(monkeypatch, prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path, prefix=prefix, unit_dir=str(tmp_path / "elsewhere"))
+    assert deploy.system_uninstall(args) == 6
+    assert calls == []
+
+
+UNIT_UNSAFE = ' \t\n"\'\\%$'          # systemd word-splits, expands % and ${}
+SHELL_UNSAFE = ';&|<>()[]{}`*?!#~ $"\'\\'  # sourced by every login shell
+
+
+def test_the_installer_paths_are_shaped_for_every_sink_they_reach(monkeypatch):
+    """One assertion per property the deleted validators used to check,
+    over the COMPILED literals -- the schema asserts the same at build, and
+    this is the half that would catch the schema and the generator
+    drifting. The autouse fixture is undone first."""
+    monkeypatch.undo()
+    paths = deploy.default_paths()
+    assert sorted(paths) == ["bashrc_file", "fish_conf_file", "prefix",
+                             "spool_dir", "unit_dir", "zshenv_file"]
+
+    for attr, value in sorted(paths.items()):
+        assert os.path.isabs(value), attr
+        assert value == deploy.canonical_prefix(value), \
+            "%s is not in canonical form" % attr
+        assert len([p for p in value.split(os.sep) if p]) >= 2, attr
+
+    for attr in ("prefix", "spool_dir", "unit_dir"):
+        assert not (set(paths[attr]) & set(UNIT_UNSAFE)), \
+            "%s cannot go in a systemd unit line" % attr
+    for attr in ("prefix", "spool_dir"):
+        assert not (set(paths[attr]) & set(SHELL_UNSAFE)), \
+            "%s is not safe to interpolate into a sourced shell block" % attr
+    assert not (set(deploy.DEFAULT_AUDIT_FILENAME) & set(SHELL_UNSAFE + "/"))
+    assert paths["spool_dir"].count(os.sep) >= 2
+    for name in ("TRUSTED_TIMEOUT", "TRUSTED_SH", "TRUSTED_PYTHON3"):
+        value = getattr(deploy, name)
+        assert os.path.isabs(value) and not (set(value) & set(UNIT_UNSAFE)), name
+
+
+def test_not_a_default_refuses_each_of_the_six_paths(tmp_path):
+    for attr in deploy.default_paths():
+        args = _args(tmp_path, **{attr: str(tmp_path / "elsewhere")})
+        why = deploy.not_a_default(args)
+        assert why is not None, attr
+        assert attr in why, why
+    assert deploy.not_a_default(_args(tmp_path)) is None
+
+
+def test_a_non_default_path_is_refused_before_anything_runs(tmp_path,
+                                                            monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    prefix = str(tmp_path / "prefix")
+    pass_prefix_checks(monkeypatch)
+    pass_uninstall_checks(monkeypatch, prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    for func in (deploy.system_execute, deploy.system_uninstall):
+        calls.clear()
+        args = _args(tmp_path, unit_dir=str(tmp_path / "elsewhere"))
+        assert func(args) == 6, func.__name__
+        assert calls == [], "%s ran commands before refusing" % func.__name__
+
+
+def test_the_previewed_command_is_the_command_that_installs(tmp_path, capsys,
+                                                            monkeypatch):
+    """Every advertised approval command is deploy.py's and carries no path
+    flags, and none advertises install.sh."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    deploy.system_preview(_args(tmp_path))
+    out = capsys.readouterr().out
+
+    advertised = [ln for ln in out.splitlines()
+                  if ln.startswith("#   ") and "--i-have-approval" in ln]
+    assert advertised, out
+    for line in advertised:
+        assert line.strip().endswith(
+            "deploy.py --system --i-have-approval"), line
+        for flag in PATH_FLAGS:
+            assert flag not in line, (flag, line)
+    assert not [ln for ln in out.splitlines()
+                if ln.lstrip("# ").strip().startswith("sh ")
+                and "install.sh" in ln and "--i-have-approval" in ln], out
+
+
+def test_the_preview_does_not_relay_the_standalone_installer_command(
+        tmp_path, capsys, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    deploy.system_preview(_args(tmp_path))
+    out = capsys.readouterr().out
+
+    offered = [l for l in out.splitlines()
+               if l.lstrip("# ").strip().startswith("sh ")
+               and "install.sh" in l and "--i-have-approval" in l]
+    assert offered == [], offered
+    assert _previewed_command(out)
+
+
+def test_the_relay_filter_strips_a_command_but_not_prose(tmp_path, capsys,
+                                                         monkeypatch):
+    """The filter matches a command-shaped line only; the looser version
+    once replaced a sentence in the middle of install.sh's own explanation."""
+    pass_prefix_checks(monkeypatch)
+    child = (
+        "# preamble\n"
+        "#   sh /somewhere/install.sh --system --i-have-approval\n"
+        "# NOT install.sh run with --i-have-approval directly, because ...\n"
+        "# trailer\n")
+    monkeypatch.setattr(
+        deploy, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, child, ""))
+    deploy.system_preview(_args(tmp_path))
+    out = capsys.readouterr().out
+
+    assert "sh /somewhere/install.sh" not in out
+    assert "standalone command is omitted" in out
+    assert ("# NOT install.sh run with --i-have-approval directly, because ..."
+            in out)
+    assert "# trailer" in out
+
+
+def test_a_refusing_child_preview_is_relayed_not_swallowed(tmp_path, capsys,
+                                                           monkeypatch):
+    """install.sh checks filesystem state a literal cannot make true, so its
+    refusal means the install would refuse too; no command is advertised."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(
+        deploy, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 3, "", "install.sh: refusing hooks.bash.file: it is a symlink.\n"))
+    assert deploy.system_preview(_args(tmp_path)) == 6
+    captured = capsys.readouterr()
+    assert "it is a symlink" in captured.err
+    assert "would refuse too" in captured.err
+    assert "--i-have-approval" not in [
+        l for l in captured.out.splitlines() if l.startswith("#   ")]
+
+
+# --------------------------------------------------------------------------
+# the audit directory: one direction of refusal (ADR-0012)
+# --------------------------------------------------------------------------
+
+def test_the_audit_directory_is_created_at_0755_before_the_installer_runs(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    pass_prefix_checks(monkeypatch)
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    created = [i for i, c in enumerate(calls)
+               if c[:4] == ["install", "-d", "-m", "0755"] and c[-1] == args.spool_dir]
+    assert len(created) == 1, calls
+
+    installer = next(i for i, c in enumerate(calls)
+                     if any("install.sh" in a for a in c))
+    assert created[0] < installer, calls
+
+
+def test_0755_still_refuses_the_write_adr_0004_forbids(tmp_path, monkeypatch):
+    """The mode changed; the invariant did not. An append needs `w`."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    pass_prefix_checks(monkeypatch)
+
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 0
+
+    mode = next(c[3] for c in calls
+                if c[:2] == ["install", "-d"] and c[-1] == args.spool_dir)
+    bits = int(mode, 8)
+    assert not bits & 0o022, "group/other must never gain w: %s" % mode
+    assert bits & 0o005 == 0o005, "other must keep r-x to read the trail: %s" % mode
+
+
+def test_an_audit_directory_owned_by_someone_else_refuses_before_any_command(
+        tmp_path, monkeypatch):
+    """The mode is ours to assert; the OWNER is not ours to take."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    os.makedirs(args.spool_dir, exist_ok=True)
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [(root, "owned by uid 1000")] if root == args.spool_dir
+        else [])
+
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_an_untraversable_audit_ancestor_refuses_before_any_command(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    ancestor = os.path.dirname(args.spool_dir)
+    monkeypatch.setattr(
+        deploy, "untraversable_for_users",
+        lambda prefix: [(ancestor, "mode 0700 has no o+x")] if prefix == args.spool_dir
+        else [])
+
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_the_preview_names_the_audit_directory_it_will_create(
+        tmp_path, capsys, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    args = _args(tmp_path)
+    deploy.system_preview(args)
+    out = capsys.readouterr().out
+    assert "install -d -m 0755 %s" % args.spool_dir in out, out
+    assert "0755, not 0750" in out, out
+
+
+def _spool_with(tmp_path, monkeypatch, name, mode):
+    """A spool holding one file at `mode`, with the real ownership check
+    driven at this user's uid rather than root's, scoped to the SPOOL."""
+    real = deploy.unowned_by
+    args = _args(tmp_path)
+    spool = args.spool_dir
+    os.makedirs(spool, exist_ok=True)
+    victim = os.path.join(spool, name)
+    with open(victim, "w") as fh:
+        fh.write("{}\n")
+    os.chmod(victim, mode)
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=None: real(root, uid=os.getuid())
+        if os.path.abspath(root) == spool else [])
+    return args, victim
+
+
+def test_a_group_writable_state_file_is_repaired_not_refused(
+        tmp_path, monkeypatch):
+    """A spool carrying a default ACL suppresses the umask at file creation,
+    so the reaper's state file can land group-writable and the install
+    would stop over a mode it is about to assert."""
+    args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+
+    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
+                  if b[0] == "permissive"]
+    assert permissive == [], permissive
+
+
+def test_the_exemption_does_not_cover_a_file_this_install_never_wrote(
+        tmp_path, monkeypatch):
+    """The narrowness IS the property."""
+    args, victim = _spool_with(tmp_path, monkeypatch, "someone-elses.json", 0o664)
+
+    assert deploy.spool_mode_repairs(args.spool_dir) == []
+    permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
+                  if b[0] == "permissive"]
+    assert [b[1] for b in permissive] == [victim]
+
+
+def test_the_install_actually_tightens_what_it_declined_to_refuse(
+        tmp_path, monkeypatch):
+    args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(args) == 0
+    assert ["chmod", "go-w", victim] in calls
+
+
+def test_the_preview_advertises_the_chmod_the_install_will_run(
+        tmp_path, monkeypatch):
+    args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    rc = deploy.system_preview(args)
+    monkeypatch.undo()
+    assert rc == 0, out.getvalue()
+    assert "chmod go-w %s" % victim in out.getvalue(), out.getvalue()
+
+
+def test_an_orphaned_state_temp_file_is_repaired_not_refused(
+        tmp_path, monkeypatch):
+    args, victim = _spool_with(
+        tmp_path, monkeypatch, "reaper-state.json.tmp", 0o664)
+
+    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
+                  if b[0] == "permissive"]
+    assert permissive == [], permissive
+
+
+def test_layer_1s_trail_is_installer_owned_under_its_compiled_name(
+        tmp_path, monkeypatch):
+    """The audit filename is a literal from `[install].audit_filename`, and
+    the installer-owned list uses that literal rather than a spelling of
+    its own -- so a site that renames the trail still gets it tightened."""
+    args, victim = _spool_with(
+        tmp_path, monkeypatch, deploy.DEFAULT_AUDIT_FILENAME, 0o664)
+    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    assert deploy.audit_path(args.spool_dir) == victim
+
+
+def test_the_preview_refuses_where_the_install_would(tmp_path, monkeypatch):
+    """Both callers go through `audit_dir_blockers()`, so the preview
+    refuses on exactly the condition the install refuses on."""
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users",
+                        lambda prefix: [])
+    args = _args(tmp_path)
+    os.makedirs(args.spool_dir, exist_ok=True)
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [(root, "owned by uid 1000")] if root == args.spool_dir
+        else [])
+
+    assert deploy.audit_dir_blockers(args.spool_dir), "fixture must be blocked"
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+    assert deploy.system_preview(args) == 6
+
+
+def test_the_preview_and_the_install_agree_on_a_degenerate_spool(
+        tmp_path, monkeypatch):
+    """A spool of `/` is not a usable spool, and both callers say so. Moved
+    through the CONSTANT: setting `args.spool_dir` directly would make
+    not_a_default() refuse first and prove nothing."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    pass_prefix_checks(monkeypatch)
+
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", "/")
+    args = _args(tmp_path)
+    assert args.spool_dir == "/"
+
+    assert [cls for cls, _p, _r in deploy.audit_dir_blockers("/")] == ["degenerate"]
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+    assert deploy.system_preview(args) == 6
+
+
+def test_a_relative_spool_is_a_degenerate_blocker(tmp_path):
+    bad = deploy.audit_dir_blockers("")
+    assert [cls for cls, _p, _r in bad] == ["degenerate"], bad
+
+
+def test_an_ancestor_blocker_does_not_advertise_a_chmod_of_the_spool(tmp_path):
+    """For an ancestor blocker there is no single correct command, so none
+    is printed: a plausible one runs clean and fixes nothing."""
+    spool = str(tmp_path / "var-log")
+    buf = io.StringIO()
+    deploy.write_audit_dir_refusal(
+        spool,
+        [("traversal", str(tmp_path), "mode 0700 has no o+x, so no ordinary "
+                                      "user can traverse it")],
+        out=buf)
+    text = buf.getvalue()
+    assert "%s: mode 0700" % tmp_path in text, text
+    assert "fix with:" not in text, text
+    assert "chmod 0755 %s" % spool not in text, text
+
+
+def test_an_ownership_blocker_names_the_offending_path_not_the_directory(
+        tmp_path):
+    spool = str(tmp_path / "var-log")
+    child = os.path.join(spool, "reaper-audit.jsonl")
+    buf = io.StringIO()
+    deploy.write_audit_dir_refusal(
+        spool, [("ownership", child, "owned by uid 1000")], out=buf)
+    text = buf.getvalue()
+    assert "chown root:root %s" % child in text, text
+
+
+# The reason strings `unowned_by()` actually emits, one per class. Exemplars
+# rather than real filesystem state: the suite runs NON-ROOT, so every path
+# under tmp_path reports "owned by uid ..." first and the other branches are
+# unreachable from a real directory.
+_UNOWNED_EXEMPLARS = (
+    ("ownership", "owned by uid 1000", "chown root:root"),
+    ("permissive", "mode 0777 is writable beyond its owner", "chmod go-w"),
+    ("setuid", "mode 2755 is setuid or setgid", "chmod a-s"),
+    ("symlink", "symlink escapes the prefix -> /tmp/elsewhere", None),
+    ("unreadable", "could not be inspected: Permission denied", None),
+    ("unclassified", "a reason no future edit told this message about", None),
+)
+
+
+@pytest.mark.parametrize("cls,reason,remedy", _UNOWNED_EXEMPLARS)
+def test_every_ownership_reason_gets_a_true_head_and_a_remedy_that_works(
+        cls, reason, remedy, tmp_path):
+    assert deploy._classify_unowned(reason) == cls, reason
+
+    spool = str(tmp_path / "var-log")
+    offender = os.path.join(spool, "offending-entry")
+    buf = io.StringIO()
+    deploy.write_audit_dir_refusal(spool, [(cls, offender, reason)], out=buf)
+    text = buf.getvalue()
+
+    assert reason in text, text
+    assert offender in text, text
+    if remedy is None:
+        assert "fix with:" not in text, (
+            "%s has no single correct command; printing one anyway is the "
+            "defect: %s" % (cls, text))
+    else:
+        assert "fix with: %s %s" % (remedy, offender) in text, text
+        assert "fix with: %s %s\n" % (remedy, spool) not in text, text
+
+
+@pytest.mark.parametrize("cls,reason,_remedy", _UNOWNED_EXEMPLARS)
+def test_both_callers_refuse_on_every_ownership_reason(
+        cls, reason, _remedy, tmp_path, monkeypatch):
+    """The class x caller matrix: every class against both callers."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    os.makedirs(args.spool_dir, exist_ok=True)
+    offender = os.path.join(args.spool_dir, "offending-entry")
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [(offender, reason)] if root == args.spool_dir else [])
+
+    assert deploy.audit_dir_blockers(args.spool_dir) == [(cls, offender, reason)]
+    assert deploy.system_execute(args) == 6, cls
+    assert calls == [], calls
+    assert deploy.system_preview(args) == 6, cls
+
+
+def test_the_traversal_class_refuses_in_the_preview_too(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    args = _args(tmp_path)
+    monkeypatch.setattr(
+        deploy, "untraversable_for_users",
+        lambda prefix: [(os.path.dirname(args.spool_dir), "mode 0700 has no o+x")]
+        if prefix == args.spool_dir else [])
+
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+    assert deploy.system_preview(args) == 6
+
+
+def test_the_refusal_head_says_which_problem_it_is(tmp_path):
+    spool = str(tmp_path / "var-log")
+    heads = {}
+    for cls in ("traversal", "ownership", "permissive", "setuid",
+                "symlink", "unreadable", "unclassified"):
+        buf = io.StringIO()
+        deploy.write_audit_dir_refusal(spool, [(cls, "/p", "r")], out=buf)
+        heads[cls] = buf.getvalue()
+
+    assert "cannot be traversed" in heads["traversal"]
+    assert "not root's alone" in heads["ownership"]
+    assert "writable beyond root" in heads["permissive"]
+    assert "setuid or setgid" in heads["setuid"]
+    assert "through a symlink" in heads["symlink"]
+    assert "could not be inspected" in heads["unreadable"]
+    assert "does not recognise" in heads["unclassified"]
+    assert len(set(heads.values())) == len(heads), heads
+
+
+def test_a_0750_spool_is_not_a_blocker_because_it_is_what_gets_fixed(tmp_path):
+    """The REAL `untraversable_for_users`: the spool's own mode is what
+    `install -d -m 0755` asserts, so refusing on it is refusing to run the
+    fix (ADR-0012)."""
+    spool = tmp_path / "var-log"
+    spool.mkdir()
+    spool.chmod(0o750)
+    tmp_path.chmod(0o755)
+
+    offenders = [path for cls, path, _r in deploy.audit_dir_blockers(str(spool))
+                 if cls == "traversal"]
+    assert str(spool) not in offenders, offenders
+
+
+def test_an_untraversable_ancestor_is_still_a_blocker(tmp_path):
+    spool = tmp_path / "var-log"
+    spool.mkdir()
+    spool.chmod(0o755)
+    tmp_path.chmod(0o750)          # the ANCESTOR, not the leaf
+    try:
+        classes = [cls for cls, _p, _r in deploy.audit_dir_blockers(str(spool))]
+        assert "traversal" in classes, deploy.audit_dir_blockers(str(spool))
+    finally:
+        tmp_path.chmod(0o755)
+
+
+_SPOOL_SPELLINGS = (
+    ("canonical", lambda d: d),
+    ("doubled leading slash", lambda d: "/" + d),
+    ("dot component", lambda d: d.replace("/var-log", "/./var-log")),
+    ("dotdot round trip", lambda d: d + "/../" + os.path.basename(d)),
+)
+
+
+@pytest.mark.parametrize("label,spell", _SPOOL_SPELLINGS)
+def test_the_leaf_filter_survives_every_spelling_of_the_spool(
+        label, spell, tmp_path):
+    """The filter compares a canonical path against the caller's spelling;
+    a raw comparison would let the leaf survive and bring the regression
+    back silently. None of these spellings is reachable while ADR-0005
+    holds, which is exactly why they are pinned."""
+    spool = tmp_path / "var-log"
+    spool.mkdir()
+    spool.chmod(0o750)
+    offenders = [path for cls, path, _r in deploy.audit_dir_blockers(spell(str(spool)))
+                 if cls == "traversal"]
+    for form in (str(spool), deploy.canonical_prefix(str(spool))):
+        assert form not in offenders, (label, offenders)
+
+
+def test_the_leaf_filter_is_path_identity_not_a_substring_test(tmp_path):
+    outer = tmp_path / "var-log"
+    outer.mkdir()
+    spool = outer / "inner" / "var-log"
+    spool.mkdir(parents=True)
+    spool.chmod(0o755)
+    outer.chmod(0o750)                      # the ANCESTOR, sharing a basename
+    try:
+        offenders = [path for cls, path, _r in deploy.audit_dir_blockers(str(spool))
+                     if cls == "traversal"]
+        assert str(outer) in offenders, offenders
+        assert str(spool) not in offenders, offenders
+    finally:
+        outer.chmod(0o755)
+
+
+def test_the_install_reaches_the_real_traversability_check(
+        traversable_root, monkeypatch):
+    """`system_execute()` end to end with the REAL check, against a tree
+    whose ancestors really are traversable, with the spool at 0750. It must
+    proceed: that state is the one the install exists to correct."""
+    pass_ownership_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    spool = os.path.join(traversable_root, "var-log")
+    os.makedirs(spool)
+    os.chmod(spool, 0o750)
+    _move_constants(monkeypatch, traversable_root, spool=spool)
+
+    assert deploy.audit_dir_blockers(deploy.DEFAULT_SPOOL_DIR) == []
+    assert deploy.system_execute(_args(traversable_root)) == 0
+    assert calls, "a proceeding install runs commands"
+
+
+def test_the_install_still_refuses_a_really_untraversable_ancestor(
+        traversable_root, monkeypatch):
+    pass_ownership_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    middle = os.path.join(traversable_root, "closed")
+    spool = os.path.join(middle, "var-log")
+    os.makedirs(spool)
+    os.chmod(spool, 0o755)
+    os.chmod(middle, 0o750)         # the ANCESTOR, not the leaf
+    try:
+        _move_constants(monkeypatch, traversable_root, spool=spool)
+        assert deploy.system_execute(_args(traversable_root)) == 6
+        assert calls == [], calls
+    finally:
+        os.chmod(middle, 0o755)
+
+
+def test_the_preview_reaches_the_real_traversability_check(
+        traversable_root, monkeypatch):
+    pass_ownership_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    spool = os.path.join(traversable_root, "var-log")
+    os.makedirs(spool)
+    os.chmod(spool, 0o750)
+    _move_constants(monkeypatch, traversable_root, spool=spool)
+    assert deploy.system_preview(_args(traversable_root)) == 0
+
+
+def test_the_preview_still_refuses_a_really_untraversable_ancestor(
+        traversable_root, monkeypatch):
+    pass_ownership_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    middle = os.path.join(traversable_root, "closed")
+    spool = os.path.join(middle, "var-log")
+    os.makedirs(spool)
+    os.chmod(spool, 0o755)
+    os.chmod(middle, 0o750)         # the ANCESTOR, not the leaf
+    try:
+        _move_constants(monkeypatch, traversable_root, spool=spool)
+        assert deploy.system_preview(_args(traversable_root)) == 6
+    finally:
+        os.chmod(middle, 0o755)

@@ -7,10 +7,11 @@ is what makes the output deterministic: nothing here reads a clock or a
 hostname, every file's mode is set explicitly, and the same inputs render to
 the same bytes.
 
-Payload layout (Milestone 4; `reaper.py`, `deploy.py`, `shim/install.sh` and
-`walk-job` join it in later milestones):
+Payload layout:
 
     .walk-blocker-build     build marker: this directory may be rebuilt
+    deploy.py               node/deploy.py, stamped from [install], [hooks], [timer],
+                            [trusted_binaries] and [site]; runs FROM this directory (0755)
     README.md               the repo README, verbatim
     docs/...                the docs tree, verbatim
     search_rules.py         the rule table, verbatim (the reaper imports it)
@@ -22,6 +23,8 @@ Payload layout (Milestone 4; `reaper.py`, `deploy.py`, `shim/install.sh` and
     site.lock.json          schema/tool/payload versions and a hash per file
     shim/guard.sh           rendered from the rule table and site.toml (0755)
     shim/wrapped_names.sh   rendered likewise (0644)
+    shim/measure.sh         node/shim/measure.sh, verbatim: the shim benchmark (0755)
+    shim/measure-flags.sh   node/shim/measure-flags.sh, verbatim: the flag probe (0644)
 
 A build refuses an output directory it did not create: one that exists, is
 not empty, and has no `.walk-blocker-build` marker. One that carries the
@@ -57,7 +60,8 @@ MODE_DIR = 0o755
 
 # Payload-relative paths that are executed directly rather than sourced or
 # imported. Everything else is 0644.
-EXECUTABLE = frozenset(["shim/guard.sh", "shim/install.sh", "walk-job", "reaper.py"])
+EXECUTABLE = frozenset(["shim/guard.sh", "shim/install.sh", "shim/measure.sh", "walk-job",
+                        "reaper.py", "deploy.py"])
 
 EXIT_OK, EXIT_DIFFERS, EXIT_ERROR = 0, 1, 2
 
@@ -147,6 +151,14 @@ def render_payload(site, site_bytes, version, warn=None):
     put("search_rules.py", _verbatim("search_rules.py", paths.rules_file(), stamp.CONSUMERS))
     put("survey.py", _verbatim("survey.py", os.path.join(paths.node_dir(), "survey.py"),
                                stamp.CONSUMERS))
+    # The benchmark and the flag probe are tools an operator runs beside the
+    # shim; they carry no site value, so they ship verbatim.
+    put("shim/measure.sh",
+        _verbatim("shim/measure.sh", os.path.join(paths.node_dir(), "shim", "measure.sh"),
+                  stamp.CONSUMERS), MODE_EXEC if "shim/measure.sh" in EXECUTABLE else MODE_FILE)
+    put("shim/measure-flags.sh",
+        _verbatim("shim/measure-flags.sh",
+                  os.path.join(paths.node_dir(), "shim", "measure-flags.sh"), stamp.CONSUMERS))
 
     # Stamped consumers: the source is the same relative path under node/.
     values = stamp.SiteValues(site, version)

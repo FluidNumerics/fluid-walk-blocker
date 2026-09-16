@@ -65,6 +65,7 @@ def test_the_payload_has_the_documented_layout(payload):
     have = set(_walk(payload))
     for rel in ("site.toml", "site.lock.json", "README.md", "search_rules.py",
                 "survey.py", "docs/evidence.md", "docs/site-config.md",
+                "docs/operating.md", "shim/measure.sh", "shim/measure-flags.sh",
                 "docs/adr/0013-site-config-compiled-at-build.md", build.BUILD_MARKER):
         assert rel in have, rel
     assert not any(rel.startswith(".") and rel != build.BUILD_MARKER for rel in have)
@@ -75,6 +76,9 @@ def test_shim_files_are_present_with_their_modes(payload):
     pytest.importorskip("walk_blocker.render.shim")
     assert _mode(payload / "shim" / "guard.sh") == 0o755
     assert _mode(payload / "shim" / "wrapped_names.sh") == 0o644
+    # The benchmark is run by an operator; the flag probe is sourced/read.
+    assert _mode(payload / "shim" / "measure.sh") == 0o755
+    assert _mode(payload / "shim" / "measure-flags.sh") == 0o644
 
 
 def test_everything_else_is_0644_and_directories_0755(payload):
@@ -101,6 +105,8 @@ def test_verbatim_copies_are_byte_identical_to_their_sources(payload):
         ("site.toml", EXAMPLE),
         ("search_rules.py", paths.rules_file()),
         ("survey.py", os.path.join(paths.node_dir(), "survey.py")),
+        ("shim/measure.sh", os.path.join(paths.node_dir(), "shim", "measure.sh")),
+        ("shim/measure-flags.sh", os.path.join(paths.node_dir(), "shim", "measure-flags.sh")),
         ("README.md", paths.readme_file()),
         ("docs/evidence.md", os.path.join(paths.docs_dir(), "evidence.md")),
     ]

@@ -1,0 +1,522 @@
+# Operating walk-blocker
+
+The operator's runbook, from an empty `site.toml` to a node that reports.
+It is generic: every site fact is a value in your own `site.toml`, and this
+page names the key rather than the value (ADR-0014). Every command here is
+checked against the tree's own help text.
+
+Two rules frame every step below. **Layer 1 is advisory** (ADR-0001): the
+shim refuses the naive command and names the alternative, and an absolute
+path, a private `PATH`, a container, a batch script or a shell function all
+go around it. **The reaper reports by default**: nothing is killed until a
+human reads real findings and decides otherwise (ADR-0009).
+
+## 1. Prerequisites
+
+On the workstation where you build:
+
+- `uv`. Every command below runs as `uv run walk-blocker ...` from a
+  checkout; no virtual environment needs activating.
+- A checkout of this tree, and a directory of your own — outside this tree
+  — for `site.toml` and the evidence beside it.
+
+On the node you deploy to:
+
+- systemd, with the unified cgroup v2 hierarchy and PSI enabled in the
+  kernel (`CONFIG_PSI`, not disabled with `psi=0`). The reaper reads
+  `io.pressure` at each `user-*.slice`; a node on the v1 hierarchy has no
+  such file and the reaper fails loudly there rather than polling an empty
+  table (ADR-0002).
+- Python 3.9 or later, stdlib only. Nothing under `node/` imports a
+  third-party package, and there is no `uv` on the node (ADR-0015).
+- A POSIX `sh` that is dash-clean. The shim, `install.sh`, `walk-job` and
+  `measure.sh` all run under `[trusted_binaries].sh`.
+- The Slurm client (`sbatch`) reachable at `[slurm].sbatch_glob`, for
+  `walk-job`. The scheduler is what enforces the wall-clock bound the
+  refusal text offers (ADR-0007).
+- Root, held by the person running the install. Nothing here escalates;
+  `deploy.py` checks `os.geteuid()` and refuses otherwise (ADR-0004).
+
+## 2. Write `site.toml`
+
+Start from `examples/site.example.toml`, a fictional site with every key
+written out, and replace every value with what your site measured. The
+procedure for each measurement — the shell census, the mount survey, the
+depth allowance, the stall calibration, the timer slot, the shim budgets —
+is `docs/site-config.md`. The schema is `schema/site.schema.json`, and
+`uv run walk-blocker schema` prints its path.
+
+The tables, in the order the schema lists them:
+
+- `[site]` — how the node names itself in refusal text and unit
+  descriptions, where a refused user is sent for the site's own
+  explanation, and whom they contact.
+- `[filesystems]` — the mount policy in three tiers (ADR-0016): the
+  remote-type list and remoteness proxy that decide the compiled default,
+  the global depth ceiling and unscoped depth, and `[[filesystems.mounts]]`,
+  the per-mount overrides that are the only way to loosen a default.
+- `[install]` — where the payload, the audit trail and the units land on the
+  node. Every value is a root-write target compiled into the installer as a
+  literal (ADR-0005, ADR-0013), and all of it must be on local disk.
+- `[hooks.bash]`, `[hooks.zsh]`, `[hooks.fish]` — one table per shell whose
+  startup file gets the hook block, each `required` or `best-effort`
+  according to the site's shell census (ADR-0008).
+- `[trusted_binaries]` — absolute paths of the binaries the node artifacts
+  call, so nothing on the node resolves them through a `PATH` a user
+  controls.
+- `[slurm]` — how `walk-job` submits a refused traversal: partition, QoS,
+  the default wall clock and memory, and where `sbatch` lives.
+- `[shim]` — tools in the rule table the site chooses not to wrap.
+- `[reaper]` — the cgroup layout, the origin table, the traversal budget
+  and fan-out count, the stall thresholds, the kill budget and the stream
+  filters. Thresholds select which findings carry `stalling_slice: true`;
+  they never suppress a record (ADR-0009).
+- `[timer]` — the reaper's `OnCalendar=` slot and its budgets. The slot is
+  chosen against the live schedule of the target node, never copied.
+
+Keep the measurements that justified each value beside `site.toml`, outside
+this tree. Validation cannot tell a measured value from a copied one.
+
+## 3. Validate
+
+```sh
+uv run walk-blocker validate --site site.toml
+```
+
+This runs the schema and the semantic checks — canonical paths, unique
+mount entries, no per-mount `maxdepth` above `depth_allowance_max`, a
+`timeout_start_sec` at or above the floor derived from the relink and kill
+budgets — and prints the derived values a build would use. It exits 2 on
+the first failure, naming the key. Fix the file and run it again; nothing
+downstream accepts an invalid site.
+
+## 4. Survey the mounts on the node
+
+The survey is tier three of the mount policy (ADR-0016). It runs on the node
+as an administrator, takes a timeout-bounded `statvfs` per mount in a child
+process so a wedged mount is reported `unmeasured` rather than hanging the
+survey, and never writes a file. It ships in the payload as `survey.py` and
+needs only the node's `python3`:
+
+```sh
+python3 payload/survey.py
+python3 payload/survey.py --timeout 5 --all --json
+```
+
+On the workstation, the same code runs against a saved mount table, with
+`--site` marking each mount with the override that already covers it:
+
+```sh
+uv run walk-blocker survey --mounts saved-mounts.txt --site site.toml
+```
+
+It prints a table — type, remoteness and why, the compiled default,
+capacity and inode count where measured — and then a proposed
+`[[filesystems.mounts]]` block. Treat the block as a proposal:
+
+- A small remote export that is cheap to walk in full: keep its entry with
+  `class = "cheap"` and a comment saying why.
+- A remote mount that should keep its default: delete the proposed entry. A
+  mount left on its default should be left there on purpose, and the survey
+  output kept beside `site.toml` is what records that.
+- A mount that deserves a deeper bounded walk: add `maxdepth`, but only after
+  the measurement in `docs/site-config.md` (ADR-0007). Never as a guess.
+
+Network and parallel filesystems may report synthetic totals — a quota, a
+tiered capacity, a per-client view — so the figures are evidence to weigh,
+not a verdict. Re-run the survey when the reconcile reports a mount you did
+not decide on (step 10).
+
+## 5. Build the payload
+
+```sh
+uv run walk-blocker build --site site.toml --out payload/
+```
+
+The build validates `site.toml`, renders every artifact in memory, and
+writes the payload in one rename, so a failed build leaves the previous
+payload intact. It refuses an output directory it did not create — one
+that exists, is not empty, and has no `.walk-blocker-build` marker — and
+rebuilds one that carries the marker.
+
+What the payload contains:
+
+| Path | What it is |
+|---|---|
+| `.walk-blocker-build` | build marker: this directory may be rebuilt |
+| `deploy.py` | the argumentless deployer, stamped from `[install]`, `[hooks.*]` and `[timer]` |
+| `reaper.py` | Layer 2, stamped from `[reaper]` and `[filesystems]` |
+| `search_rules.py` | the rule table, verbatim; the reaper imports it |
+| `survey.py` | the mount survey, verbatim |
+| `walk-job` | the sanctioned alternative, stamped from `[slurm]` and the `bfs` pin |
+| `shim/guard.sh` | Layer 1, rendered from the rule table and `site.toml` |
+| `shim/wrapped_names.sh` | the wrapped-name list, rendered likewise |
+| `shim/install.sh` | the shell installer, stamped from `[install]`, `[hooks.*]` and the mount policy |
+| `shim/measure.sh`, `shim/measure-flags.sh` | the shim's performance gate, and the flag-clustering probe for the rule table |
+| `docs/` | this documentation tree, verbatim |
+| `README.md` | the repository README, verbatim |
+| `site.toml` | the input, byte for byte, as a record |
+| `site.lock.json` | schema, tool and payload versions, and a hash per file |
+
+Nothing in the payload reads `site.toml`; it is carried as a record. Two
+builds of the same inputs are byte-identical — no clock, no hostname — so
+the lock file's hashes identify a build.
+
+To check a payload without writing anything:
+
+```sh
+uv run walk-blocker build --site site.toml --out payload/ --check
+```
+
+`--check` renders afresh and compares; it exits 1 when the payload differs
+from what the current `site.toml` and tree would build, and 0 when it is
+current. Run it before every deploy, and run it in the site's own CI so a
+stale payload is a red build rather than a stale node (ADR-0013).
+
+## 6. Copy the payload to the node
+
+Copy the payload directory to the node into a directory that your own
+account owns, on local disk:
+
+```sh
+scp -r payload/ node:walk-blocker-payload/
+```
+
+It does not need to be root-owned, and the installer does not check that it
+is. The trust boundary is the installed artifact, not the source (ADR-0006):
+`deploy.py` snapshots the payload once into a root-owned staging directory
+under `[install].staging_parent` before anything that can block, and copies
+from the snapshot; everything under `[install].prefix` is root-owned from
+creation and verified after the copy. A checkout owner who could win that
+copy race could equally rewrite `deploy.py` before Python opened it, which
+is the exposure the operator already accepts by running the script at all.
+Automated review has proposed refusing a user-owned source three times; it
+is settled.
+
+Do not put the payload under a home directory that lives on the filesystem
+under investigation. The install reads it once, but the staging snapshot is
+what protects the install, not the payload's location, and reading a wedged
+filesystem is the one thing that can stall the snapshot.
+
+## 7. Preview the install
+
+As root, on the node:
+
+```sh
+python3 walk-blocker-payload/deploy.py --system
+```
+
+`--system` alone prints what an approved install would do and exits without
+writing. It names the prefix, the spool directory, each hook file it will
+write a block to, the unit files, and the command that will actually
+install. Where a check would refuse — a hook file that is a symlink, a
+user-owned or group-writable hook file, an untrusted ancestor of the prefix,
+a prefix that already holds files this install did not create — the preview
+says so, as a note, so that the approved command does not fail the instant
+approval is supplied.
+
+There are no path flags: `argparse` rejects `--prefix` and its siblings
+outright. Every location the deployer writes as root is a literal compiled
+from `[install]` and `[hooks.*]` (ADR-0005, ADR-0013). A different location
+is a `site.toml` change, a rebuild and a redeploy.
+
+Read the preview in full. If it advertises a location you did not intend,
+stop here and go back to step 2.
+
+## 8. Install
+
+As root, on the node:
+
+```sh
+python3 walk-blocker-payload/deploy.py --system --i-have-approval
+```
+
+The flag says what it means: the site owner's authorization to install a
+root-run guardrail on a shared node has been given, and the person typing
+this holds it. Sessions of automated agents working in this repository never
+pass it (see `CLAUDE.md`).
+
+What it writes, all root-owned and none of it writable by any monitored
+account (ADR-0004):
+
+- the payload under `[install].prefix`, with a `.walk-blocker-payload`
+  marker so a later install or uninstall knows the directory is its own;
+- the symlink farm under `<prefix>/bin`, one shim per wrapped name that
+  resolves in `[install].tool_search_path`, plus `walk-job`;
+- `[install].spool_dir` at mode `0755`: writable by root alone, readable
+  by everyone, so the person who has to make the `--kill` decision can read
+  the trail (ADR-0012);
+- a hook block in each enabled shell's startup file named by
+  `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
+  since a non-interactive shell returns before reaching anything below it —
+  and a dedicated `conf.d` drop-in for fish. The pre-install content of each
+  hook file is saved once to `<file>.walk-blocker.orig`, the first time
+  this runs;
+- the reaper's service and timer under `[install].unit_dir`, enabled and
+  started as `walk-blocker.timer`.
+
+What it verifies, and refuses on:
+
+- **the hooks fire.** Each `required` shell's hook is proven under
+  remote-command conditions with the shim directory stripped from `PATH`: a
+  non-interactive bash with `SSH_CLIENT` set and `SHLVL` at zero, a zsh
+  with `ZDOTDIR` blanked, must resolve a wrapped name to the shim
+  directory. A required shell whose binary is absent is a hard failure — an
+  automatic pass on "absent" would spell "unchecked" as "verified". A
+  `best-effort` shell is written and checked only when its binary resolves,
+  and its failure is a warning (ADR-0008);
+- **ownership.** Everything under the prefix is reasserted `root:root` with
+  group and other write stripped, and the unit is not written if anything
+  under the prefix still fails that test;
+- **the audit directory is `0755`**, asserted before `install.sh` runs. Too
+  restrictive is corrected; group- or other-writable is a refusal;
+- **the hook files are plain, root-owned regular files**, not symlinks, not
+  group-writable, in a trusted directory chain — they are read and
+  rewritten `0644`, and sourced as root to verify the hook, so their owner
+  would otherwise choose what runs during the deploy.
+
+The reaper runs `--report`. Its unit's `ExecStartPre` runs
+`install.sh --relink` — the reconcile — which re-links the farm, re-checks
+every hook and reports rather than repairs, re-asserts the audit
+directory's mode, and reports each mount running on its default; the
+reconcile never fails, so a Layer 1 diagnosis cannot stop the Layer 2
+backstop (ADR-0008).
+
+After the install, as an unprivileged account, confirm two things
+ADR-0012 asks for:
+
+```sh
+stat <spool_dir>
+tail -n 1 <spool_dir>/reaper-audit.jsonl
+```
+
+Both must succeed. If the trail is unreadable, the `--kill` decision is
+blocked on an access-control fact and nothing else in this runbook can be
+read.
+
+## 9. Measure the shim
+
+The shim runs on every `grep`, `find` and `du` on the node, and its cost is
+paid by every user whether or not it ever refuses anything (ADR-0015).
+`measure.sh` measures two paths — the **fast path**, a `grep PATTERN` with
+no `-r`, decided before any file is opened; and the **guarded path**, an
+allowed traversing call that judges every operand, which is the only path
+`find`, `du`, `rg`, `fd` and `tree` ever take — and gates them two ways:
+
+- **the absolute gate**: the shim's overhead over the bare binary, on each
+  path, against a budget in milliseconds that you pass. It exits non-zero
+  when a budget is exceeded;
+- **the ratio gate**: with `--against`, it measures a previous `guard.sh`
+  and the new one alternately, in the same minute, and gates on the median
+  per-pair ratio. This is the gate that survives a change of machine — an
+  absolute reading moves with the node's load; a ratio between two shims
+  measured together does not.
+
+Keep both: a ratio gate alone cannot see cumulative drift, and an absolute
+gate alone cannot be run anywhere but the machine it was calibrated on.
+
+The budgets and ceilings are arguments, not values in `site.toml` and not
+constants in this tree; they live in your site's own evidence beside
+`site.toml`. Copy the `shim/` directory to a directory on the node's local
+disk that you own — never run it from the expensive mount, because the
+measurement must not depend on the thing it is measuring the cost of
+avoiding — and run it from there. The candidate `guard.sh` must be
+executable; a copy extracted with `git show` needs `chmod +x`.
+
+```sh
+cp -r walk-blocker-payload/shim/ ./shim-measure/
+sh ./shim-measure/measure.sh ./shim-measure/guard.sh N BUDGET_MS GUARDED_BUDGET_MS
+sh ./shim-measure/measure.sh --against ./previous/guard.sh ./shim-measure/guard.sh N PAIRS MAX_RATIO GUARDED_MAX_RATIO
+```
+
+`N` is the number of timed runs per measurement, `PAIRS` the number of
+alternating old-versus-new pairs; every budget and ratio is yours. Run
+under representative load: a quiet machine reports on the hour of the day,
+not on the code, and if the result moves between runs, record the load with
+it before deciding anything. Repeat on every deploy and whenever the node's
+load class changes.
+
+`measure-flags.sh`, beside it, measures a different thing: which of a
+tool's short flags may cluster with a digit, by running the tool against a
+tree of known depth. It is for maintaining the rule table's `depth_digits`
+sets against the tool build a node actually runs, not for operating a
+deployment.
+
+## 10. Read the trails
+
+There are two, and they answer different questions.
+
+**The reaper's audit trail** is one JSON record per line at
+`<spool_dir>/reaper-audit.jsonl`, where `<spool_dir>` is
+`[install].spool_dir` — the unit passes it as `--spool`, and the reaper
+names the file. It rotates once, to `reaper-audit.jsonl.1`, past
+`[reaper].audit_max_bytes`. Every record carries the build version,
+`layer`, an `action`, and — for a finding — the verdict, the pid,
+`starttime`, the uid, the `origin` label, `age_s`, `cpu_s`,
+`io_pressure_delta` and `stalling_slice`. Read it as an unprivileged
+account; it is world-readable by decision. (`[install].audit_filename`
+names a second file in the same directory, Layer 1's optional file sink;
+the shim's records go to the journal, below, because a monitored account
+cannot append to a root-owned file.)
+
+```sh
+tail -F <spool_dir>/reaper-audit.jsonl
+```
+
+Three habits when reading it:
+
+- **Count keys, not rows.** A standing process is re-logged every poll, so
+  rows run several times findings. Derive the finding count by counting
+  distinct `(verdict, pid, starttime)`.
+- **`stalling_slice` has three states**, and the absent one is load-bearing:
+  `true` means PSI corroborated, `false` means measured and quiet, and the
+  key being absent means the uid had no differenced reading at all this
+  poll. Do not read absent as false (ADR-0009).
+- **Sort by `NEVER_KILL`.** `orphan_idle`, `opaque_traversal` and
+  `unparsed_traversal` can never be acted on and exit the unit 0; a new
+  `runaway_traversal`, `orphan_traversal` or `fanout_traversal` exits 1; a
+  `blind` record — no user slice, or `/proc` unreadable — exits 2. That is
+  what `systemctl --failed` is tracking, and it is dominated at some sites by
+  other tenants' failed session scopes; know what else is in it.
+
+**The journal**, under the `walk-blocker` tag, is where Layer 1 writes,
+because a monitored account cannot append to a root-owned file:
+
+```sh
+journalctl -t walk-blocker -o json
+```
+
+It carries three kinds of record:
+
+- the shim's **escape-hatch overrides** — `WALK_BLOCKER_UNSCOPED=1` on a
+  command the shim would have refused — with the tool, the mount judgement
+  and the reason, and `_UID` stamped by journald from the socket rather than
+  taken from the environment being audited. The test seams
+  (`WALK_BLOCKER_MOUNTS`, `_SHIM_DIR`, `_FSTYPES`, `_DEPTH_BY_MOUNT`) are
+  recorded the same way, and only when they changed the outcome;
+- the **reconcile's reports**: `hook_check` when a hook block is missing or
+  no longer fires, naming `[hooks.<shell>].package` as the likely conffile
+  actor; `audit_dir` when the spool's mode had to be created or corrected;
+  `coverage_change` when the set of wrapped names changed; `relink_refused`
+  when the relink stopped at one of its own checks;
+- one **`uncovered_mount`** record per poll, at notice priority, for every
+  mount in the live table that is expensive by its compiled default and
+  covered by no `[[filesystems.mounts]]` override (ADR-0016). This is the
+  visible cost of not having surveyed: read the mount and the type, run the
+  survey, and either add an override or keep the survey output beside
+  `site.toml` as the record that the default was chosen. Filter them out
+  with `-p warning` when you want only the other two kinds.
+
+**What an empty journal means.** Healthy is silent: no override was used,
+every hook block is present and fires, the audit directory has the right
+mode, and no expensive mount is running uncovered. **What it does not
+mean** is that no unbounded walk ran. Every Layer 1 bypass — an absolute
+path, a private `PATH`, a container, a batch script, a shell function, a
+second-level shell — leaves no journal record, because the shim never ran.
+A hook that is not on anyone's `PATH` also produces silence, and the
+reconcile's `hook_check` distinguishes that case only when it can see the
+block is gone. The journal tells you what overrode Layer 1 and when Layer 1
+stopped being installed; the reaper's trail is what tells you what reached
+the node regardless. Read both, for several days, before deciding anything.
+Whether the journal persists across a reboot is a property of the node's
+journald configuration, not of this tree.
+
+## 11. Ask the node what is deployed
+
+Four answers, and they should agree:
+
+```sh
+cat <prefix>/.walk-blocker-payload
+cat <prefix>/site.lock.json
+python3 <prefix>/reaper.py --version
+sh <prefix>/shim/install.sh --version
+<prefix>/bin/walk-job --version
+```
+
+The payload marker is written by the installer before any other file, so it
+is the answer that survives a half-installed payload. `site.lock.json`
+carries the schema version, the tool version and a hash per file, so the
+deployed configuration can be checked against a commit in the site's own
+repository — `sha256sum` of your `site.toml` against `site_sha256`. The
+three `--version` lines are stamped literals, one number per payload
+(ADR-0013); `reaper.py --version` needs `search_rules.py` beside it, like
+every other invocation. `VERSION` at the root of this tree is the only
+hand-written version anywhere; everything else is stamped from it.
+
+## 12. Promoting to `--kill`
+
+The reaper's default is `--report`, and the unit is written that way.
+Promoting it is a decision a person makes after reading real findings
+against real traffic, not a default that drifts. The bar, from ADR-0009's
+"Re-measure when": read the trail for several days, count distinct
+`(verdict, pid, starttime)` keys inside and outside `NEVER_KILL`, and
+promote only when every finding outside `NEVER_KILL` is one a human would
+have killed. Recalibrate the stall thresholds under known load first
+(ADR-0002); `stalling_slice: false` on a kill record is what tells the
+reviewer PSI did not corroborate it, and it is not a precondition.
+
+Two flags, both explicit:
+
+- `--kill` acts on findings outside `NEVER_KILL` — but only on processes
+  owned by the invoking user;
+- `--kill-others` permits acting on other users' processes. Killing someone
+  else's long-running work is a per-incident human decision, and this flag
+  is how the decision is made visible in the unit file rather than buried
+  in a default.
+
+The kill budget is `[reaper].kill_grace_s` between `SIGTERM` and `SIGKILL`,
+at most `[reaper].max_kills` per poll (the rest are recorded
+`skipped_kill_cap`), and a re-check after `[reaper].settle_s`. A process
+blocked in a filesystem syscall does not die until the syscall returns; if
+it is still there after the re-check the record says `signalled_but_wedged`,
+never `killed`. An audit log that reports success it did not achieve is
+worse than no audit log.
+
+Changing the unit's arguments is not a `site.toml` value; it is an edit to
+the unit the deployer writes, made at the site, and it should be recorded
+beside the evidence that justified it.
+
+## 13. Changing a site value
+
+Every value in `site.toml` is compiled into the payload as a literal
+(ADR-0013). There is no file on the node to edit and no flag to pass. To
+change one:
+
+```sh
+$EDITOR site.toml
+uv run walk-blocker validate --site site.toml
+uv run walk-blocker build --site site.toml --out payload/
+```
+
+then copy the payload to the node and run the install again (steps 6 to
+8). The install over an existing prefix is the redeploy: it recognises its
+own payload marker, replaces the payload from the snapshot, rewrites the
+hook blocks between their markers, and restarts the timer. The diff to
+`site.toml`, reviewed in the site's own repository, is the review ADR-0005
+wanted for a root-run installer's write targets.
+
+Two changes deserve a second look before the rebuild. A change under
+`[install]` or `[hooks.<shell>].file` moves where root writes; read the
+preview (step 7) with particular care. A change to `[timer].on_calendar`
+must be re-surveyed against the live schedule of the node, not carried over.
+
+## 14. Uninstall
+
+As root, on the node:
+
+```sh
+python3 <prefix>/deploy.py --uninstall
+```
+
+It reverses the install and is gated on root alone — reversing a control is
+the safer direction and does not need the same ceremony as installing one
+(ADR-0004). It disables and removes the timer and service, strips every
+hook block and removes the fish drop-in whether or not that shell still
+resolves (ADR-0008), and removes the prefix. The `<file>.walk-blocker.orig`
+backups and the audit trail under `[install].spool_dir` are records; read
+its output for what it left, and copy the trail somewhere before removing
+it if the evidence is still wanted.
+
+`install.sh --uninstall` exists too, but it refuses to run from anywhere but
+the deployed copy under the prefix, for the same reason an approved install
+does: a checkout is writable by the account that owns it (ADR-0005).

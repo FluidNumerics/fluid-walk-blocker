@@ -59,6 +59,14 @@ jobs:
       - name: yamllint
         run: uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 
+      - name: vermin (node code parses on Python 3.9)
+        # Everything under node/ and every .py in the payload runs on the
+        # node's own interpreter (ADR-0015). vermin only reads Python, so the
+        # shell scripts in the same directories are passed over, not parsed.
+        run: |
+          uvx vermin==1.8.0 --target=3.9- --violations --no-tips \
+            node examples/payload/*.py examples/payload/shim
+
   ip-hygiene:
     # Two lists (tools/README-ip-gate.md): structural patterns committed in
     # the repo, customer terms supplied ONLY as a secret. The term list is
@@ -118,3 +126,71 @@ jobs:
       - name: No unfilled placeholder in any generated file
         run: |
           ! grep -r '@@' examples/payload --exclude-dir=docs --exclude=README.md
+
+  # Report-only, on purpose. A GitHub runner is a machine class nobody has
+  # characterised: the budgets a site records are calibrated against its own
+  # node -- its load, its mount table -- and a ceiling chosen blind for this
+  # runner would be a guess dressed as a gate. A gate that flakes trains
+  # people to re-run CI until it is green, which is worse than no gate in a
+  # repo whose CI is green and trusted.
+  #
+  # So this runs the shim-vs-shim ratio comparison and PRINTS it. No ceilings
+  # are passed, nothing fails the build, and after a run of PRs there is a
+  # record of what this machine class actually does -- the measurement
+  # campaign that has to happen before a threshold can be chosen (ADR-0015,
+  # "Re-measure when"). Until then this job's only product is its log.
+  #
+  # Pull requests only: on a push to main there is no base to compare against.
+  measure:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # The whole history, because the comparison needs the merge base's
+      # tree. The default shallow clone has no such commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Build the example site at the merge base and at HEAD
+        # The shim is a build product (ADR-0013), so the reference is BUILT
+        # from the merge base's tree rather than extracted with `git show`:
+        # a change to the template, the rule table or the renderer moves the
+        # shim without touching any committed file named guard.sh. The HEAD
+        # build is byte-identical to examples/payload/shim/guard.sh whenever
+        # build-check is green; building it here keeps both halves of the
+        # ratio coming from the same step.
+        run: |
+          set -u
+          base=$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)
+          echo "merge base: $base"
+          git worktree add --detach "$RUNNER_TEMP/base-src" "$base"
+          (cd "$RUNNER_TEMP/base-src" && uv run walk-blocker build \
+            --site examples/site.example.toml --out "$RUNNER_TEMP/base")
+          uv run walk-blocker build \
+            --site examples/site.example.toml --out "$RUNNER_TEMP/head"
+
+      - name: shim-vs-shim ratio against the merge base
+        # Never fails the build -- see the comment above. A run with too few
+        # usable pairs also exits non-zero, and on a shared runner that is a
+        # statement about the runner rather than about this PR: observed on
+        # the first runs here, where the baseline-drift check discarded
+        # pairs. The step-level continue-on-error is what keeps that from
+        # painting the job red; the job-level one above is the backstop for
+        # a failed build, which SHOULD show, because it is about the PR.
+        #
+        # Both shims are copied to one local directory first: measure.sh
+        # refuses a guard on a network filesystem, and two halves side by
+        # side on the same disk is what a ratio between them assumes anyway.
+        # The build writes the mode; chmod is belt-and-braces against a copy
+        # that lost it, so the exec-bit diagnosis is never this job's output.
+        continue-on-error: true
+        run: |
+          set -u
+          work=$(mktemp -d)
+          cp "$RUNNER_TEMP/base/shim/guard.sh" "$work/guard-base.sh"
+          cp "$RUNNER_TEMP/head/shim/guard.sh" "$work/guard-head.sh"
+          chmod +x "$work/guard-base.sh" "$work/guard-head.sh"
+          sh node/shim/measure.sh --against \
+            "$work/guard-base.sh" "$work/guard-head.sh" 50 8
