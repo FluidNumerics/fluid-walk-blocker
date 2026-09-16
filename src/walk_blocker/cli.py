@@ -1,2 +1,121 @@
-"""Console-script entry point. Subcommands arrive in Milestone 2."""
-from .__main__ import main  # noqa: F401
+"""`walk-blocker`: the workstation-side command.
+
+`validate` and `schema` are Milestone 2; `survey` runs the node's own
+`survey.py` in place so the same code an administrator runs on the node can
+be tried against a saved mount table here. `build` arrives in Milestone 4.
+"""
+import argparse
+import importlib.util
+import json
+import os
+import sys
+
+import jsonschema
+
+from . import __version__, config, paths
+
+
+def _load_survey_module():
+    """`node/survey.py` is stdlib-only and not a package (ADR-0015). Load it
+    by file so nothing named `survey` lands on `sys.path`."""
+    location = os.path.join(paths.node_dir(), "survey.py")
+    spec = importlib.util.spec_from_file_location("walk_blocker_node_survey", location)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_site_or_exit(path):
+    err = sys.stderr  # looked up per call, so a redirected stderr is honoured
+    try:
+        return config.load_site(path)
+    except config.ConfigError as exc:
+        err.write("%s: %s: %s\n" % (path, exc.path, exc.message))
+    except jsonschema.ValidationError as exc:
+        pointer = "/" + "/".join(str(p) for p in exc.absolute_path)
+        err.write("%s: %s: %s\n" % (path, pointer, exc.message))
+    except (OSError, ValueError) as exc:  # unreadable file, TOML syntax
+        err.write("%s: %s\n" % (path, exc))
+    return None
+
+
+def cmd_validate(args):
+    site = _load_site_or_exit(args.site)
+    if site is None:
+        return 2
+    print("%s: valid (%s)" % (args.site, site.lookup("site.display_name")))
+    for key, value in sorted(site.derived().items()):
+        print("%s = %s" % (key, value))
+    return 0
+
+
+def cmd_schema(args):
+    print(config.schema_path())
+    return 0
+
+
+def cmd_survey(args):
+    survey = _load_survey_module()
+    site = None
+    remote_fstypes, remote_proxy = None, True
+    if args.site:
+        site = _load_site_or_exit(args.site)
+        if site is None:
+            return 2
+        remote_fstypes = site.lookup("filesystems.remote_fstypes")
+        remote_proxy = site.lookup("filesystems.remote_proxy")
+    rows = survey.survey(args.mounts, timeout=args.timeout, include_all=args.all,
+                         remote_fstypes=remote_fstypes, remote_proxy=remote_proxy)
+    if site is not None:
+        overrides = {m["path"]: m for m in site.lookup("filesystems.mounts")}
+        for row in rows:
+            entry = overrides.get(row["mountpoint"])
+            row["override"] = None if entry is None else entry["class"]
+            row["override_maxdepth"] = None if entry is None else entry.get("maxdepth")
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+    print(survey.render_table(rows))
+    print()
+    print(survey.render_toml(rows), end="")
+    return 0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="walk-blocker",
+        description="Compile and check a site's walk-blocker configuration.")
+    parser.add_argument("--version", action="version",
+                        version="walk-blocker %s" % __version__)
+    sub = parser.add_subparsers(dest="command")
+
+    p = sub.add_parser("validate", help="schema and semantic checks on a site.toml")
+    p.add_argument("--site", required=True, metavar="FILE")
+    p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("schema", help="print the path of the site schema")
+    p.set_defaults(func=cmd_schema)
+
+    p = sub.add_parser("survey", help="classify and measure the mounts in a mount table")
+    p.add_argument("--mounts", default="/proc/mounts", metavar="FILE")
+    p.add_argument("--timeout", type=float, default=2.0, metavar="SECONDS",
+                   help="per-mount statfs budget (default 2.0)")
+    p.add_argument("--site", metavar="FILE",
+                   help="mark each mount with the override that covers it")
+    p.add_argument("--all", action="store_true", help="include pseudo filesystems")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_survey)
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return 0
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

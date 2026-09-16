@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fluidnumerics.com/walk-blocker/site.schema.json",
+  "title": "walk-blocker site configuration",
+  "description": "Every fact about one site. Validated and compiled on the workstation by `walk-blocker build` (ADR-0013); nothing on the node reads this file. Path-shaped values are interpolated into systemd unit lines and root-sourced shell blocks, so their character sets are deliberately narrow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "site",
+    "slurm",
+    "timer"
+  ],
+  "$defs": {
+    "sink_path": {
+      "type": "string",
+      "pattern": "^/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$",
+      "description": "An absolute path that reaches a root-write sink: no whitespace, no `%`, `$`, `;`, quotes or backticks, because the value is pasted verbatim into unit lines and sourced shell as root. Canonical form only (no `..`, `.`, `//` or trailing slash) is checked semantically."
+    },
+    "embedded_text": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9 ._,()/:@+-]{1,80}$",
+      "description": "Short human-facing text embedded in refusal messages and unit descriptions: printable, single-line, at most 80 characters, no quoting characters."
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "A bare token such as a partition, QoS, package or tool name: letters, digits, `_`, `.` and `-` only."
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "The revision of this schema the file was written against. A file written for a later revision is refused rather than half-read."
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name"
+      ],
+      "description": "How the site names itself to the people it refuses: the strings a refusal message, a unit description and `walk-job` embed verbatim.",
+      "properties": {
+        "display_name": {
+          "$ref": "#/$defs/embedded_text",
+          "description": "How the site names this node in refusal text and unit descriptions, for example the class of machine and its role. Embedded verbatim in generated artifacts."
+        },
+        "docs_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$",
+          "description": "Where a refused user is sent for the site's own explanation of the guard and of `walk-job`. URI characters only, no whitespace."
+        },
+        "contact": {
+          "$ref": "#/$defs/embedded_text",
+          "description": "The help address or queue a refusal names. Embedded verbatim in refusal text."
+        }
+      }
+    },
+    "filesystems": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The mount policy in three tiers (ADR-0016): a compiled default from `/proc/mounts` fields, per-mount overrides here, and `walk-blocker survey` run out of band to propose them.",
+      "properties": {
+        "remote_fstypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.+*-]*$"
+          },
+          "default": [
+            "lustre",
+            "wekafs",
+            "beegfs",
+            "gpfs",
+            "ceph",
+            "nfs4",
+            "nfs",
+            "cifs",
+            "smb3",
+            "glusterfs",
+            "panfs",
+            "fuse.*",
+            "9p",
+            "sshfs",
+            "s3fs",
+            "daos"
+          ],
+          "description": "Filesystem types treated as expensive by default; glob-aware (`fuse.*`). Broad on purpose: a small remote mount is loosened with a `[[filesystems.mounts]]` override, never by narrowing this list, because the list loosens every mount at once."
+        },
+        "remote_proxy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also treat a mount as remote when its source matches `host:` or its options contain `_netdev` or `addr=`, so a remote mount of a type no list anticipated is guarded rather than walked (ADR-0016)."
+        },
+        "maxdepth_allowed": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2,
+          "description": "The global depth ceiling: a walk of an expensive mount bounded at or below this depth is allowed on every mount without a lookup. Must not exceed `depth_allowance_max`."
+        },
+        "unscoped_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16,
+          "default": 2,
+          "description": "A root this many components or fewer below an expensive mount point is refused when walked unbounded; deeper roots pass. A bounded walk is a different claim and is governed by the depth ceiling instead (ADR-0007)."
+        },
+        "depth_allowance_max": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "default": 8,
+          "description": "The hard upper bound on any depth ceiling, global or per mount. A per-mount `maxdepth` above it is refused at build."
+        },
+        "mount_table": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/proc/mounts",
+          "description": "The mount table the shim reads, and the only file it opens before deciding (ADR-0015). Changed only for a test fixture."
+        },
+        "mounts": {
+          "type": "array",
+          "default": [],
+          "description": "Per-mount overrides of the compiled default, and the only way to loosen it: a small remote export is made `cheap` here, in a diff, and nowhere else. Run `walk-blocker survey` on the node to measure and propose entries; a mount left on its default should be left there on purpose (ADR-0016).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "class"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/sink_path",
+                "description": "The mount point exactly as it appears in the mount table. Unique across entries."
+              },
+              "class": {
+                "type": "string",
+                "enum": [
+                  "expensive",
+                  "cheap"
+                ],
+                "description": "`expensive` guards the mount (depth ceiling, unscoped refusal, `walk-job` named); `cheap` exempts it from the mount judgement entirely."
+              },
+              "maxdepth": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Replaces `maxdepth_allowed` for this mount alone; bounded above by `depth_allowance_max` and only meaningful on an `expensive` mount. Raise it only after the measurement in `docs/site-config.md` (ADR-0007)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the payload lands on the node. Every value is a root-write target compiled into `deploy.py` as a literal (ADR-0005, ADR-0013); all of it must be on local disk, never on the filesystem under investigation.",
+      "properties": {
+        "prefix": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/local/lib/walk-blocker",
+          "description": "The root-owned directory the shim, reaper and `walk-job` are installed under. At least two components, so a typo cannot name a system directory."
+        },
+        "spool_dir": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/var/log/walk-blocker",
+          "description": "Where the reaper's audit trail is written. Local disk: a monitor that lives on what it monitors is unavailable exactly when it is needed."
+        },
+        "audit_filename": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "default": "searchguard-audit.jsonl",
+          "description": "The audit file's name under `spool_dir`. One record per line; readable by the person whose process is in it (ADR-0012)."
+        },
+        "unit_dir": {
+          "type": "string",
+          "enum": [
+            "/etc/systemd/system",
+            "/usr/local/lib/systemd/system"
+          ],
+          "default": "/etc/systemd/system",
+          "description": "Which systemd unit directory receives the reaper service and timer. Only the two administrator-owned locations are permitted."
+        },
+        "staging_parent": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/run",
+          "description": "The local, root-owned parent under which `deploy.py` stages the payload before it touches any install target, so the payload is read once before anything that can block (ADR-0006)."
+        },
+        "tool_search_path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sink_path"
+          },
+          "default": [
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin"
+          ],
+          "description": "The directories, in order, the installer searches to resolve the real binaries the shim wraps. Absolute entries only; the caller's own `PATH` is never consulted."
+        }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One table per shell whose startup file gets the hook block. Which shells appear, and which are `required`, is a census result at the site (ADR-0008).",
+      "properties": {
+        "bash": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether this shell's hook block is written at all. A disabled hook is neither written nor verified."
+            },
+            "file": {
+              "$ref": "#/$defs/sink_path",
+              "description": "The system startup file the hook block is written to. Required when the hook is enabled; which file fires for `ssh host 'cmd'` is a property of the shell and its packaging (ADR-0008)."
+            },
+            "package": {
+              "$ref": "#/$defs/identifier",
+              "description": "The distribution package that likely owns the hook file, so the installer can warn that the file is a managed conffile and the next upgrade may conflict with the block.",
+              "default": "bash"
+            },
+            "gate": {
+              "type": "string",
+              "enum": [
+                "required",
+                "best-effort"
+              ],
+              "description": "`required` for a registered login shell at the site (the install fails if the hook cannot be proven to fire for a remote command); `best-effort` for a shell only reached by nesting (written and checked when present, never gating). Only a census of the site's shells decides this (ADR-0008).",
+              "default": "required"
+            }
+          },
+          "default": {
+            "enabled": true,
+            "file": "/etc/bash.bashrc",
+            "gate": "required",
+            "package": "bash"
+          },
+          "description": "The bash hook. Its system rc file fires for `ssh host 'cmd'` only under the shell's own conditions, so `verify_bash_hook` proves it rather than assuming it."
+        },
+        "zsh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether this shell's hook block is written at all. A disabled hook is neither written nor verified."
+            },
+            "file": {
+              "$ref": "#/$defs/sink_path",
+              "description": "The system startup file the hook block is written to. Required when the hook is enabled; which file fires for `ssh host 'cmd'` is a property of the shell and its packaging (ADR-0008)."
+            },
+            "package": {
+              "$ref": "#/$defs/identifier",
+              "description": "The distribution package that likely owns the hook file, so the installer can warn that the file is a managed conffile and the next upgrade may conflict with the block.",
+              "default": "zsh"
+            },
+            "gate": {
+              "type": "string",
+              "enum": [
+                "required",
+                "best-effort"
+              ],
+              "description": "`required` for a registered login shell at the site (the install fails if the hook cannot be proven to fire for a remote command); `best-effort` for a shell only reached by nesting (written and checked when present, never gating). Only a census of the site's shells decides this (ADR-0008).",
+              "default": "required"
+            }
+          },
+          "default": {
+            "enabled": true,
+            "file": "/etc/zsh/zshenv",
+            "gate": "required",
+            "package": "zsh"
+          },
+          "description": "The zsh hook. The global `zshenv` is read unconditionally, which is why this is the stronger mechanism of the two; its location differs between distribution families."
+        },
+        "fish": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether the fish drop-in is written at all. A disabled hook is neither written nor verified."
+            },
+            "file": {
+              "$ref": "#/$defs/sink_path",
+              "description": "The dedicated `conf.d` drop-in the installer generates in full; fish reads the directory unconditionally, so there is nothing to preserve or back up. Required when enabled."
+            },
+            "gate": {
+              "type": "string",
+              "enum": [
+                "required",
+                "best-effort"
+              ],
+              "description": "`required` if fish is a registered login shell at the site, `best-effort` if it is only ever a nested, per-user shell. Decided by census, not assumed (ADR-0008).",
+              "default": "best-effort"
+            }
+          },
+          "default": {
+            "enabled": true,
+            "file": "/etc/fish/conf.d/walk-blocker.fish",
+            "gate": "best-effort"
+          },
+          "description": "The fish hook, a dedicated `conf.d` drop-in the installer owns entirely. No `package`: nothing pre-existing is modified."
+        }
+      }
+    },
+    "trusted_binaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Absolute paths of the binaries the node artifacts call as root or from the shim. Named here so nothing on the node resolves them through a `PATH` a user controls.",
+      "properties": {
+        "logger": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/logger",
+          "description": "Writes the shim's escape-hatch and the reconcile's hook-state records to journald under the `walk-blocker` tag."
+        },
+        "awk": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/awk",
+          "description": "Used by `walk-job` and the installer for field extraction; never by the shim before it decides."
+        },
+        "id": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/id",
+          "description": "Resolves the invoking account for audit records and for `walk-job`'s output path."
+        },
+        "date": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/date",
+          "description": "Timestamps audit records outside the shim's decision path."
+        },
+        "timeout": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/timeout",
+          "description": "Bounds the reconcile's hook probes and the survey's per-mount measurement, so a wedged filesystem cannot hang either."
+        },
+        "sh": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/bin/sh",
+          "description": "The POSIX shell the shim and `walk-job` run under. Must be dash-clean at the site (ADR-0015)."
+        },
+        "python3": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/usr/bin/python3",
+          "description": "The interpreter the reaper and `deploy.py` run under; stdlib-only Python 3.9 is the floor (ADR-0015)."
+        },
+        "bfs": {
+          "$ref": "#/$defs/sink_path",
+          "description": "An optional breadth-first `find` the refusal text may recommend for shallow, wide trees. Wrapped only when named here and resolvable at install."
+        }
+      }
+    },
+    "slurm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition"
+      ],
+      "description": "How `walk-job` submits a traversal the shim refused (ADR-0007). The bound moves from depth to wall clock, and the scheduler enforces it.",
+      "properties": {
+        "partition": {
+          "$ref": "#/$defs/identifier",
+          "description": "The partition `walk-job` submits to. A small, low-priority partition is expected; its default wall clock is what bounds one user's long walk."
+        },
+        "qos": {
+          "$ref": "#/$defs/identifier",
+          "description": "The QoS `walk-job` submits under, so its jobs never preempt tenant work."
+        },
+        "account": {
+          "$ref": "#/$defs/identifier",
+          "description": "An accounting association to charge `walk-job` submissions to, if the site requires one."
+        },
+        "default_time": {
+          "type": "string",
+          "pattern": "^([0-9]+-)?[0-9]{1,2}(:[0-9]{2}){0,2}$",
+          "default": "1:00:00",
+          "description": "The wall-clock limit `walk-job` requests when the user gives none, in the scheduler's `[D-]HH[:MM[:SS]]` form. Kept low so raising it is a visible choice."
+        },
+        "default_mem": {
+          "type": "string",
+          "pattern": "^[0-9]+[KMGT]?$",
+          "default": "8G",
+          "description": "The memory `walk-job` requests when the user gives none. Load-bearing: a partition with an unlimited default charges the whole node to a job that names no memory (ADR-0007)."
+        },
+        "sbatch_glob": {
+          "type": "string",
+          "pattern": "^/[^\\s'\";$`]+$",
+          "default": "/usr/bin/sbatch",
+          "description": "An absolute path or glob that resolves to the scheduler's `sbatch`; a glob accommodates a versioned install prefix. Resolved at run time by `walk-job`, never through the user's `PATH`."
+        },
+        "nice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 19,
+          "default": 19,
+          "description": "The scheduler nice value `walk-job` submits with, so a traversal yields to every other job in the partition."
+        },
+        "output_pattern": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._%-]+$",
+          "default": "walk-job-%j.out",
+          "description": "The output file name `walk-job` passes to the scheduler, using the scheduler's own `%` substitutions. Written in the submitting directory."
+        },
+        "min_job_age_s": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300,
+          "description": "How old a scheduler job must be before the reaper attributes a traversal to it rather than to a login session; a very young job is more likely a login-node preamble."
+        },
+        "extra_job_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "default": [],
+          "description": "Site-local job-triage commands the refusal text names alongside the accounting query when a scheduler job token appears in argv."
+        }
+      }
+    },
+    "shim": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Layer 1 knobs. The shim is advisory by design (ADR-0001): everything here shapes what it wraps, not what it can enforce.",
+      "properties": {
+        "unwrapped_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "default": [
+            "fzf",
+            "sk"
+          ],
+          "description": "Tools in the rule table the site chooses not to wrap, typically interactive finders whose own walk is bounded by the user's attention. Listed by name; the table stays generic."
+        }
+      }
+    },
+    "reaper": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Layer 2, the periodic backstop. It scans and classifies the whole process table every poll; PSI corroborates and never gates (ADR-0009). Its default action is `--report`.",
+      "properties": {
+        "cgroup_root": {
+          "$ref": "#/$defs/sink_path",
+          "default": "/sys/fs/cgroup/user.slice",
+          "description": "The cgroup v2 directory holding the per-user slices. PSI is read at the slice, never per scope (ADR-0003)."
+        },
+        "slice_prefix": {
+          "$ref": "#/$defs/identifier",
+          "default": "user-",
+          "description": "The prefix of a per-user slice directory name; the uid sits between prefix and suffix."
+        },
+        "slice_suffix": {
+          "$ref": "#/$defs/identifier",
+          "default": ".slice",
+          "description": "The suffix of a per-user slice directory name."
+        },
+        "origins": {
+          "type": "array",
+          "default": [
+            {
+              "pattern": "^session-\\d+\\.scope$",
+              "label": "ssh_seated"
+            },
+            {
+              "pattern": "^session-c\\d+\\.scope$",
+              "label": "ssh_seatless"
+            },
+            {
+              "pattern": "^docker-[0-9a-f]+\\.scope$",
+              "label": "container"
+            },
+            {
+              "pattern": "^[^/]+\\.service$",
+              "label": "systemd_service"
+            },
+            {
+              "pattern": "^init\\.scope$",
+              "label": "init"
+            }
+          ],
+          "description": "Ordered `{pattern, label}` pairs mapping a process's cgroup leaf name to a descriptive origin; first match wins, no match is `other`. Add one per ssh transport or container runtime the site runs. Origin never feeds the kill decision (ADR-0003).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pattern",
+              "label"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "A Python regular expression matched against the cgroup leaf name (the last path component), never the full path."
+              },
+              "label": {
+                "type": "string",
+                "pattern": "^[a-z_]+$",
+                "description": "The origin label recorded in the finding, lower-case with underscores."
+              }
+            }
+          }
+        },
+        "traversal_budget_s": {
+          "type": "integer",
+          "minimum": 60,
+          "default": 900,
+          "description": "How long a traversal may have been running before it is a finding. Age is one of the process-table facts; it is never inferred from PSI."
+        },
+        "fanout_n": {
+          "type": "integer",
+          "minimum": 2,
+          "default": 4,
+          "description": "How many concurrent traversals under one effective parent count as a fan-out finding, the shape of a parallelised walk."
+        },
+        "io_stall_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "default": 0.01,
+          "description": "The differenced `io.pressure` `full` fraction over one poll window above which a user slice is marked `stalling_slice: true`. Calibrate from the differenced rate under known load, never from cumulative totals (ADR-0002)."
+        },
+        "cpu_stall_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "default": 0.5,
+          "description": "The differenced `cpu.pressure` fraction over one poll window that marks a slice as stalling. Corroborating only; it never suppresses a record (ADR-0009)."
+        },
+        "kill_grace_s": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "default": 10,
+          "description": "Seconds between `SIGTERM` and `SIGKILL` under `--kill`. After the kill the reaper re-checks and records `signalled_but_wedged` if the process is still there."
+        },
+        "max_kills": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "The most processes one poll may signal. A poll that wants more stops and reports; a runaway reaper is its own incident."
+        },
+        "settle_s": {
+          "type": "number",
+          "minimum": 1,
+          "default": 10.0,
+          "description": "Seconds the reaper waits after its last signal before re-reading the process table to decide what actually died."
+        },
+        "audit_max_bytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "default": 10485760,
+          "description": "Rotate the audit file when it exceeds this size. The floor is one mebibyte so rotation cannot be set to thrash."
+        },
+        "stream_filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "default": [
+            "tail"
+          ],
+          "description": "Commands whose stdin the reaper senses (ADR-0011): a long-lived one of these reading from an expensive mount is a finding of a different shape from a walk."
+        }
+      }
+    },
+    "timer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "on_calendar"
+      ],
+      "description": "The reaper's systemd timer. This node is shared; the slot is chosen against the live schedule of the target node and never copied from an example.",
+      "properties": {
+        "on_calendar": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9*,:/. -]+$",
+          "description": "The `OnCalendar=` expression. Survey the live schedule first (`systemctl list-timers --all` as root, and every account's `systemctl --user list-timers`) and pick a minute AND a second clear of every neighbour; a per-minute collector leaves the second field as the only separation. Checked with `systemd-analyze calendar` at build when available."
+        },
+        "randomized_delay_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "`RandomizedDelaySec=`. Zero by default: a deliberately chosen slot is undone by jitter, so widen this only when the schedule has no clear slot."
+        },
+        "accuracy_sec": {
+          "type": "string",
+          "pattern": "^[0-9]+(s|min|ms)$",
+          "default": "1s",
+          "description": "`AccuracySec=`. Tight by default so the timer fires in the slot that was chosen rather than coalescing onto a neighbour."
+        },
+        "persistent": {
+          "type": "boolean",
+          "default": false,
+          "description": "`Persistent=`. Off by default: a missed poll is not worth a catch-up run at an unplanned second on a shared node."
+        },
+        "timeout_start_sec": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 240,
+          "description": "`TimeoutStartSec=` for the reaper service. Must be at least the floor derived from the relink and kill budgets, so systemd never cuts a poll off mid-kill."
+        },
+        "relink_timeout_s": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Seconds the reconcile's link-farm and hook re-check may take before it is abandoned. It reports and never repairs (ADR-0008)."
+        },
+        "relink_kill_after_s": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "Grace after `relink_timeout_s` before the reconcile is killed outright. The reaper's own poll runs regardless: a Layer 1 diagnosis must not stop the Layer 2 backstop."
+        }
+      }
+    }
+  }
+}
