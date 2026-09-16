@@ -18,7 +18,7 @@
     "docs/adr/0014-decisions-not-evidence.md": "987b7c9f876ab954a1eb42e29e083fc630495d46bab7a1da1fd85323bc0a78a1",
     "docs/adr/0015-node-runtime.md": "4566e2e056cfec24074554a9adecf51e9664b5d994cf4df8712ce975008a6289",
     "docs/adr/0016-mount-policy-three-tiers.md": "9458f7216f21a87de22c81b18bafbbf66401cd636def514107abd1faaad9fb9a",
-    "docs/adr/0017-timer-slot-is-site-config.md": "bdfe3782d0eeee7ea8dec0b6867a54c5d7d5fb1e138f2b27086fcdb3469d8c67",
+    "docs/adr/0017-timer-slot-is-site-config.md": "afdba4dbf39b63d8a7fb9dd841dfa75770e8e0bfcc1c16c8cd181ea81ee04f2d",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "3e53d67c8db0590001e547fa77219c0dee232385f1d0c08f5cdac4d36844b5df",
     "docs/operating.md": "3be174445840da4c6c6befe9cd2936b6e8f8bc2ae6a83a4773ad4701ddbf5fb3",

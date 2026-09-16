@@ -50,9 +50,11 @@ census beside its `site.toml`. The slot names both a minute and a second,
 because a per-minute collector on the node makes the second field the only
 separation left.
 
-`randomized_delay_sec` defaults to zero and `accuracy_sec` to one second,
-and the schema records why: jitter and coalescing each undo the choice. A
-site may raise either, and doing so is a visible diff.
+`randomized_delay_sec` defaults to zero, `accuracy_sec` to one second and
+`persistent` to false, and the schema records why: jitter and coalescing
+each undo the choice, and a persistent timer replays a missed firing at boot,
+at whatever second the node happens to come up. A site may change any of the
+three, and doing so is a visible diff.
 
 The compiled unit carries the slot as a literal (ADR-0013). `deploy.py`
 prints the rendered timer in its preview so the slot is read before it is
