@@ -1,0 +1,8 @@
+# FORMAT EXEMPLAR ONLY. The real list lives OUTSIDE this repository, at
+# ~/.config/walk-blocker/forbidden-terms.txt (mode 600) and as the GitHub
+# Actions secret FORBIDDEN_TERMS. One Python regex per line, matched
+# case-insensitively against every line of every tracked file. The three
+# terms below are made up.
+\bacme-hpc-login\b
+\bzz-storage-9\b
+\bfictional-partition\b

@@ -181,11 +181,15 @@ the re-measure condition and the config key. See ADR-0014 and
 `docs/evidence.md`.
 
 **The CI gate** (`ip-hygiene` job in `.github/workflows/ci.yml`, driven by
-`tools/check_no_site_literals.py`) is the backstop. It fails the build, not
-warns, and **it must not itself contain the literals it hunts** — the
-customer term list lives outside the repository and reaches CI as a secret;
-only structural patterns are committed. If the gate fires on a false
-positive, fix the wording; do not loosen the gate.
+`tools/check_no_site_literals.py`; how to run and rotate it is in
+`tools/README-ip-gate.md`) is the backstop. It fails the build, not warns,
+and **it must not itself contain the literals it hunts** — the customer term
+list lives outside the repository, at `~/.config/walk-blocker/forbidden-terms.txt`
+on the maintainer's workstation and as the `FORBIDDEN_TERMS` secret in CI;
+only structural patterns are committed. A customer hit is reported by
+position only. If the gate fires on a false positive, fix the wording or add
+a one-line `# site-literal-ok: <reason>` waiver for a structural pattern; a
+customer-term hit cannot be waived.
 
 ## Style
 
@@ -212,7 +216,7 @@ uv run walk-blocker build --site examples/site.example.toml --out examples/paylo
 shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job   # (Milestone 4)
 uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
-python3 tools/check_no_site_literals.py                 # IP hygiene, same as CI (placeholder until Milestone 1: runs, scans nothing)
+python3 tools/check_no_site_literals.py --require-terms --quiet   # IP hygiene, same as CI; see tools/README-ip-gate.md
 ```
 
 Commands marked with a milestone do not work yet, or run only as a placeholder
