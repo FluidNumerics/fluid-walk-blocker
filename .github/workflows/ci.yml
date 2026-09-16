@@ -174,13 +174,18 @@ jobs:
       - name: shim-vs-shim ratio against the merge base
         # Never fails the build -- see the comment above. A run with too few
         # usable pairs also exits non-zero, and on a shared runner that is a
-        # statement about the runner rather than about this PR.
+        # statement about the runner rather than about this PR: observed on
+        # the first runs here, where the baseline-drift check discarded
+        # pairs. The step-level continue-on-error is what keeps that from
+        # painting the job red; the job-level one above is the backstop for
+        # a failed build, which SHOULD show, because it is about the PR.
         #
         # Both shims are copied to one local directory first: measure.sh
         # refuses a guard on a network filesystem, and two halves side by
         # side on the same disk is what a ratio between them assumes anyway.
         # The build writes the mode; chmod is belt-and-braces against a copy
         # that lost it, so the exec-bit diagnosis is never this job's output.
+        continue-on-error: true
         run: |
           set -u
           work=$(mktemp -d)
@@ -188,4 +193,4 @@ jobs:
           cp "$RUNNER_TEMP/head/shim/guard.sh" "$work/guard-head.sh"
           chmod +x "$work/guard-base.sh" "$work/guard-head.sh"
           sh node/shim/measure.sh --against \
-            "$work/guard-base.sh" "$work/guard-head.sh" 50 4
+            "$work/guard-base.sh" "$work/guard-head.sh" 50 8
