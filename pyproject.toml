@@ -34,10 +34,12 @@ packages = ["src/walk_blocker"]
 
 # Only tracked paths may be force-included: hatchling fails the build on a
 # missing source, and an empty directory is not in git however present it is
-# on one developer's disk (review round 2 on PR #1). `node/` and `schema/`
-# join this table when they hold files (Milestones 4 and 2).
+# on one developer's disk (review round 2 on PR #1). tests/test_packaging.py
+# pins that every source here is tracked.
 [tool.hatch.build.targets.wheel.force-include]
 "VERSION" = "walk_blocker/_VERSION"
+"schema" = "walk_blocker/_schema"
+"node" = "walk_blocker/_node"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

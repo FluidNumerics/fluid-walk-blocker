@@ -26,6 +26,24 @@ def version_file():
     )
 
 
+def schema_file():
+    """`schema/site.schema.json`: beside the package in a wheel, under the
+    repo root in a checkout."""
+    return _first_existing(
+        os.path.join(_CHECKOUT_ROOT, "schema", "site.schema.json"),
+        os.path.join(_HERE, "schema", "site.schema.json"),
+    )
+
+
+def node_dir():
+    """The directory holding the stdlib-only node scripts (ADR-0015), which
+    the workstation tool also runs in place -- `survey` is one of them."""
+    return _first_existing(
+        os.path.join(_CHECKOUT_ROOT, "node"),
+        os.path.join(_HERE, "node"),
+    )
+
+
 def read_version():
     """The one hand-written version, validated to the shape every generated
     artifact will embed inside single quotes. A version that is not
