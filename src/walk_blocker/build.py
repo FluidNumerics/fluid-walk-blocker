@@ -15,6 +15,9 @@ Payload layout (Milestone 4; `reaper.py`, `deploy.py`, `shim/install.sh` and
     docs/...                the docs tree, verbatim
     search_rules.py         the rule table, verbatim (the reaper imports it)
     survey.py               node/survey.py, verbatim
+    walk-job                node/walk-job, stamped from [slurm] and the bfs pin
+    reaper.py               node/reaper.py, stamped from [reaper] and [filesystems]
+    shim/install.sh         node/shim/install.sh, stamped from [install], [hooks] and the mount policy
     site.toml               the input, byte for byte, as a record
     site.lock.json          schema/tool/payload versions and a hash per file
     shim/guard.sh           rendered from the rule table and site.toml (0755)
@@ -54,7 +57,7 @@ MODE_DIR = 0o755
 
 # Payload-relative paths that are executed directly rather than sourced or
 # imported. Everything else is 0644.
-EXECUTABLE = frozenset(["shim/guard.sh"])
+EXECUTABLE = frozenset(["shim/guard.sh", "shim/install.sh", "walk-job", "reaper.py"])
 
 EXIT_OK, EXIT_DIFFERS, EXIT_ERROR = 0, 1, 2
 
@@ -146,7 +149,6 @@ def render_payload(site, site_bytes, version, warn=None):
                                stamp.CONSUMERS))
 
     # Stamped consumers: the source is the same relative path under node/.
-    # Empty in Milestone 4; see the comment on `stamp.CONSUMERS`.
     values = stamp.SiteValues(site, version)
     for rel, required in sorted(stamp.CONSUMERS.items()):
         kind = "py" if rel.endswith(".py") else "sh"

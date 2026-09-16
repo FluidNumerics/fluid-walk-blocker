@@ -570,7 +570,7 @@
           "default": [
             "tail"
           ],
-          "description": "Commands whose stdin the reaper senses (ADR-0011): a long-lived one of these reading from an expensive mount is a finding of a different shape from a walk."
+          "description": "Tools that cannot walk a directory tree under any argv, excluded from the opaque_traversal verdict (ADR-0010). One name at a time, each with evidence from the trail; siblings are not added by assumed symmetry."
         }
       }
     },

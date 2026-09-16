@@ -20,11 +20,14 @@
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "df5748114b0d5a7bbf24baa204539f1be93da6a5b774ecf2266b5518a20a1473",
     "docs/site-config.md": "0a221db2ee96d36aefacc8f6d3a584d3e1614b9275fbcb81ac6aee6ad34c6e74",
+    "reaper.py": "aa90b9559c5b4a743bd8ad7975ea03b2d8569ec4a7f56d7f2f2b0e301d9c7d06",
     "search_rules.py": "f637acf7f352920beec731ccf099924c907e3749f2a6d1a4840d5b99048f67f5",
     "shim/guard.sh": "7ad156fba8f3bbf32a6f46af06fe0641dc25310cf0b0f528a51887359683cd4b",
+    "shim/install.sh": "3bd5629f1ce8a1eb967a1dfc04d4ebd7fb2f1e205903b776ffde08920294e711",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "929953109541e8bfe44f00c3a765bbbf08536d905595ff63e18a9f9fbbda910c",
-    "survey.py": "140e1fc28737a62fe18e42d48f72cc128121c72bd123579f2567471af0f46d0a"
+    "survey.py": "140e1fc28737a62fe18e42d48f72cc128121c72bd123579f2567471af0f46d0a",
+    "walk-job": "ccca55886f064dd610f54c2fe211637b41b4b99e5131b6634b6be0e64d91686d"
   },
   "schema_version": 1,
   "site_sha256": "929953109541e8bfe44f00c3a765bbbf08536d905595ff63e18a9f9fbbda910c",
