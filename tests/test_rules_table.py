@@ -641,6 +641,18 @@ def test_classify_an_unlisted_remote_type_by_addr_option_is_expensive(policy):
     assert R.classify_mount(("cluster", "/x", "newfs", "rw,addr=10.0.0.1"), policy) == "expensive"  # site-literal-ok: RFC 1918 placeholder in a fixture option string
 
 
+@pytest.mark.parametrize("spelling", ["/home/", "/home//"], ids=["one-slash", "two-slashes"])
+def test_an_override_matches_a_mount_point_written_with_a_trailing_slash(policy, spelling):
+    # /proc/mounts prints mount points without a trailing slash, but an
+    # operator's table or a bind mount can carry one; the override lookup
+    # normalises it. Pinned because a mutation removing the normalisation
+    # passed every other test (review round 2 on the schema PR).
+    assert "/home" in policy.mounts
+    assert R.classify_mount(("fast", spelling, "ext4", "rw"), policy) == "expensive"
+    assert R.classify_mount(("fast", "/", "ext4", "rw"),
+                            policy.replace(mounts={"/": ("expensive", None)})) == "expensive"
+
+
 def test_classify_a_local_unknown_type_is_cheap(policy):
     assert R.classify_mount(("tmpfs", "/run", "tmpfs", "rw,nosuid,nodev"), policy) == "cheap"
     assert R.classify_mount(("/dev/loop0", "/snap/x", "squashfs", "ro,nodev"), policy) == "cheap"
