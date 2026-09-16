@@ -71,6 +71,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Let the shim measure a mount (capacity, inodes, latency) to decide its class | ADR-0016 — measurement is out of band (`survey`); the shim reads `/proc/mounts` fields only |
 | Key a mount's class on filesystem type alone, or allow an unknown remote type by default | ADR-0016 — remoteness default, unknown remote is guarded, overrides loosen |
 | Prompt the admin interactively at install time for the mount list | ADR-0016, ADR-0005 — config is reviewed data, not an answer typed at a prompt |
+| Ship a default timer slot, add `RandomizedDelaySec`, or leave `AccuracySec` at its default | ADR-0017 — the slot is chosen against the live schedule; jitter and coalescing undo the choice |
 | Copy a figure from a predecessor record into this tree | ADR-0014 — state the class and the re-measure condition |
 | Refuse a non-root-owned source tree | ADR-0006 — rejected three times |
 | Add a per-user install mode | ADR-0004 |
@@ -106,6 +107,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0014 | Decisions, not site evidence |
 | 0015 | Node code is POSIX `sh` or stdlib Python 3.9; the shim is `sh` |
 | 0016 | Mount class: remoteness default, per-mount overrides, out-of-band survey (narrows 0007) |
+| 0017 | Timer slot is site config chosen against the live schedule; no default, no jitter, no coalescing |
 
 ## Non-negotiables a prompt must restate
 
@@ -121,7 +123,7 @@ Name the ones the task touches; do not paste all of them.
 - Refusal exits **2**, never 1.
 - Never claim a kill that did not land; never report a clean bill of health Layer 2 did not earn.
 - PSI is cumulative; difference. A stalling slice is evidence about a user; the `/proc` step names the process.
-- The timer slot is `[timer].on_calendar` and is chosen against the **live** schedule of the target node, never copied from a doc or another site.
+- The timer slot is `[timer].on_calendar` and is chosen against the **live** schedule of the target node, never copied from a doc or another site (ADR-0017).
 - Measure on the tool; do not reason from a man page.
 
 ## Prompts you write

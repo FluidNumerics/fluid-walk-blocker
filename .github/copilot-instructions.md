@@ -73,6 +73,7 @@ a round and gets the same answer. ADRs live under `docs/adr/`.
 | Hardcode a mount, host or path in the rule table | Paths are `site.toml` rows, compiled in; the rule table contains none | ADR-0007, ADR-0014, ADR-0016 |
 | Key a mount's class on filesystem type alone, or allow an unknown remote type by default | Type is the default, remoteness is the fallback, an unknown remote mount is guarded; overrides loosen | ADR-0016 |
 | Prompt the administrator interactively at install time | Unreviewable; the mount list is a diff, and `walk-blocker survey` proposes it out of band | ADR-0016, ADR-0005 |
+| Ship a default timer slot, add jitter, or coalesce the timer | The slot is chosen against the node's live schedule and recorded beside `site.toml`; `RandomizedDelaySec` and a loose `AccuracySec` undo the choice (ADR-0017) |
 | Copy a figure from a predecessor record into this tree | Decisions, not evidence; name the class of measurement and the re-measure condition | ADR-0014 |
 | Make Layer 1 enforcing rather than advisory | Advisory is the design; Layer 2 is the backstop | ADR-0001 |
 | Let PSI gate scanning or `--kill` | PSI corroborates a finding; it never gates one | ADR-0009 |
