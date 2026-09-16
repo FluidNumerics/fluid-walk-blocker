@@ -72,6 +72,17 @@ def test_a_waiver_silences_a_structural_hit_but_never_a_customer_term(sandbox):
     assert r.stdout.strip() == "a.md:2: customer-term"
 
 
+def test_a_line_hitting_both_lists_reports_the_customer_term_and_nothing_else(sandbox):
+    # Without --quiet a structural match prints its text; on a line a
+    # customer term also matched, that text may BE the customer term.
+    tree, terms = sandbox
+    (tree / "a.md").write_text("connect to widget-corp-login at 10.0.0.1\n", encoding="utf-8")
+    r = scan(tree, terms)
+    assert r.returncode == gate.EXIT_FINDINGS
+    assert r.stdout.strip() == "a.md:1: customer-term"
+    assert "10.0.0.1" not in r.stdout + r.stderr
+
+
 def test_a_short_waiver_reason_does_not_count(sandbox):
     tree, terms = sandbox
     (tree / "a.md").write_text("addr 10.0.0.1  # site-literal-ok: ok\n", encoding="utf-8")
@@ -149,7 +160,10 @@ EXEMPLARS = [
     ("github-handle", "ping @octocat about it"),
 ]
 NON_EXEMPLARS = ["@pytest.fixture", "#!/bin/sh", "uptime=1000000.0", "# Heading",
-                 "version 1.2.3", "about a dozen users", "2026-09-16 accepted"]
+                 "version 1.2.3", "about a dozen users", "2026-09-16 accepted",
+                 "listen on 127.0.0.1:8080", "bind to 0.0.0.0", "an example host 192.0.2.10",
+                 "use the `@dataclass` decorator", "OnCalendar=*:07,17,27,37,47,57:30",
+                 "user-1000.slice", "--time 1-00:00:00"]
 
 
 @pytest.mark.parametrize("category,text", EXEMPLARS, ids=[c for c, _ in EXEMPLARS])

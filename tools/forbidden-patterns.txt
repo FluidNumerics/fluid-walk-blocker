@@ -2,7 +2,8 @@
 # those live outside the tree (tools/README-ip-gate.md). Python `re` syntax,
 # one `name: regex` per line, matched per line. `allow CATEGORY GLOB` exempts
 # paths from one category; `allow * GLOB` from all of them.
-ipv4: \b(?:\d{1,3}\.){3}\d{1,3}\b
+# Loopback, the wildcard and the RFC 5737 documentation ranges are generic.
+ipv4: \b(?!127\.|0\.0\.0\.0\b|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)(?:\d{1,3}\.){3}\d{1,3}\b
 uid-literal: \buid[=:]\s?\d{5,}\b|\buser-\d{5,}\.slice\b
 site-hostname: \b[a-z]{3}-[a-z]{2,}-login\b
 slurm-jobid: (?i)(?:\bslurm-|\bsacct -j |\bscontrol show job |\bjob )\d{6,8}\b
@@ -12,7 +13,7 @@ three-decimal-percent: \b\d+\.\d{3}\s?%
 snowflake-id: \b\d{9,}\b
 measured-date: (?i)\bmeasured\b[^.\n]{0,60}\b20\d\d-\d\d-\d\d\b
 slack-channel: (?<![\w&])#[a-z][a-z0-9]*-[a-z0-9-]+\b
-github-handle: (?<![\w.@/])@[a-z\d][a-z\d-]{1,38}\b(?![.(\[])
+github-handle: (?<![\w.@/`])@[a-z\d][a-z\d-]{1,38}\b(?![.(\[`])
 # Decorators and shebangs are not handles or channels.
 allow github-handle *.py
 allow github-handle *.sh

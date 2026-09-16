@@ -122,6 +122,10 @@ def scan_file(path, rel, rules, allow, terms, quiet):
         for lineno, line in enumerate(fh, 1):
             if any(rx.search(line) for rx in terms):
                 found.append("%s:%d: customer-term" % (rel, lineno))
+                # Nothing else about this line is reported. A structural
+                # match on the same line could print the very text the
+                # customer term matched (review round 1 on the gate's PR).
+                continue
             if WAIVER.search(line):
                 continue
             for name, rx in rules:
