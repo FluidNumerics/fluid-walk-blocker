@@ -50,6 +50,8 @@ def load_patterns(path):
             lines = fh.read().splitlines()
     except OSError as exc:
         die("cannot read patterns: %s" % exc)
+    except UnicodeDecodeError:
+        die("patterns file is not UTF-8: %s" % path)
     for n, raw in enumerate(lines, 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -61,7 +63,9 @@ def load_patterns(path):
             allow.setdefault(parts[1], []).append(parts[2])
             continue
         name, sep, regex = line.partition(":")
-        if not sep or not name.strip():
+        if not sep or not name.strip() or not regex.strip():
+            # An empty regex matches every line: a silent fail-closed that
+            # would flag the whole tree under one category.
             die("%s:%d: expected `name: regex`" % (path, n))
         try:
             rules.append((name.strip(), re.compile(regex.strip())))
@@ -84,6 +88,10 @@ def load_terms(path):
             lines = fh.read().splitlines()
     except OSError as exc:
         die("cannot read term list: %s" % exc.__class__.__name__)
+    except UnicodeDecodeError:
+        # A UTF-16 list (BOM ff fe) lands here. The message names neither
+        # the path's contents nor the offending bytes.
+        die("term list is not UTF-8")
     for n, raw in enumerate(lines, 1):
         line = raw.strip()
         if line and not line.startswith("#"):

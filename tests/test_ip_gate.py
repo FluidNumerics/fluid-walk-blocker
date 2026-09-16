@@ -99,6 +99,26 @@ def test_a_term_file_with_a_bom_or_crlf_still_matches(tmp_path, prefix, newline)
     assert r.stdout.strip() == "a.md:1: customer-term"
 
 
+def test_a_non_utf8_term_file_is_a_clean_config_error(tmp_path):
+    terms = tmp_path / "terms.txt"
+    terms.write_bytes("widget-corp-login\n".encode("utf-16"))
+    (tmp_path / "a.md").write_text("x\n", encoding="utf-8")
+    r = run(["--root", str(tmp_path), "--terms", str(terms), "a.md"])
+    assert r.returncode == gate.EXIT_CONFIG
+    assert "Traceback" not in r.stderr
+    assert "not UTF-8" in r.stderr
+    assert "widget" not in r.stderr
+
+
+def test_an_empty_pattern_regex_is_refused_not_matched_everywhere(tmp_path):
+    patterns = tmp_path / "p.txt"
+    patterns.write_text("empty: \n", encoding="utf-8")
+    (tmp_path / "a.md").write_text("anything\n", encoding="utf-8")
+    r = run(["--root", str(tmp_path), "--patterns", str(patterns), "--terms", os.devnull, "a.md"])
+    assert r.returncode == gate.EXIT_CONFIG
+    assert "expected `name: regex`" in r.stderr
+
+
 def test_a_short_waiver_reason_does_not_count(sandbox):
     tree, terms = sandbox
     (tree / "a.md").write_text("addr 10.0.0.1  # site-literal-ok: ok\n", encoding="utf-8")
