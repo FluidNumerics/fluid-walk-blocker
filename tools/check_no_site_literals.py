@@ -103,9 +103,17 @@ def load_terms(path):
 
 
 def tracked_files(root):
-    out = subprocess.run(["git", "-C", root, "ls-files", "-z"],
-                         capture_output=True, check=True).stdout
-    return [os.path.join(root, p.decode()) for p in out.split(b"\0") if p]
+    try:
+        proc = subprocess.run(["git", "-C", root, "ls-files", "-z"],
+                              capture_output=True, check=False)
+    except OSError as exc:
+        die("cannot run git: %s" % exc.__class__.__name__)
+    if proc.returncode != 0:
+        # Not a repository, or no such root. git's own stderr is not
+        # echoed: an exit code and a category are enough for the caller.
+        die("git ls-files failed under %s (exit %d); pass paths explicitly or fix --root"
+            % (root, proc.returncode))
+    return [os.path.join(root, p.decode()) for p in proc.stdout.split(b"\0") if p]
 
 
 def expand(paths):
@@ -176,7 +184,14 @@ def main(argv=None):
         return EXIT_NO_TERMS
 
     if a.files_from:
-        data = sys.stdin.read() if a.files_from == "-" else open(a.files_from).read()
+        if a.files_from == "-":
+            data = sys.stdin.read()
+        else:
+            try:
+                with open(a.files_from, encoding="utf-8", errors="replace") as fh:
+                    data = fh.read()
+            except OSError as exc:
+                die("cannot read --files-from %s: %s" % (a.files_from, exc.__class__.__name__))
         files = [os.path.join(root, p) for p in re.split(r"[\0\n]", data) if p]
     elif a.paths:
         files = list(expand([os.path.join(root, p) for p in a.paths]))

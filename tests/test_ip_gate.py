@@ -119,6 +119,28 @@ def test_an_empty_pattern_regex_is_refused_not_matched_everywhere(tmp_path):
     assert "expected `name: regex`" in r.stderr
 
 
+@pytest.mark.parametrize("case", ["not-a-repo", "missing-root", "no-git", "files-from-missing", "files-from-dir"])
+def test_a_broken_environment_is_a_clean_config_error(tmp_path, case):
+    # Exit 1 means findings. A broken environment must never read as one,
+    # and must never print a traceback.
+    env = {**os.environ, "WALK_BLOCKER_FORBIDDEN_TERMS": "", "XDG_CONFIG_HOME": str(tmp_path / "nocfg")}
+    if case == "not-a-repo":
+        (tmp_path / "a.md").write_text("x\n", encoding="utf-8")
+        args = ["--root", str(tmp_path)]
+    elif case == "missing-root":
+        args = ["--root", str(tmp_path / "nope")]
+    elif case == "no-git":
+        args = ["--root", str(tmp_path)]
+        env["PATH"] = str(tmp_path / "emptybin")
+    elif case == "files-from-missing":
+        args = ["--root", str(tmp_path), "--files-from", str(tmp_path / "nope.txt")]
+    else:
+        args = ["--root", str(tmp_path), "--files-from", str(tmp_path)]
+    r = run(args + ["--terms", os.devnull], env=env)
+    assert r.returncode == gate.EXIT_CONFIG, (r.returncode, r.stderr)
+    assert "Traceback" not in r.stderr
+
+
 def test_a_short_waiver_reason_does_not_count(sandbox):
     tree, terms = sandbox
     (tree / "a.md").write_text("addr 10.0.0.1  # site-literal-ok: ok\n", encoding="utf-8")
