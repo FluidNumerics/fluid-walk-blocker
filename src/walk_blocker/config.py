@@ -204,9 +204,12 @@ def check_semantics(schema, data):
                               "does not compile: %s" % exc)
 
     for shell, hook in data["hooks"].items():
-        if hook.get("enabled") and "file" not in hook:
+        if "file" not in hook:
+            # Required even when disabled: the uninstall path removes the
+            # file a previous install wrote, so the installer must know it.
             raise ConfigError("hooks.%s.file" % shell,
-                              "required while enabled = true")
+                              "required (even when enabled = false, so uninstall "
+                              "can remove a previously written hook)")
 
     timer = data["timer"]
     floor = timer_floor(data)

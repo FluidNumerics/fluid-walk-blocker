@@ -63,13 +63,57 @@ SITE_PREFIX = "site.toml:"
 JOIN_SUFFIX = "[:]"
 
 # Payload-relative path -> the sources that file MUST carry a marker for.
-# Milestone 4 ships no stamped file: `search_rules.py` and `survey.py` are
-# copied verbatim and the shim is a whole-file template. `reaper.py`,
-# `deploy.py`, `shim/install.sh` and `walk-job` arrive in later milestones
-# and their rows are added here when they do; a file with a marker that is
-# not in this table fails the build (see `build.py`), so a row cannot be
-# forgotten silently.
-CONSUMERS = {}
+# `search_rules.py` and `survey.py` are copied verbatim and the shim is a
+# whole-file template. A file with a marker that is not in this table fails
+# the build (see `build.py`), so a row cannot be forgotten silently;
+# `deploy.py` joins when it lands.
+CONSUMERS = {
+    "walk-job": (
+        "VERSION",
+        "site.toml:slurm.partition", "site.toml:slurm.qos", "site.toml:slurm.account",
+        "site.toml:slurm.default_time", "site.toml:slurm.default_mem",
+        "site.toml:slurm.sbatch_glob", "site.toml:slurm.nice",
+        "site.toml:slurm.output_pattern", "site.toml:trusted_binaries.bfs",
+    ),
+    "reaper.py": (
+        "VERSION",
+        "site.toml:reaper.cgroup_root", "site.toml:reaper.slice_prefix",
+        "site.toml:reaper.slice_suffix", "site.toml:reaper.origins",
+        "site.toml:reaper.traversal_budget_s", "site.toml:reaper.fanout_n",
+        "site.toml:reaper.io_stall_fraction", "site.toml:reaper.cpu_stall_fraction",
+        "site.toml:reaper.kill_grace_s", "site.toml:reaper.max_kills",
+        "site.toml:reaper.settle_s", "site.toml:reaper.audit_max_bytes",
+        "site.toml:reaper.stream_filters",
+        "site.toml:filesystems.remote_fstypes", "site.toml:filesystems.remote_proxy",
+        "site.toml:filesystems.maxdepth_allowed", "site.toml:filesystems.unscoped_depth",
+        "site.toml:filesystems.depth_allowance_max", "site.toml:filesystems.mounts",
+        "site.toml:filesystems.mount_table",
+    ),
+    "shim/install.sh": (
+        "VERSION",
+        "site.toml:install.prefix", "site.toml:install.spool_dir",
+        "site.toml:install.audit_filename", "site.toml:install.tool_search_path[:]",
+        "site.toml:hooks.bash.file", "site.toml:hooks.bash.package",
+        "site.toml:hooks.bash.enabled", "site.toml:hooks.bash.gate",
+        "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.package",
+        "site.toml:hooks.zsh.enabled", "site.toml:hooks.zsh.gate",
+        "site.toml:hooks.fish.file", "site.toml:hooks.fish.enabled",
+        "site.toml:hooks.fish.gate",
+        "site.toml:filesystems.mount_table", "site.toml:filesystems.remote_fstypes[:]",
+        "site.toml:filesystems.remote_proxy", "site.toml:derived.mount_overrides",
+        "site.toml:trusted_binaries.logger",
+    ),
+}
+
+# `site.toml:derived.<name>` sources are computed from the config rather
+# than read from it. Each is produced by the SAME function the shim
+# renderer uses, so the two consumers of a derived value cannot drift.
+DERIVED = ("mount_overrides",)
+
+# Keys the schema leaves ABSENT when a site omits them. A consumer that
+# stamps one reads the empty string as "not configured" (walk-job omits
+# --qos / --account, and the bfs pin arm, on an empty value).
+OPTIONAL_EMPTY = frozenset(["slurm.qos", "slurm.account", "trusted_binaries.bfs"])
 
 KINDS = ("py", "sh")
 
@@ -115,15 +159,30 @@ class SiteValues(object):
         self.site = site
         self.version = version
 
+    def _derived(self, name):
+        return _derived_value(self.site, name)
+
     def __getitem__(self, key):
         if key == "VERSION":
             return self.version
         if key.startswith(SITE_PREFIX):
+            dotted = key[len(SITE_PREFIX):]
+            if dotted.startswith("derived."):
+                return self._derived(dotted[len("derived."):])
             try:
-                return self.site.lookup(key[len(SITE_PREFIX):])
+                return self.site.lookup(dotted)
             except (KeyError, IndexError, TypeError):
+                if dotted in OPTIONAL_EMPTY:
+                    return ""
                 raise KeyError(key)
         raise KeyError(key)
+
+
+def _derived_value(site, name):
+    if name == "mount_overrides":
+        from .render.shim import mount_overrides
+        return mount_overrides(site.policy())
+    raise KeyError(SITE_PREFIX + "derived." + name)
 
 
 def resolve(marker, values):

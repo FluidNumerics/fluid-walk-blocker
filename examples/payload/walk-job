@@ -1,0 +1,330 @@
+#!/bin/sh
+# Submit a filesystem traversal to the scheduler instead of running it on the
+# login node. This is the sanctioned alternative Layer 1's refusal points at
+# for an expensive mount, where there is no index and cannot be one -- see
+# docs/adr/0007-no-namespace-index.md.
+#
+#   walk-job -- du -sh /scratch/some/dataset
+#   walk-job -t 4:00:00 -- find /scratch/some/dataset -name '*.ckpt'
+#
+# What this buys, and what it does not:
+#
+#   It buys a WALL-CLOCK bound, enforced by the scheduler. A namespace large
+#   enough to need this cannot be bounded by -maxdepth without also answering
+#   a different question than the user asked, so the bound moves to the axis
+#   that still works. Unlike -maxdepth this is not advisory: the scheduler
+#   kills the job, so a walk nobody is watching any more still ends.
+#
+#   It buys the login node's responsiveness back for everyone sharing it.
+#
+#   It does NOT make the walk cheap. The same metadata operations hit the same
+#   storage cluster from a different client. This moves load off the login
+#   node, not off the filesystem. A walk that should not happen at all is not
+#   fixed by submitting it.
+#
+# POSIX sh, no bashisms: this runs on the login node, whose shell this
+# project does not choose, and it must keep working if /bin/sh is dash
+# (ADR-0015).
+#
+# Every site fact below is a stamped literal (ADR-0013): `walk-blocker build`
+# rewrites the value on each `# GENERATED from` line from site.toml, and the
+# in-tree file carries a placeholder sentinel that no build ever ships. Nothing
+# here reads configuration at run time.
+
+set -eu
+
+WJ_VERSION='0.1.0'  # GENERATED from VERSION
+
+WJ_SITE_PARTITION='datamover'  # GENERATED from site.toml:slurm.partition
+WJ_SITE_QOS='low'  # GENERATED from site.toml:slurm.qos
+WJ_SITE_ACCOUNT=''  # GENERATED from site.toml:slurm.account
+WJ_SITE_TIME='1:00:00'  # GENERATED from site.toml:slurm.default_time
+WJ_SITE_MEM='8G'  # GENERATED from site.toml:slurm.default_mem
+WJ_SITE_SBATCH_GLOB='/opt/slurm/*/bin/sbatch'  # GENERATED from site.toml:slurm.sbatch_glob
+WJ_NICE='19'  # GENERATED from site.toml:slurm.nice
+WJ_SITE_OUT='walk-job-%j.out'  # GENERATED from site.toml:slurm.output_pattern
+WJ_SITE_BFS='/usr/bin/bfs'  # GENERATED from site.toml:trusted_binaries.bfs
+
+# The WALK_JOB_* overrides are legitimate, and the difference from the audit
+# sinks in the shim and the installer is who is being defended against. Those
+# run as root and must not resolve anything through what their caller
+# controls. This runs AS the caller, who could already run `sbatch` by hand
+# with any option they like -- so an override here grants them nothing, and
+# what it buys is a test that can drive every branch.
+WJ_PARTITION=${WALK_JOB_PARTITION:-$WJ_SITE_PARTITION}
+
+# Either may be stamped empty when the site does not use it; an empty value
+# means the option is not passed at all, so the scheduler applies its own
+# default rather than being handed an empty name.
+WJ_QOS=${WALK_JOB_QOS:-$WJ_SITE_QOS}
+WJ_ACCOUNT=$WJ_SITE_ACCOUNT
+
+# Deliberately modest: a small partition is bounded by its default wall clock,
+# and a default generous enough for the largest plausible walk would let one
+# user hold it for a shift (ADR-0007). Raising it is a decision the caller
+# makes explicitly with -t, which is the point -- the number is visible in
+# the command line and in `squeue`, not buried in a config file.
+WJ_TIME=${WALK_JOB_TIME:-$WJ_SITE_TIME}
+
+# --mem is ALWAYS passed. A partition configured with DefMemPerNode=UNLIMITED
+# does not mean "no reservation" -- a job that names no --mem is charged the
+# node's entire memory, and then queues behind any other job on the node with
+# an estimated start far in the future, on hardware that is otherwise idle. So
+# --mem is not tuning here; it is the difference between the sanctioned
+# alternative running now and appearing to be broken.
+#
+# The site default is generous for a metadata walk. `du` is the one that
+# grows: it holds a hardlink table proportional to the number of
+# multiply-linked inodes seen.
+WJ_MEM=${WALK_JOB_MEM:-$WJ_SITE_MEM}
+
+WJ_OUT=
+WJ_DRYRUN=0
+WJ_SELF=${0##*/}
+
+wj_die() {
+    printf '%s: %s\n' "$WJ_SELF" "$1" >&2
+    exit 2
+}
+
+# "<partition>[, qos <qos>][, account <account>]" -- what the job runs under,
+# naming only the options that will actually be passed.
+wj_under() {
+    printf '%s' "$WJ_PARTITION"
+    if [ -n "$WJ_QOS" ]; then printf ', qos %s' "$WJ_QOS"; fi
+    if [ -n "$WJ_ACCOUNT" ]; then printf ', account %s' "$WJ_ACCOUNT"; fi
+}
+
+wj_usage() {
+    cat <<USAGE
+usage: $WJ_SELF [-t TIME] [-o OUTFILE] [-p PARTITION] [-q QOS] [-m MEM] [-n] -- COMMAND [ARG...]
+
+Run COMMAND under the scheduler ($(wj_under)) instead of on the login node,
+with a wall-clock limit the scheduler enforces.
+
+  -t TIME       wall-clock limit (default $WJ_TIME, any sbatch -t format)
+  -o OUTFILE    output path; %j expands to the job id
+                (default ./$WJ_SITE_OUT)
+  -p PARTITION  partition (default $WJ_PARTITION)
+  -q QOS        QoS (default ${WJ_QOS:-none, the scheduler decides})
+  -m MEM        memory reservation (default $WJ_MEM); raise it only if the
+                job was killed for exceeding it, never "to be safe" -- an
+                oversized reservation is what makes a job queue for a day
+                behind an otherwise idle node
+  -n            print the sbatch invocation and exit without submitting
+  -h            this text
+  --version     print the walk-blocker version this was built from
+
+Everything after -- is the command, passed through argv and re-quoted, so
+globs and spaces survive:
+
+  $WJ_SELF -- du -sh /scratch/some/dataset
+  $WJ_SELF -t 4:00:00 -- find /scratch/some/dataset -name '*.ckpt'
+
+This moves the walk off the login node. It does not make the walk cheap: the
+same metadata load reaches the same storage cluster from a different client.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        -t) [ $# -ge 2 ] || wj_die "-t needs a value"; WJ_TIME=$2; shift 2 ;;
+        -o) [ $# -ge 2 ] || wj_die "-o needs a value"; WJ_OUT=$2; shift 2 ;;
+        -p) [ $# -ge 2 ] || wj_die "-p needs a value"; WJ_PARTITION=$2; shift 2 ;;
+        -q) [ $# -ge 2 ] || wj_die "-q needs a value"; WJ_QOS=$2; shift 2 ;;
+        -m) [ $# -ge 2 ] || wj_die "-m needs a value"; WJ_MEM=$2; shift 2 ;;
+        -n) WJ_DRYRUN=1; shift ;;
+        -h|--help) wj_usage; exit 0 ;;
+        --version) printf 'walk-blocker %s\n' "$WJ_VERSION"; exit 0 ;;
+        --) shift; break ;;
+        -*) wj_die "unknown option $1 (put the command after --)" ;;
+        # A bare command with no -- is accepted, because a refusal the user is
+        # reading in anger should not also be a syntax lesson. It only works
+        # while the command's own first word is not dash-prefixed, which is
+        # why -- is what the usage and the refusal text both show.
+        *) break ;;
+    esac
+done
+
+[ $# -gt 0 ] || { wj_usage >&2; exit 2; }
+
+: "${WJ_OUT:=$WJ_SITE_OUT}"
+
+# sbatch reaches an interactive PATH through the site's login profile and is
+# absent from a non-login `ssh host 'cmd'` -- which is exactly the shape of
+# the incident this tree exists for, so resolving it here is not a nicety. The
+# site names it as a glob so a versioned install prefix does not break on the
+# next upgrade.
+#
+# The glob is an environment seam for the reason given above the overrides:
+# the `command -v` line already trusts the caller's PATH completely, so an
+# override grants nothing that `PATH=... sbatch` would not. What it buys is a
+# test that can prove the no-sbatch-anywhere branch; without it the branch is
+# reachable only on a host with no scheduler installed under the site's glob,
+# which is every developer workstation and not the node this ships to.
+WJ_SBATCH_GLOB=${WALK_JOB_SBATCH_GLOB:-$WJ_SITE_SBATCH_GLOB}
+
+wj_sbatch=
+if command -v sbatch >/dev/null 2>&1; then
+    wj_sbatch=sbatch
+else
+    # Unquoted on purpose: this is where the glob expands. A pattern that
+    # matches nothing stays literal, `-x` fails on it, and the loop falls
+    # through to wj_die -- `set -e` does not fire, because it is ignored for
+    # a failing left operand of an && list.
+    for wj_c in $WJ_SBATCH_GLOB; do
+        [ -x "$wj_c" ] && wj_sbatch=$wj_c && break
+    done
+fi
+[ -n "$wj_sbatch" ] || wj_die "no sbatch on PATH or under $WJ_SBATCH_GLOB"
+
+# Re-quote each argument for the single shell string --wrap takes. Without
+# this, `find ... -name '*.ckpt'` reaches the compute node as an unquoted glob
+# and expands against the job's cwd instead of being passed to find.
+wj_quote() {
+    printf "'"
+    printf '%s' "$1" | sed "s/'/'\\\\''/g"
+    printf "'"
+}
+
+# bfs is the one wrapped tool whose name tells you nothing about which binary
+# ran. A process's comm is 15 bytes anything may overwrite, and on a login
+# node what overwrites it is often the wrapper that launched the tool rather
+# than the tool itself. /proc/PID/exe is unreadable for another user's
+# process, so the submitted job would leave no record of which bfs it was.
+# Meanwhile a node may carry a packaged bfs alongside user-local builds in
+# private homes, which makes a bare `bfs` on the caller's PATH genuinely
+# ambiguous.
+#
+# Pinning argv[0] to the site's trusted bfs puts the answer in the job's own
+# command line, which is the only place it survives: the job's comm will name
+# whatever launched it.
+#
+# argv[0] ONLY, and only when it is exactly `bfs` -- an absolute path the
+# caller already gave, a `./bfs`, or any other tool passes through untouched.
+#
+# The existence check CANNOT run here. walk-job submits from the login node,
+# but the wrapped command executes on a compute node whose package state this
+# process never observes. Testing `-x` on the login node and baking the answer
+# into the wrap string would assert something about a host we never touched:
+# present here and absent there fails the job on a path that resolves
+# nowhere, and absent here but present there reintroduces the exact ambiguity
+# this exists to remove, on the one host where the walk actually happens. So
+# the test itself goes into the wrap string, to run where its answer applies.
+#
+# A site that names no `[trusted_binaries].bfs` stamps this empty, and then
+# the arm is skipped entirely: a bare `bfs` is submitted as typed, because
+# there is no path to pin it to.
+#
+# Not a trust boundary, and the seam is deliberate for the same reason the
+# sbatch glob above is one: this runs as the caller, whose PATH already
+# decides which bfs they get.
+#
+# Layer 2 is unaffected: tool_from_argv() takes argv[0]'s basename, so the
+# pinned path still resolves to the bfs profile -- and the record gets
+# strictly better, because the argv now names the binary.
+WJ_BFS=${WALK_JOB_BFS:-$WJ_SITE_BFS}
+
+# nice(1) only. ionice(1) was here and was removed: a network filesystem's
+# traffic is generated by its client, not by the kernel block layer, and an
+# I/O scheduling class applies to a local block device. On a client that
+# does its I/O from userspace it reaches none of the traffic this job
+# generates. It looked like throttling and throttled nothing.
+if [ -n "$WJ_BFS" ] && [ "$1" = bfs ]; then
+    shift
+    wj_rest=
+    for wj_a in "$@"; do
+        wj_rest="$wj_rest $(wj_quote "$wj_a")"
+    done
+    wj_bfs_q=$(wj_quote "$WJ_BFS")
+    wj_cmd="if [ -x $wj_bfs_q ]; then nice -n $WJ_NICE $wj_bfs_q$wj_rest; else nice -n $WJ_NICE bfs$wj_rest; fi"
+else
+    wj_cmd="nice -n $WJ_NICE"
+    for wj_a in "$@"; do
+        wj_cmd="$wj_cmd $(wj_quote "$wj_a")"
+    done
+fi
+
+# --export=ALL,VAR=VAL keeps the caller's environment and adds the override.
+#
+# WALK_BLOCKER_UNSCOPED=1 is set on purpose. The guard is installed on the
+# login node, so where the compute nodes carry no shim this job would run
+# unguarded either way -- but that is a fact about one deployment, not a
+# property of the design. Setting it explicitly means that if the guard ever
+# reaches the compute nodes, the walk keeps working AND lands in the journal
+# as a recorded override, which is what the escape hatch is for (ADR-0001).
+# Depending on the guard's absence would give a silent bypass instead.
+#
+# Note where that record would land: journald is per-host, so it goes to the
+# COMPUTE node's journal, not the login node's. The refusal text points at
+# the login node's journal, which would not show it. Documented rather than
+# worked around -- this grants nothing the caller could not grant themselves.
+#
+# --qos and --account are appended only when set: a site may use neither, and
+# an empty name is not the same request as no option (see the overrides
+# above).
+set -- \
+    --parsable \
+    --job-name "$WJ_SELF" \
+    --partition "$WJ_PARTITION"
+if [ -n "$WJ_QOS" ]; then set -- "$@" --qos "$WJ_QOS"; fi
+if [ -n "$WJ_ACCOUNT" ]; then set -- "$@" --account "$WJ_ACCOUNT"; fi
+set -- "$@" \
+    --time "$WJ_TIME" \
+    --nodes 1 \
+    --ntasks 1 \
+    --cpus-per-task 1 \
+    --mem "$WJ_MEM" \
+    --output "$WJ_OUT" \
+    --export "ALL,WALK_BLOCKER_UNSCOPED=1" \
+    --wrap "$wj_cmd"
+
+if [ "$WJ_DRYRUN" -eq 1 ]; then
+    printf '%s' "$wj_sbatch"
+    for wj_a in "$@"; do printf ' %s' "$(wj_quote "$wj_a")"; done
+    printf '\n'
+    exit 0
+fi
+
+wj_raw=$("$wj_sbatch" "$@")
+
+# --parsable yields "jobid" or "jobid;cluster". Take the id, and do not assume
+# it is one: a non-numeric answer means sbatch printed something other than a
+# job id, and echoing it verbatim beats reporting a submission that may not
+# have happened.
+wj_jobid=${wj_raw%%;*}
+case $wj_jobid in
+    ''|*[!0-9]*)
+        printf '%s: sbatch did not return a job id: %s\n' "$WJ_SELF" "$wj_raw" >&2
+        exit 1
+        ;;
+esac
+
+# %j is sbatch's expansion, not the shell's, so resolve it for the human.
+#
+# Left to right, one token at a time, because %% is a LITERAL % to sbatch:
+# it writes `out-%%j.log` as `out-%j.log`, so substituting every `%j` blindly
+# reports a path that will never exist. Peeling %% first is the whole fix.
+#
+# Parameter expansion rather than sed throughout: the job id would otherwise
+# be interpolated into an s/// expression, where a single / in it changes the
+# delimiter and the substitution silently fails. Job ids are digits today,
+# which is exactly the kind of assumption that holds until it does not.
+wj_shown=
+wj_rest=$WJ_OUT
+while [ -n "$wj_rest" ]; do
+    case $wj_rest in
+        %%*) wj_shown=$wj_shown% ; wj_rest=${wj_rest#??} ;;
+        %j*) wj_shown=$wj_shown$wj_jobid ; wj_rest=${wj_rest#??} ;;
+        # Peel exactly one character: strip from the end everything that
+        # follows the first, leaving the first. The inner expansion is quoted
+        # so a `*` or `?` in the path is not read as a pattern.
+        *) wj_shown=$wj_shown${wj_rest%"${wj_rest#?}"} ; wj_rest=${wj_rest#?} ;;
+    esac
+done
+
+printf 'submitted %s as job %s (%s, limit %s, mem %s)\n' \
+    "$WJ_SELF" "$wj_jobid" "$(wj_under)" "$WJ_TIME" "$WJ_MEM"
+printf 'output: %s\n' "$wj_shown"
+printf 'watch:  squeue -j %s\n' "$wj_jobid"
+printf 'cancel: scancel %s\n' "$wj_jobid"

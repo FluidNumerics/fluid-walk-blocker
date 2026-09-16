@@ -88,6 +88,19 @@ def set_dotted(data, dotted, value):
         node[key] = value
 
 
+def test_a_disabled_hook_still_needs_its_file(tmp_path):
+    # The uninstall path removes a previously written hook; a disabled hook
+    # with no file would leave the installer unable to name it.
+    import walk_blocker.config as C
+    src = open(os.path.join(ROOT, "examples", "site.example.toml"), encoding="utf-8").read()
+    src = src.replace('file = "/etc/fish/conf.d/walk-blocker.fish"\n', "").replace(
+        "[hooks.fish]\nenabled = true", "[hooks.fish]\nenabled = false")
+    p = tmp_path / "site.toml"; p.write_text(src, encoding="utf-8")
+    with pytest.raises(C.ConfigError) as exc:
+        C.load_site(str(p))
+    assert exc.value.path == "hooks.fish.file"
+
+
 def test_the_toml_writer_round_trips_the_example():
     data = load_example_dict()
     assert tomllib.loads(dump_toml(data)) == data
@@ -180,7 +193,12 @@ def test_a_partial_hook_table_is_filled_but_needs_its_file():
     with pytest.raises(config.ConfigError) as exc:
         config.from_dict(data)
     assert exc.value.path == "hooks.bash.file"
+    # Disabled is not exempt: the uninstall path must still know the file.
     data["hooks"]["bash"] = {"enabled": False}
+    with pytest.raises(config.ConfigError) as exc:
+        config.from_dict(data)
+    assert exc.value.path == "hooks.bash.file"
+    data["hooks"]["bash"] = {"enabled": False, "file": "/etc/bash.bashrc"}
     assert config.from_dict(data).lookup("hooks.bash.gate") == "required"
 
 
@@ -244,7 +262,7 @@ BAD_SITES = [
     ("timer.on_calendar", "every ten minutes", "calendar"),
     ("timer.timeout_start_sec", 100, "floor"),
     ("reaper.origins[0].pattern", "(", "compile"),
-    ("hooks.bash.file", REMOVE, "required while enabled"),
+    ("hooks.bash.file", REMOVE, "required (even when"),
     ("hooks.fish.package", "fish", "Additional properties"),
     ("site.display_name", "Example 100% HPC", "pattern"),
     ("site.docs_url", "https://docs.example.org/hpc walk-blocker", "pattern"),
