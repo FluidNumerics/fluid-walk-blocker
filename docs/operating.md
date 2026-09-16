@@ -72,7 +72,8 @@ The tables, in the order the schema lists them:
   filters. Thresholds select which findings carry `stalling_slice: true`;
   they never suppress a record (ADR-0009).
 - `[timer]` — the reaper's `OnCalendar=` slot and its budgets. The slot is
-  chosen against the live schedule of the target node, never copied.
+  chosen against the live schedule of the target node, never copied
+  (ADR-0017).
 
 Keep the measurements that justified each value beside `site.toml`, outside
 this tree. Validation cannot tell a measured value from a copied one.
@@ -498,7 +499,8 @@ wanted for a root-run installer's write targets.
 Two changes deserve a second look before the rebuild. A change under
 `[install]` or `[hooks.<shell>].file` moves where root writes; read the
 preview (step 7) with particular care. A change to `[timer].on_calendar`
-must be re-surveyed against the live schedule of the node, not carried over.
+must be re-surveyed against the live schedule of the node, not carried over
+(ADR-0017).
 
 ## 14. Uninstall
 

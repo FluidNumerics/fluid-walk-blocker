@@ -52,6 +52,7 @@ the ADR it bears on.
 | 0014 The generic tree carries decisions, not site evidence | n/a: structural |
 | 0015 Node code is POSIX `sh` or stdlib-only Python 3.9, and the shim is the `sh` part | `sh` versus `python3 -S` start cost; the budget history against load |
 | 0016 A mount's class defaults from remoteness, is overridden per mount in site config, and is measured only out of band | n/a: design discussion |
+| 0017 The reaper's timer slot is site configuration chosen against the live schedule of the target node | Timer census at a reference deployment: the neighbours, their accuracy and delay settings, and the slot chosen |
 
 ## What this file is not
 

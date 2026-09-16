@@ -186,7 +186,7 @@ node's load class changes.
 ## Choose the timer slot against the live schedule
 
 Keys: `[timer].on_calendar`, `randomized_delay_sec`, `accuracy_sec`,
-`timeout_start_sec`.
+`timeout_start_sec`. Decision record: ADR-0017.
 
 This node is shared, and the reaper's poll is one more scheduled thing on
 it. The slot in the example is fictional; copying it is the failure mode.

@@ -15,7 +15,7 @@ configuration.
 
 Copyright Fluid Numerics LLC. All rights reserved. This tree is private.
 
-Read `README.md` first, then `docs/adr/0001` through `0016` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0017` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -139,7 +139,7 @@ work. Every design choice here affects people who did not ask for it:
   against the live schedule of the target node** — `systemctl list-timers
   --all` and the site's cron — never copied from a doc, an example, or
   another site. Pick a minute and a second no neighbour uses; a per-minute
-  collector makes the second field the only separation left.
+  collector makes the second field the only separation left. See ADR-0017.
 - The deployed payload and its audit trail live under `[install].prefix`
   and `[install].spool_dir` on **local disk** — never under a home directory,
   which may be on the filesystem under investigation. A monitor that lives
@@ -234,7 +234,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0016`, in order — the decisions
+3. `docs/adr/0001` … `0017`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports
