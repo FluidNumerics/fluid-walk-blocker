@@ -38,8 +38,8 @@ packages = ["src/walk_blocker"]
 # pins that every source here is tracked.
 [tool.hatch.build.targets.wheel.force-include]
 "VERSION" = "walk_blocker/_VERSION"
-"schema" = "walk_blocker/_schema"
-"node" = "walk_blocker/_node"
+"schema" = "walk_blocker/schema"
+"node" = "walk_blocker/node"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
