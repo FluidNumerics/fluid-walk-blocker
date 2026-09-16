@@ -16,8 +16,8 @@ configuration.
 Copyright Fluid Numerics LLC. All rights reserved. This tree is private.
 
 Read `README.md` first, then `docs/adr/0001` through `0016` in order, then
-`docs/site-config.md` (once it exists) for what a site measures before it can
-be deployed. This file is the part that is easy to get wrong.
+`docs/site-config.md` for what a site measures before it can be
+deployed. This file is the part that is easy to get wrong.
 
 ## Non-negotiables
 
@@ -211,11 +211,13 @@ issues and docs.
 
 ```sh
 uv run --group dev pytest tests/ -q                     # the suite
-uv run walk-blocker validate --site site.toml           # schema + semantic checks
+uv run walk-blocker validate --site examples/site.example.toml   # schema + semantic checks
 uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check
-shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh   # walk-job joins at Milestone 5
+uv run walk-blocker survey --mounts /proc/mounts --site examples/site.example.toml
+shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job
 uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
+uv run --group dev pyflakes examples/payload/deploy.py   # deploy.py is Python, not shell
 python3 tools/check_no_site_literals.py --require-terms --quiet   # IP hygiene, same as CI; see tools/README-ip-gate.md
 ```
 
@@ -231,7 +233,11 @@ root.
 ## Reading order
 
 1. `README.md` — what it is, what is in and out of scope
-2. `docs/adr/0001` … `0016`, in order — the decisions
-3. `docs/evidence.md` — where the evidence is, and why it is not here
-4. `CLAUDE.md` — this file: the non-negotiables and the parts that are easy
+2. `docs/plan.md` — the architecture as built, on one page
+3. `docs/adr/0001` … `0016`, in order — the decisions
+4. `docs/site-config.md` — what a site measures before it can be deployed
+5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
+   that reports
+6. `docs/evidence.md` — where the evidence is, and why it is not here
+7. `CLAUDE.md` — this file: the non-negotiables and the parts that are easy
    to get wrong

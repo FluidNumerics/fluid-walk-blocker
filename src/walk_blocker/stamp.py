@@ -65,9 +65,24 @@ JOIN_SUFFIX = "[:]"
 # Payload-relative path -> the sources that file MUST carry a marker for.
 # `search_rules.py` and `survey.py` are copied verbatim and the shim is a
 # whole-file template. A file with a marker that is not in this table fails
-# the build (see `build.py`), so a row cannot be forgotten silently;
-# `deploy.py` joins when it lands.
+# the build (see `build.py`), so a row cannot be forgotten silently.
 CONSUMERS = {
+    "deploy.py": (
+        "VERSION",
+        "site.toml:install.prefix", "site.toml:install.unit_dir",
+        "site.toml:install.spool_dir", "site.toml:install.audit_filename",
+        "site.toml:install.staging_parent",
+        "site.toml:hooks.bash.file", "site.toml:hooks.bash.enabled",
+        "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.enabled",
+        "site.toml:hooks.fish.file", "site.toml:hooks.fish.enabled",
+        "site.toml:timer.on_calendar", "site.toml:timer.randomized_delay_sec",
+        "site.toml:timer.accuracy_sec", "site.toml:timer.persistent",
+        "site.toml:timer.timeout_start_sec", "site.toml:timer.relink_timeout_s",
+        "site.toml:timer.relink_kill_after_s",
+        "site.toml:trusted_binaries.timeout", "site.toml:trusted_binaries.sh",
+        "site.toml:trusted_binaries.python3",
+        "site.toml:site.display_name",
+    ),
     "walk-job": (
         "VERSION",
         "site.toml:slurm.partition", "site.toml:slurm.qos", "site.toml:slurm.account",
