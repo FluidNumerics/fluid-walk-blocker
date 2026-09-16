@@ -132,9 +132,8 @@ An earlier draft of this record claimed a broader standalone role for
 `install.sh` than the installer enforced; review caught the contradiction and
 the record, not the installer, was corrected.
 
-**A future location change is a `site.toml` change plus a build, not a
-flag.** If the payload ever has to move, the `[install]` key changes, the
-literals are regenerated, and the tests move with them. That is the intended
+**A future location change is a commit, not a flag.** If the payload ever has
+to move, the constant changes and the tests move with it. That is the intended
 cost: relocating a root-run installer's write targets is a decision worth a
 diff and a review, not a command-line argument.
 

@@ -78,7 +78,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Let PSI gate what is scanned, or gate `--kill` on a stall | ADR-0009 |
 | Gate `opaque_traversal` on "on an expensive mount" | ADR-0010 — makes the arm unreachable |
 | Assume stdin is a terminal in Layer 2 | ADR-0011 |
-| Fold a best-effort hook shell into the hard gate, or soften a hard one to match | ADR-0008 — the class is config, chosen from a census |
+| Fold a best-effort hook shell into the hard gate, or soften a required one to match | ADR-0008 — the class is config, chosen from a census |
 | Read PSI per-scope instead of per-slice | ADR-0003 |
 | Feed `origin` into `classify()` | ADR-0003 — descriptive only |
 | Make the audit directory `0750` again | ADR-0012 |
@@ -179,10 +179,13 @@ Trevor's pronouns are **xe/xem/xyr**; use them in every written output.
 | Task | Command |
 |---|---|
 | Tests | `uv run --group dev pytest tests/ -q` |
-| One test | `uv run --group dev pytest tests/test_reaper.py::NAME -q` |
-| Compile site config | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload` |
-| Artifacts not stale | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check` |
-| Schema valid | `uv run walk-blocker validate --site examples/site.example.toml` |
-| Shell lint | `shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job` |
+| One test | `uv run --group dev pytest tests/test_version.py::NAME -q` |
+| Compile site config (Milestone 4) | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload` |
+| Artifacts not stale (Milestone 4) | `uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check` |
+| Schema valid (Milestone 2) | `uv run walk-blocker validate --site examples/site.example.toml` |
+| Shell lint (Milestone 4) | `shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job` |
 | Markdown lint | `uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md` |
-| IP hygiene | `python3 tools/check_no_site_literals.py` (also a CI job) |
+| IP hygiene (real gate at Milestone 1) | `python3 tools/check_no_site_literals.py` (also a CI job) |
+
+Rows tagged with a milestone do not work yet; `CLAUDE.md` is the authority on
+which tools exist.

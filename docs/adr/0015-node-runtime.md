@@ -68,9 +68,10 @@ matrix exists to catch.
 
 **The node Python is written to 3.9.** No `match`, no `X | Y` in annotations,
 no parenthesised context managers, no `tomllib`. The workstation tool under
-`src/walk_blocker/` runs under `uv` and has no such limit; the boundary is the
-`node/` directory, and a helper both sides need is written to the node's
-standard.
+`src/walk_blocker/` runs under `uv` and may import third-party packages, but
+is held to 3.9 syntax because one package and one suite run across the whole
+CI matrix (`tomli` stands in for `tomllib`); stdlib-only is the `node/`
+boundary, and a helper both sides need is written to the node's standard.
 
 **`measure.sh` gates performance, in two ways.** It times the fast path (an
 allowed command) and the guarded path (a command that reaches a mount

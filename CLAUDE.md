@@ -187,9 +187,10 @@ positive, fix the wording; do not loosen the gate.
 
 ## Style
 
-Python 3.11+ locally for the build tool, `src/` and `tests/`; standalone
-`uv run` scripts with PEP 723 headers are fine there and nowhere under
-`node/`.
+Python 3.9+ everywhere: the build tool, `src/` and `tests/` run on the whole
+CI matrix (`tomli` stands in for `tomllib` below 3.11). Standalone `uv run`
+scripts with PEP 723 headers are fine anywhere outside `node/` and
+`deploy.py`.
 
 Comment where a comment earns its place — chiefly where a simpler-looking
 alternative is wrong. Don't annotate the obvious.
@@ -206,7 +207,7 @@ issues and docs.
 uv run --group dev pytest tests/ -q                     # the suite
 uv run walk-blocker validate --site site.toml           # schema + semantic checks (Milestone 2)
 uv run walk-blocker build --site examples/site.example.toml --out examples/payload --check   # (Milestone 4)
-shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job
+shellcheck --shell=sh --severity=warning examples/payload/shim/*.sh examples/payload/walk-job   # (Milestone 4)
 uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md CLAUDE.md docs/*.md docs/adr/*.md
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 python3 tools/check_no_site_literals.py                 # IP hygiene, same as CI (Milestone 1)
@@ -216,8 +217,9 @@ Commands marked with a milestone do not work yet; they name the shape the
 tooling will take so the docs do not have to be rewritten when it lands.
 
 CI runs the suite on Python 3.9–3.12 in an enterprise-Linux container as a
-non-root user, so the shell tests see both dash and bash-as-`/bin/sh` and
-the permission tests are not vacuous under root.
+non-root user, so that when the shell and permission tests arrive with the
+node code they see both dash and bash-as-`/bin/sh` and are not vacuous under
+root.
 
 ## Reading order
 

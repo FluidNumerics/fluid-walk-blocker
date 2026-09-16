@@ -1,4 +1,4 @@
-# ADR-0008: Hook shells are a config list with hard and best-effort classes, verified not assumed
+# ADR-0008: Hook shells are a config list with required and best-effort classes, verified not assumed
 
 **Status:** accepted, 2026-09-16
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`

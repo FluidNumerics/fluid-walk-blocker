@@ -1,7 +1,7 @@
 # ADR-0007: No namespace index; the depth ceiling is per-mount site config, and the general answer is a wall-clock-bounded job
 
 **Status:** accepted, 2026-09-16
-The clause "the shim keys on filesystem type" is narrowed by ADR-0016 (mount class: remoteness default, per-mount overrides, out-of-band survey).
+The clause "`[filesystems].remote_fstypes` is a filesystem-*type* test" is narrowed by ADR-0016 (mount class: remoteness default, per-mount overrides, out-of-band survey).
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0007 — see `docs/evidence.md`
 
 ## Context
@@ -161,7 +161,8 @@ do not say when they were last true.
 ## Re-measure when
 
 Adding or raising any per-mount allowance, including adding a mount that is not
-yet listed. The method, in full, is in `docs/site-config.md`; the bar is here:
+yet listed. The method, in full, belongs in `docs/site-config.md`, which is
+written with the schema rather than with this record; the bar is here:
 
 - **Pre-register the criteria** before the run — what entry count and what wall
   time at the proposed depth would be acceptable — and make them stricter for a

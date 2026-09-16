@@ -43,7 +43,7 @@ the ADR it bears on.
 | 0005 `deploy.py` takes no path arguments | The root-write-sink × interpolation-context matrix, and the review rounds behind it |
 | 0006 Source tree stays user-owned | The repeated review finding, and the snapshot-window measurement |
 | 0007 No namespace index; per-mount ceiling is site config; walk-job is the general answer | Mount census (type, capacity, inodes); staged depth walks with pre-registered criteria; vendor catalog sizing; `du -d` traversal counts |
-| 0008 Hook shells are a config list, hard vs best-effort | Login-shell and live-process shell censuses; startup-file probes per shell |
+| 0008 Hook shells are a config list, required vs best-effort | Login-shell and live-process shell censuses; startup-file probes per shell |
 | 0009 PSI corroborates, does not gate | Differenced PSI per uid against a live process table; counter-by-counter blindness table; full-table classification count; the trail reading behind the alerting split |
 | 0010 `opaque_traversal` names unmodelled tools | The first trail reading, by verdict and tool |
 | 0011 Layer 2 reads stdin from /proc | `ugrep` stdin behaviour by version; fd/0 device probes; per-process `stat` cost |

@@ -1,7 +1,7 @@
 # ADR-0016: A mount's class defaults from remoteness, is overridden per mount in site config, and is measured only out of band
 
 **Status:** accepted, 2026-09-16
-**Narrows:** ADR-0007, "the shim keys on filesystem type"
+**Narrows:** ADR-0007, "`[filesystems].remote_fstypes` is a filesystem-*type* test"
 **Evidence:** n/a, design discussion — see `docs/evidence.md`
 
 ## Context
