@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "walk-blocker"
+dynamic = ["version"]
+description = "Config-driven guardrails against unbounded filesystem walks on shared HPC login nodes"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [{name = "Fluid Numerics LLC"}]
+classifiers = [
+  "Private :: Do Not Upload",
+  "License :: Other/Proprietary License",
+]
+dependencies = [
+  "jsonschema>=4.18",
+  "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+walk-blocker = "walk_blocker.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pyflakes"]
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*$"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/walk_blocker"]
+
+# Only tracked paths may be force-included: hatchling fails the build on a
+# missing source, and an empty directory is not in git however present it is
+# on one developer's disk (review round 2 on PR #1). `node/` and `schema/`
+# join this table when they hold files (Milestones 4 and 2).
+[tool.hatch.build.targets.wheel.force-include]
+"VERSION" = "walk_blocker/_VERSION"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

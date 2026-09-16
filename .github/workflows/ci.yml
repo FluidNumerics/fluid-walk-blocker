@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # No branch filter: a `branches:` filter here matches the PR's BASE, not
+  # its head, so a stacked PR would match nothing and run nothing.
+  pull_request:
+
+jobs:
+  test:
+    # Rocky Linux 9, not the Ubuntu default: its /bin/sh is bash, distinct
+    # from dash, so the shell tests can exercise both. Its distro python3
+    # is 3.9, which is the node floor (ADR-0015); the matrix interpreters
+    # come from uv.
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      # The container runs as root, which would make every ownership and
+      # permission test vacuous. The suite runs as a real unprivileged user.
+      - name: Install git, python3, dash, and a non-root test user
+        run: |
+          dnf install -y epel-release
+          dnf install -y git python3 dash shadow-utils
+          useradd -m ciuser
+
+      - uses: actions/checkout@v4
+
+      - name: Hand the workspace to the non-root test user
+        run: chown -R ciuser:ciuser "$GITHUB_WORKSPACE" /home/ciuser
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run the test suite as the non-root user
+        run: |
+          runuser -u ciuser -- env \
+            HOME=/home/ciuser \
+            PATH="$PATH" \
+            UV_PYTHON="$UV_PYTHON" \
+            UV_CACHE_DIR=/home/ciuser/.cache/uv \
+            uv run --group dev pytest tests/ -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      - name: pymarkdownlnt
+        run: |
+          uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown \
+            scan README.md CLAUDE.md docs/*.md docs/adr/*.md
+
+      - name: yamllint
+        run: uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
+
+  ip-hygiene:
+    # Placeholder until Milestone 1 lands the real gate. It exits 0 and
+    # says so, so nobody reads a green check here as a scan that happened.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: IP-hygiene gate (placeholder)
+        run: python3 tools/check_no_site_literals.py
