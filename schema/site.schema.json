@@ -580,7 +580,7 @@
       "required": [
         "on_calendar"
       ],
-      "description": "The reaper's systemd timer. This node is shared; the slot is chosen against the live schedule of the target node and never copied from an example.",
+      "description": "The reaper's systemd timer (ADR-0017). This node is shared; the slot is chosen against the live schedule of the target node and never copied from an example.",
       "properties": {
         "on_calendar": {
           "type": "string",
