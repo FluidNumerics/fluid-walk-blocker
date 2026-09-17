@@ -7,6 +7,7 @@ measurement must be what the site recorded -- rendered from the same
 """
 import importlib.util
 import os
+import re
 
 import pytest
 
@@ -117,3 +118,138 @@ def test_the_figure_formatters_match_the_surveys():
         assert "," not in alternatives.human_count(n)
         assert not any(len(run) >= 9 for run in
                        __import__("re").findall(r"\d+", alternatives.human_count(n)))
+
+
+# --------------------------------------------------------------------------
+# the page is wrapped AFTER substitution (#38)
+# --------------------------------------------------------------------------
+
+# The test classifies lines on its own rather than reusing the renderer's
+# classifier: a bug in that classifier is one of the things this is for. It
+# deliberately has NO ordered-list rule, so a paragraph whose line begins with
+# a substituted number is prose here and must be wrapped as prose.
+_STRUCTURE = re.compile(r"^ {0,3}(?:\||#|>|[-*+]\s)")
+
+
+def _classified(text):
+    """(kind, line) for every line: prose, code, structure or blank."""
+    fenced = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            yield "code", line
+        elif fenced or line.startswith(("    ", "\t")):
+            yield "code", line
+        elif not line.strip():
+            yield "blank", line
+        elif _STRUCTURE.match(line):
+            yield "structure", line
+        else:
+            yield "prose", line
+
+
+def _prose_runs(text):
+    """Consecutive prose lines, grouped into the paragraphs they form."""
+    runs, current = [], []
+    for kind, line in _classified(text):
+        if kind == "prose":
+            current.append(line)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _long_site_and_policy():
+    """Values chosen to overflow: sixteen filesystem types spliced inline."""
+    site = conftest.make_site("/proc/mounts")
+    site["site"]["display_name"] = "the shared login node of a long-named cluster"
+    site["site"]["docs_url"] = (
+        "https://docs.example.org/very/long/path/to/the/hpc/handbook/walk-blocker")
+    policy = make_policy(remote_fstypes=(
+        "lustre", "wekafs", "beegfs", "gpfs", "ceph", "nfs4", "nfs", "cifs",
+        "smb3", "glusterfs", "panfs", "fuse.sshfs", "9p", "sshfs", "s3fs", "daos"))
+    return site, policy
+
+
+def _short_site_and_policy():
+    """And the other extreme: one short type, no optional lines."""
+    site = conftest.make_site("/proc/mounts")
+    site["site"]["display_name"] = "a node"
+    del site["site"]["docs_url"]
+    del site["site"]["contact"]
+    return site, make_policy(remote_fstypes=("nfs",))
+
+
+@pytest.mark.parametrize("build_site", [_long_site_and_policy, _short_site_and_policy],
+                         ids=["long-values", "short-values"])
+def test_every_prose_line_is_within_the_width_however_long_the_values_are(build_site):
+    """The template is hard-wrapped by hand and the substitutions land inside
+    those lines, so before this pass a site listing sixteen filesystem types
+    produced a line of a few hundred columns. Rendered as Markdown that is
+    invisible; read with `cat` on the node, which is where this page lives, it
+    is not."""
+    site, policy = build_site()
+    text = alternatives.render_page(policy, site, __version__)
+    for line in [l for run in _prose_runs(text) for l in run]:
+        if len(line) <= alternatives.WRAP_WIDTH:
+            continue
+        # The one permitted overflow: a single word that cannot be broken,
+        # such as a URL, which a reader may need to copy whole.
+        assert len(line.split()) == 1, "%d cols: %r" % (len(line), line)
+
+
+@pytest.mark.parametrize("build_site", [_long_site_and_policy, _short_site_and_policy],
+                         ids=["long-values", "short-values"])
+def test_no_paragraph_is_left_ragged(build_site):
+    """The other half of #38, and the half a width check alone would pass: a
+    SHORT value leaves a short line. Every line of a paragraph except its last
+    must be full, meaning the first word of the next line could not have been
+    added without exceeding the width. That is the definition of a greedy
+    fill, and it fails on text that was wrapped before substitution."""
+    site, policy = build_site()
+    text = alternatives.render_page(policy, site, __version__)
+    for run in _prose_runs(text):
+        for line, following in zip(run, run[1:]):
+            nxt = following.split()[0]
+            assert len(line) + 1 + len(nxt) > alternatives.WRAP_WIDTH, (
+                "ragged: %r could have taken %r" % (line, nxt))
+
+
+def test_the_wrapper_leaves_structure_and_code_exactly_as_it_found_them():
+    """Line breaks are significant inside all four, so the pass must not
+    gather them into paragraphs."""
+    source = "\n".join([
+        "# A heading that is quite long but is a heading and so is left alone",
+        "",
+        "| Mount | Class | A table row that runs past the width on purpose |",
+        "|---|---|---|",
+        "",
+        "    an indented code line that is deliberately much longer than the width",
+        "",
+        "- a bullet item that is also deliberately longer than the wrapping width",
+        "",
+        "> a quoted line that is likewise longer than the width and must survive",
+        "",
+        "```",
+        "a fenced line that is longer than the width and must survive untouched",
+        "```",
+        "",
+    ])
+    assert alternatives.reflow(source) == source
+
+
+def test_a_substituted_number_at_the_start_of_a_line_is_not_an_ordered_list():
+    """`@@MAXDEPTH@@. The measurements ...` renders as `2. The measurements`,
+    which looks like a list item and is not one -- CommonMark lets an ordered
+    list interrupt a paragraph only when it starts at 1. Reading it as
+    structure stranded the rest of the sentence on its own line."""
+    source = "guarded on the compiled default: depth\n2. The measurements follow.\n"
+    assert alternatives.reflow(source) == (
+        "guarded on the compiled default: depth 2. The measurements follow.\n")
+
+    # A real list, which starts its own block, still survives.
+    real = "A paragraph.\n\n1. first\n2. second\n"
+    assert alternatives.reflow(real) == real
