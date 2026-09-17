@@ -1,6 +1,6 @@
 {
   "files": {
-    "README.md": "42708ec31e93cfa10bea922df07fc7c9de9e5b317d867c73dd74f487df70c48f",
+    "README.md": "1c9ccb726d8050fa2dd25e11ac567908e5a3130fbf3d8d3b8b0a876e5575f4b5",
     "deploy.py": "a7cc72289de3273463813352ec8fb5f9e5688c86c0ac2ceb7744e1cb2a7b488b",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
@@ -19,11 +19,11 @@
     "docs/adr/0015-node-runtime.md": "d4b557d263e2a8e57a1437016625d4806ec39dd535752432c98330a7d3953f5a",
     "docs/adr/0016-mount-policy-three-tiers.md": "9458f7216f21a87de22c81b18bafbbf66401cd636def514107abd1faaad9fb9a",
     "docs/adr/0017-timer-slot-is-site-config.md": "afdba4dbf39b63d8a7fb9dd841dfa75770e8e0bfcc1c16c8cd181ea81ee04f2d",
-    "docs/adr/0018-fork-free-is-the-fast-path.md": "6bc9cfb5f13bfe4daefa7a977eed34bdaf08de77d41befc437a695d0f9f9b23f",
+    "docs/adr/0018-fork-free-is-the-fast-path.md": "c946dd27a72ba72f8fa78360ad4772301aa166dd580c3c68e21f7a733d323ec8",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "ba969de2e72fee26685416e1ff176001ab656931ccbe5adc15f51aa69b76e702",
     "docs/operating.md": "2cdcf98feabdc05618fef9c5e768dd86306ae18d7fb1b5a7f8493afee5b6e135",
-    "docs/plan.md": "208e8eef05561a96bcc904aedc3613d5518872aa6b611ea538b19d582aceeb14",
+    "docs/plan.md": "391e9a5c0c596e465c527ab48450a7f9a6e672556746c231211496843a6194e0",
     "docs/site-config.md": "2fa7175a3d1a365d73a8a26086e4e30e9bbca6114db134d3645542b8763730d1",
     "reaper.py": "c623d08a18bdd237f58a816cba51aff48c8a8a19a6fc608886cfac2e618d134f",
     "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",

@@ -120,7 +120,7 @@ Name the ones the task touches; do not paste all of them.
 - **The node never reads config.** A site value is a `site.toml` key, compiled by `walk-blocker build`. Adding a runtime read is an ADR-0013 question, not a convenience.
 - `node/` and `deploy.py` are **stdlib-only Python 3.9 or POSIX `sh`** — no PEP 723 there, no 3.10 syntax.
 - `guard.sh`, `wrapped_names.sh` and every stamped constant line are **generated**; change the rule table or `site.toml` and rebuild. `walk-blocker build --check` must pass.
-- The **fast path forks nothing**; the **guarded path runs exactly one program** before the real tool, the trusted `awk` over `/proc/mounts` (ADR-0018). Both paths read only `/proc/mounts` — no `statfs`, no network. A second program on the guarded path is a design change.
+- The **fast path forks nothing and opens nothing**; the **guarded path runs exactly one program** before the decision, the trusted `awk` over `/proc/mounts`; the **audit path** (refusal, escape hatch, seam record) is past the decision and off both counts, four programs by its own comment (ADR-0018). No `statfs`, no network, no config on any path. A second program on the guarded path is a design change.
 - **Table and shim must agree.** A divergence outranks the parsing question under it.
 - Refusal exits **2**, never 1.
 - Never claim a kill that did not land; never report a clean bill of health Layer 2 did not earn.

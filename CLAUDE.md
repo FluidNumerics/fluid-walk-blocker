@@ -64,14 +64,16 @@ a container, a scheduler job script, a shell function. That is not a bug;
 it is the reason Layer 2 exists. Describing the shim as enforcement invites
 reliance it cannot support. See ADR-0001.
 
-**The fast path forks nothing; the guarded path pays one documented fork;
-nothing before `exec` reads anything that can block.** A call decided
-without a mount judgement creates no process: no `$(...)`, no backtick, no
-pipeline. A call that reaches a mount judgement runs exactly one program
-before the real tool, the trusted `awk` over `/proc/mounts`, and nothing
-else. On both paths the only file opened is `/proc/mounts`. No `statfs`, no
-network, no config. Both are tested by counting under `strace`, in both
-shells. See ADR-0015, ADR-0018 and ADR-0016.
+**The fast path forks nothing and opens nothing; the guarded path pays one
+documented fork; nothing before the decision reads anything that can
+block.** A call decided without a mount judgement creates no process and
+opens no file: no `$(...)`, no backtick, no pipeline. A call that reaches a
+mount judgement runs exactly one program before the decision, the trusted
+`awk` over `/proc/mounts`, and nothing else. The audit path — a refusal, an
+escape-hatch or seam record — is past the decision and off both counts;
+it runs four programs to write one record and says so in its comment. No
+`statfs`, no network, no config on any path. Both counted paths are tested
+under `strace`, in both shells. See ADR-0015, ADR-0018 and ADR-0016.
 
 **A mount's class is decided from `/proc/mounts` fields and site config,
 never from a measurement at run time.** Remote or listed types are expensive

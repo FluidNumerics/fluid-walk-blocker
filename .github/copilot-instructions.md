@@ -68,7 +68,7 @@ a round and gets the same answer. ADRs live under `docs/adr/`.
 | Read `site.toml`, or any configuration file, on the node at run time | Every site value is compiled into the artifacts; the node has no config parser | ADR-0013 |
 | Give `deploy.py` path flags, or add validation for them | It takes no path arguments; the values are stamped literals whose shape the schema and one test assert | ADR-0005, ADR-0013 |
 | Refuse to deploy from a source tree that is not root-owned | Rejected by the owner; the trust boundary is the installed artifact | ADR-0006 |
-| Rewrite the shim in Python | Measured at a reference deployment: interpreter start is roughly an order of magnitude slower than `sh`, and a Python shim cannot be fork-free | ADR-0015, `node/shim/measure.sh` |
+| Rewrite the shim in Python | Measured at a reference deployment: interpreter start is roughly an order of magnitude slower than `sh`, and a Python shim cannot be fork-free on the fast path | ADR-0015, ADR-0018, `node/shim/measure.sh` |
 | Add a `statfs`, network or configuration read to the shim | The shim reads `/proc/mounts` and nothing else; a guard that hangs when the filesystem hangs is worse than no guard | ADR-0015, ADR-0007, ADR-0016 |
 | Report the guarded path's one `awk` as a violation of "forks nothing", or add a second program beside it | The fork-free rule is the fast path's; the guarded path runs exactly one documented program, counted under `strace` | ADR-0018 |
 | Hardcode a mount, host or path in the rule table | Paths are `site.toml` rows, compiled in; the rule table contains none | ADR-0007, ADR-0014, ADR-0016 |

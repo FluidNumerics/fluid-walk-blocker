@@ -41,11 +41,12 @@ default is `--report`.
    first on `PATH`.
 2. The user runs `grep -r`, `find`, `du`, `rg` or another wrapped name. The
    symlink in `<prefix>/bin` resolves to `guard.sh`.
-3. The shim reads its argv, its cwd and `/proc/mounts` — one file, read
-   through one documented fork, nothing that can block. If the walk is
-   bounded within the depth ceiling, or every root is on a cheap mount, or
-   the root is deeper than `[filesystems].unscoped_depth`, it `exec`s the
-   real tool.
+3. The shim reads its argv and its cwd. A call it can decide from those
+   alone opens no file and creates no process; a call that needs a mount
+   judgement reads `/proc/mounts` once, through one trusted `awk`, and
+   nothing that can block. If the walk is bounded within the depth
+   ceiling, or every root is on a cheap mount, or the root is deeper than
+   `[filesystems].unscoped_depth`, it `exec`s the real tool.
 4. Otherwise it exits 2 with a refusal that names the bound the tool
    accepts, the allowance on that mount, and `walk-job`. Exit 2, never 1:
    `grep` uses 1 for "no match" and a refusal must never read as an empty

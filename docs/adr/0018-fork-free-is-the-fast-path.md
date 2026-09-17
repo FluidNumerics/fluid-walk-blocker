@@ -55,38 +55,53 @@ Three ways to close the gap were on the table.
 ## Decision
 
 The fork-free property belongs to the fast path. **Before any mount
-judgement, the shim creates no process**: no `$(...)`, no backticks, no
-pipeline, no external program. That is what "the shim forks nothing" means
-from this record on, and it is asserted two ways — by a text scan of the
-fast-path region and by counting clones under `strace` on a fast-path argv,
-under both `dash` and `bash` invoked as `sh`.
+judgement, the shim creates no process and opens no file**: no `$(...)`, no
+backticks, no pipeline, no external program, and no read of the mount
+table, which is loaded lazily on the first judgement and not before. That
+is what "the shim forks nothing" means from this record on.
 
 **The guarded path may create exactly one documented program before the
-real tool**: the trusted `awk`, by absolute path from
+decision**: the trusted `awk`, by absolute path from
 `[trusted_binaries].awk`, run once over `/proc/mounts` by
-`sg_load_mounts`. No other program, and no second read. Under a shell
-whose command substitution forks a subshell, that is two clones and one
-program; the test counts programs, because a shell builtin that forks in
-one shell and not the other is precisely what a clone count would confuse
-with a design change. Where the trusted `awk` is absent the pure-`sh`
-reader runs and both paths create nothing; the test counts the `awk` execs
-it finds rather than asserting one, so it stays honest in both
-configurations.
+`sg_load_mounts`. No other program, and no second read of the table. Where
+the trusted `awk` is absent, the pure-`sh` reader runs and the guarded path
+too creates nothing.
 
-The rest of ADR-0015's clause is unchanged and applies to both paths:
-before `sg_exec_real` the shim reads exactly one file, `/proc/mounts`, and
-makes no `statfs`, network or configuration call. Nothing it does before
-the decision can block on the filesystem being judged.
+The boundary is the decision, not the `exec`. **The audit path is off both
+counts by design**: every refusal, and every allowed call whose outcome an
+audited seam or the escape hatch changed, is already decided when it
+reaches `sg_audit_emit`, and that function runs four programs — the
+trusted `date`, `id`, `awk` and `logger` — to write one record, as its
+own comment states. Four, not one, and this record says so because an
+understated count here is the defect that produced it.
+
+The rest of ADR-0015's clause is unchanged: on either path, the only file
+the shim opens before the decision is `/proc/mounts`, and it makes no
+`statfs`, network or configuration call. Nothing it does before the
+decision can block on the filesystem being judged.
 
 ## Consequences
 
 **The sentence to cite changes.** `CLAUDE.md`, the architect agent and the
-Copilot instructions say: the fast path forks nothing; the guarded path
-pays one documented fork to read one file; nothing before `exec` reads
-anything that can block. Prose that restates the old sentence in its short
-form — ADR-0013's Context, the README's "one file, no fork", the plan — is
-read under this record and corrected where it is not an accepted ADR's
-body.
+Copilot instructions say: the fast path forks nothing and opens nothing;
+the guarded path pays one documented fork to read one file; the audit path
+is past the decision and off both counts; nothing before the decision
+reads anything that can block. Prose that restated the old sentence in its
+short form — the README's "one file, no fork", the plan — is corrected
+here. ADR-0013's Context keeps its short form, an accepted record's body,
+and is read under this one.
+
+**Both halves are tested by execution, not text alone.** The fast-path
+region is scanned for command substitutions, and one argv on each path is
+traced under `strace`, under both `dash` and `bash` invoked as `sh`. The
+trace counts *programs*, not clones: under a shell whose command
+substitution forks a subshell the guarded path creates two clones and one
+program, and a builtin that forks in one shell and not the other is
+precisely what a clone count would confuse with a design change. It counts
+the `awk` execs it finds rather than asserting one, so it stays honest in
+the configuration without a trusted `awk`. The audit path has no such
+row: its count rests on the comment in `sg_audit_emit` until a refusal row
+is added.
 
 **A second program on the guarded path is a design change, not a tuning.**
 The test fails on it by name. Moving work from the shell into that one
@@ -97,13 +112,18 @@ neither is a second `awk` invocation on the same table.
 fast path is what catches the one the text scan cannot see: a builtin that
 forks under one shell.
 
+**ADR-0015's rejection of a Python shim is unaffected.** An interpreter
+start lands on the fast path, on every invocation, and this record keeps
+that path at zero.
+
+**ADR-0013 is not reopened.** The one program allowed here runs after the
+argv has been parsed and reads the live mount table; a configuration value
+would be needed before the decision, on the fast path, on every
+invocation, which is exactly the cost ADR-0013 refused.
+
 **`measure.sh` is unchanged.** It times the fast path and the guarded path
 against separate budgets and the guarded path against the fast path; this
 record explains why the second budget is larger, it does not move either.
-
-**The refusal path pays the fork too**, and that is accepted: a refusal
-already costs the user a message and a retry through `walk-job`; the
-milliseconds are not where that cost lies.
 
 ## Re-measure when
 

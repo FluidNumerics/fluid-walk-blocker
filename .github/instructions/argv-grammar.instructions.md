@@ -58,9 +58,10 @@ version:
 Everything before `sg_exec_real` runs on **every** `grep`, `find` and `du`
 invocation on the node. The fast path — a call decided without a mount
 judgement — must fork nothing: no `$(...)`, no backticks, no pipelines. The
-guarded path runs exactly one program before the real tool, the trusted `awk`
+guarded path runs exactly one program before the decision, the trusted `awk`
 that reads `/proc/mounts` once (ADR-0018); a second is a design change, not a
-tidy-up. Both paths read only `/proc/mounts`: no `statfs`, no network, no
-config file (ADR-0015). There is a test for each, counting under `strace`; do
+tidy-up. The audit path — `sg_audit_emit`, reached only after a decision —
+runs four and is off both counts. Nothing before the decision opens any file
+but `/proc/mounts`: no `statfs`, no network, no config file (ADR-0015). There is a test for each, counting under `strace`; do
 not propose changes that would trip them, and do not propose adding forks or
 reads there for tidiness.
