@@ -17,7 +17,7 @@ same invocation and it is allowed:
 - a depth flag at or below the mount's allowance (the refusal prints the
   allowance that applied; it is per mount, and a site may have measured a
   deeper one for a smaller filesystem — see the site page);
-- a root deeper than `[filesystems].unscoped_depth` components below the
+- a root at least `[filesystems].unscoped_depth` components below the
   mount point, which may be walked unbounded because the subtree is already
   scoped;
 - a device bound (`-xdev`, `--one-file-system`, `tree -x`, `du -x`) when the
