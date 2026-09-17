@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-16
 **Narrows:** ADR-0007, "`[filesystems].remote_fstypes` is a filesystem-*type* test"
+The clause "The reconcile logs one journald line per mount in the live table that no override covers" is narrowed by ADR-0019: the line is logged when a mount's standing changes — first seen uncovered, covered, unmounted — not on every poll.
 **Evidence:** n/a, design discussion — see `docs/evidence.md`
 
 ## Context

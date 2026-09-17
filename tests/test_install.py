@@ -1715,3 +1715,154 @@ def test_the_next_copy_dir_is_fresh_after_every_install(tmp_path):
     stamped_install(tmp_path, dest=first, layout=layout)
     second = H.next_copy_dir(layout)
     assert second != first and not second.exists(), (first, second)
+
+
+# --------------------------------------------------------------------------
+# the mount report is on change, not on state (ADR-0019)
+# --------------------------------------------------------------------------
+
+STATE_NAME = "uncovered-mounts.state"
+
+
+def _stateful_layout(tmp_path, **kw):
+    """A layout whose spool exists, as the root relink's does after
+    assert_audit_dir(): the report can remember what it said."""
+    layout = Layout(tmp_path, **kw)
+    layout.spool.mkdir(parents=True, exist_ok=True)
+    return layout
+
+
+def test_an_uncovered_mount_is_reported_once_not_every_poll(tmp_path):
+    """The first relink names `/archive`; the second, with nothing changed,
+    says nothing about mounts at all -- and the memory of what was said is a
+    root-readable file in the spool, first line the boot it was written
+    under."""
+    layout = _stateful_layout(tmp_path)
+    first, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert first.returncode == 0, first.stderr
+    assert ("/archive", "nfs4", "expensive") in uncovered(records), records
+    second, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert second.returncode == 0, second.stderr
+    assert uncovered(records) == [], "a steady state must be silent: %s" % records
+    lines = (layout.spool / STATE_NAME).read_text().splitlines()
+    assert lines[0].startswith("boot "), lines
+    assert "/archive nfs4" in lines[1:], lines
+
+
+def test_a_mount_that_appears_uncovered_is_reported_when_it_appears(tmp_path):
+    """A new remote export in the live table, and only it, is named on the
+    poll it first appears -- ADR-0016's promise that a new resource is
+    visible the moment it is guarded, kept without the repetition."""
+    layout = _stateful_layout(tmp_path)
+    relink_with_a_recording_logger(tmp_path, layout)
+    layout.mount_table.write_text(FIXTURE_MOUNTS + "nas:/new /mnt/new nfs4 rw 0 0\n")
+    result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert result.returncode == 0, result.stderr
+    assert uncovered(records) == [("/mnt/new", "nfs4", "expensive")], records
+
+
+def test_a_mount_that_leaves_the_table_is_reported_unmounted_once(tmp_path):
+    """The earlier line is answered: one `unmounted` record on the poll the
+    mount is gone, then silence."""
+    layout = _stateful_layout(tmp_path)
+    layout.mount_table.write_text(FIXTURE_MOUNTS + "nas:/new /mnt/new nfs4 rw 0 0\n")
+    relink_with_a_recording_logger(tmp_path, layout)
+    layout.mount_table.write_text(FIXTURE_MOUNTS)
+    result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert result.returncode == 0, result.stderr
+    assert uncovered(records) == [("/mnt/new", "nfs4", "unmounted")], records
+    _result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert uncovered(records) == [], records
+
+
+def test_a_mount_newly_covered_by_an_override_is_reported_covered(tmp_path):
+    """A rebuild that adds a `[[filesystems.mounts]]` row for `/archive` is
+    what the earlier line asked for; the next relink says `covered`, once,
+    with the mount still in the table."""
+    layout = _stateful_layout(tmp_path)
+    _result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert ("/archive", "nfs4", "expensive") in uncovered(records), records
+
+    covered = H.make_policy(mounts=dict(FIXTURE_POLICY.mounts, **{"/archive": ("expensive", 3)}))
+    layout2 = Layout(tmp_path / "covered", spool=layout.spool, mount_table=layout.mount_table)
+    stamped_install(tmp_path, dest=layout2.tmp_path / "copy", layout=layout2, policy=covered,
+                    **{"derived.mount_overrides": H.render_shim_module.mount_overrides(covered)})
+    result, records = relink_with_a_recording_logger(tmp_path, layout2, script=layout2.script)
+    assert result.returncode == 0, result.stderr
+    assert uncovered(records) == [("/archive", "nfs4", "covered")], records
+
+
+def test_a_new_boot_reports_every_uncovered_mount_once_more(tmp_path):
+    """A journal on volatile storage forgot the earlier line with the
+    reboot; the memory's boot line is what makes the next relink say it
+    again -- once, and nothing is called covered or unmounted against a
+    table that changed for the reboot's own reasons."""
+    layout = _stateful_layout(tmp_path)
+    layout.mount_table.write_text(FIXTURE_MOUNTS + "nas:/new /mnt/new nfs4 rw 0 0\n")
+    relink_with_a_recording_logger(tmp_path, layout)
+    state = layout.spool / STATE_NAME
+    lines = state.read_text().splitlines()
+    lines[0] = "boot an-earlier-boot"
+    state.write_text("\n".join(lines) + "\n")
+    layout.mount_table.write_text(FIXTURE_MOUNTS)     # /mnt/new went with the reboot
+    result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert result.returncode == 0, result.stderr
+    got = uncovered(records)
+    assert ("/archive", "nfs4", "expensive") in got, got
+    assert not [r for r in got if r[2] != "expensive"], got
+    _result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert uncovered(records) == [], records
+
+
+def test_without_a_writable_spool_the_report_repeats_every_poll(tmp_path):
+    """No memory, no dedup: the unprivileged debug relink, or a spool not yet
+    created, reports the whole set each time rather than nothing."""
+    layout = Layout(tmp_path)
+    assert not layout.spool.exists()
+    for _ in range(2):
+        result, records = relink_with_a_recording_logger(tmp_path, layout)
+        assert result.returncode == 0, result.stderr
+        assert ("/archive", "nfs4", "expensive") in uncovered(records), records
+    assert not (layout.spool / STATE_NAME).exists()
+
+
+def test_the_install_forgets_what_an_earlier_install_reported(tmp_path):
+    """The first poll after a fresh install names every mount on its default
+    once; the audit trail beside the memory is left alone."""
+    layout = _stateful_layout(tmp_path)
+    state = layout.spool / STATE_NAME
+    state.write_text("boot x\n/archive nfs4\n")
+    layout.audit.write_text("")
+    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"],
+                                 fake_uid=0, layout=layout)
+    assert result.returncode == 0, result.stderr
+    assert not state.exists(), "the install kept an earlier install's memory"
+    assert layout.audit.exists()
+
+
+def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
+    layout = _stateful_layout(tmp_path)
+    layout.bin.mkdir(parents=True)
+    state = layout.spool / STATE_NAME
+    state.write_text("boot x\n/archive nfs4\n")
+    layout.audit.write_text("")
+    result, layout = run_install(tmp_path, ["--uninstall"], layout=layout, fake_uid=0)
+    assert result.returncode == 0, result.stderr
+    assert not state.exists()
+    assert layout.spool.is_dir() and layout.audit.exists()
+    assert "left in place" in result.stdout
+
+
+def test_the_memory_is_world_readable_whatever_the_umask(tmp_path):
+    """ADR-0019 says the memory is readable like the rest of the spool; a
+    root relink under a 077 umask would otherwise leave it 0600 and make
+    that sentence true only by the accident of a 022 default."""
+    layout = _stateful_layout(tmp_path)
+    before = os.umask(0o077)
+    try:
+        result, _records = relink_with_a_recording_logger(tmp_path, layout)
+    finally:
+        os.umask(before)
+    assert result.returncode == 0, result.stderr
+    mode = stat.S_IMODE((layout.spool / STATE_NAME).stat().st_mode)
+    assert mode == 0o644, oct(mode)

@@ -1016,12 +1016,13 @@ assert_audit_dir() {
 
 sg_report() {
     # sg_report ACTION STATE
-    # sg_report uncovered_mount MOUNTPOINT FSTYPE DEFAULT_CLASS
+    # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive|covered|unmounted
     #
     # One line into `journalctl -t walk-blocker`, the tag the shim's
     # escape-hatch records already use. So one query answers what overrode
     # Layer 1, when Layer 1 stopped being installed, when its upkeep last
-    # refused to run, and which mounts are running on their default class.
+    # refused to run, and when a mount began or stopped running on its
+    # default class.
     #
     # No timestamp field: journald stamps its own, and unlike the shim's file
     # sink there is no second sink here that would need one.
@@ -1052,7 +1053,9 @@ sg_report() {
         esac
         _rep_extra=',"mount":"'$_rep_mount'","fstype":"'$_rep_fs'"'
         # A mount on its default is a fact to act on out of band, not a
-        # fault: notice, where a hook gone missing is a warning.
+        # fault: notice, where a hook gone missing is a warning. Reported
+        # on change, not on state (ADR-0019), so notice is not a place
+        # where a repeating line goes to be ignored.
         _rep_prio=user.notice
     fi
     for _rep_arg in "$_rep_action" "$_rep_state"; do
@@ -1485,22 +1488,99 @@ sg_default_class() {
     sg_class=cheap
 }
 
+# Report-on-change memory for report_uncovered_mounts() (ADR-0019). One
+# line per mount the last relink found uncovered, after a first line naming
+# the boot it was written under. It lives in the spool because the spool is
+# asserted on every root relink and survives a reboot; the boot line is what
+# makes a reboot report every uncovered mount once more, since a journal on
+# volatile storage has forgotten the earlier line.
+UNCOVERED_STATE=$SG_SPOOL_DIR/uncovered-mounts.state
+
+uncovered_boot_id() {
+    # Sets sg_boot to the kernel's boot id, or to empty where it cannot be
+    # read -- then every relink is treated as the same boot and the state
+    # is trusted as it stands.
+    sg_boot=''
+    [ -r /proc/sys/kernel/random/boot_id ] || return 0
+    read -r sg_boot < /proc/sys/kernel/random/boot_id || sg_boot=''
+    return 0
+}
+
+uncovered_listed_in() {
+    # uncovered_listed_in FILE MOUNTPOINT FSTYPE -- does FILE, in the state
+    # format, list this mount? The boot line cannot match: a mount point is
+    # absolute and "boot" is not.
+    [ -r "$1" ] || return 1
+    while read -r _ul_mnt _ul_fs _ul_rest; do
+        if [ "$_ul_mnt" = "$2" ] && [ "$_ul_fs" = "$3" ]; then
+            return 0
+        fi
+    done < "$1"
+    return 1
+}
+
+uncovered_mount_in_table() {
+    # uncovered_mount_in_table MOUNTPOINT -- is it still in the live table?
+    # Read with the same trailing-slash rule the report applies, so a mount
+    # recorded as `/x` is found when the table spells it `/x/`.
+    [ -r "$SG_MOUNT_TABLE" ] || return 1
+    while read -r _ut_src _ut_mnt _ut_rest; do
+        case $_ut_mnt in
+            /) ;;
+            */) _ut_mnt=${_ut_mnt%/} ;;
+        esac
+        [ "$_ut_mnt" = "$1" ] && return 0
+    done < "$SG_MOUNT_TABLE"
+    return 1
+}
+
 report_uncovered_mounts() {
-    # One journald line per mount in the live table that no
-    # `[[filesystems.mounts]]` override covers AND that the tier-one default
-    # guards -- so a mount running on its default is visible without anyone
-    # running `walk-blocker survey`, and a site that has declined to survey
-    # can see what that choice is costing. A cheap-by-default local mount
-    # (tmpfs, proc, an overlay) cannot produce a false refusal and is not
-    # reported: one line per pseudo-filesystem per poll would bury the line
-    # this record exists to surface. The class is carried in the record all
-    # the same, so it stays self-describing.
+    # One journald line per CHANGE in the set of mounts in the live table
+    # that no `[[filesystems.mounts]]` override covers AND that the tier-one
+    # default guards (ADR-0016, ADR-0019): `expensive` when a mount is first
+    # seen running on its default, `covered` when an override or a narrower
+    # default has since taken it over, `unmounted` when it has left the
+    # table. A steady state is silent. A line that repeated identically on
+    # every poll trained readers to filter the tag, which is the failure
+    # ADR-0001 describes for Layer 1, arriving in the journal instead.
+    #
+    # A cheap-by-default local mount (tmpfs, proc, an overlay) cannot
+    # produce a false refusal and is never reported: one line per
+    # pseudo-filesystem would bury the line this record exists to surface.
+    #
+    # The memory is $UNCOVERED_STATE. Where it can be written -- the root
+    # relink, whose spool assert_audit_dir() has just asserted -- the report
+    # is on change. Where it cannot -- the unprivileged debug relink, a spool
+    # not yet created -- every poll reports the whole set, as it did before
+    # the state existed, rather than say nothing. A state written under an
+    # earlier boot is read as no state: everything current is reported once
+    # and nothing is reported as covered or unmounted, since the table has
+    # changed for reasons of its own.
     #
     # Never fails, never refuses: a table that cannot be read is a mount
     # judgement the shim also cannot make, and the shim's own seams already
-    # audit that. A plain read of one file, so it costs the poll nothing it
+    # audit that. Plain reads of small files; it costs the poll nothing it
     # would notice.
     [ -r "$SG_MOUNT_TABLE" ] || return 0
+    uncovered_boot_id
+    _um_new=''
+    if [ -d "$SG_SPOOL_DIR" ] && : > "$UNCOVERED_STATE.new" 2>/dev/null; then
+        _um_new=$UNCOVERED_STATE.new
+        # World-readable like the spool around it (ADR-0012), whatever the
+        # caller's umask: systemd's default and a root shell's differ, and
+        # the person reading the journal should be able to read what the
+        # relink currently believes without being root.
+        chmod 0644 "$_um_new" 2>/dev/null || :
+        printf 'boot %s\n' "$sg_boot" > "$_um_new"
+    fi
+    # Fresh means: report everything current, compare against nothing.
+    _um_fresh=1
+    if [ -n "$_um_new" ] && [ -r "$UNCOVERED_STATE" ]; then
+        read -r _um_word _um_prev_boot _um_rest < "$UNCOVERED_STATE" || _um_word=''
+        if [ "$_um_word" = boot ] && [ "$_um_prev_boot" = "$sg_boot" ]; then
+            _um_fresh=0
+        fi
+    fi
     while read -r _um_src _um_mnt _um_fs _um_opts _um_rest; do
         [ -n "$_um_fs" ] || continue
         # An octal-escaped mount point (a space, a tab, a newline or a
@@ -1524,10 +1604,32 @@ report_uncovered_mounts() {
         done
         [ "$_um_covered" -eq 0 ] || continue
         sg_default_class "$_um_src" "$_um_fs" "$_um_opts"
-        if [ "$sg_class" = expensive ]; then
-            sg_report uncovered_mount "$_um_mnt" "$_um_fs" "$sg_class"
+        [ "$sg_class" = expensive ] || continue
+        [ -z "$_um_new" ] || printf '%s %s\n' "$_um_mnt" "$_um_fs" >> "$_um_new"
+        if [ "$_um_fresh" -eq 1 ] \
+                || ! uncovered_listed_in "$UNCOVERED_STATE" "$_um_mnt" "$_um_fs"; then
+            sg_report uncovered_mount "$_um_mnt" "$_um_fs" expensive
         fi
     done < "$SG_MOUNT_TABLE"
+    if [ -n "$_um_new" ] && [ "$_um_fresh" -eq 0 ]; then
+        # What the last relink reported and this one did not: the earlier
+        # line is answered once, with which way it was resolved.
+        while read -r _um_omnt _um_ofs _um_rest; do
+            case $_um_omnt in
+                /*) ;;
+                *) continue ;;
+            esac
+            uncovered_listed_in "$_um_new" "$_um_omnt" "$_um_ofs" && continue
+            if uncovered_mount_in_table "$_um_omnt"; then
+                sg_report uncovered_mount "$_um_omnt" "$_um_ofs" covered
+            else
+                sg_report uncovered_mount "$_um_omnt" "$_um_ofs" unmounted
+            fi
+        done < "$UNCOVERED_STATE"
+    fi
+    if [ -n "$_um_new" ]; then
+        mv -f "$_um_new" "$UNCOVERED_STATE" 2>/dev/null || rm -f "$_um_new"
+    fi
     : "$_um_rest"
     return 0
 }
@@ -1586,8 +1688,9 @@ case $MODE in
                 report_hook "$_rh"
             fi
         done
-        # And the mount table: which mounts are guarded on their default
-        # rather than by a reviewed override (ADR-0016).
+        # And the mount table: which mounts have begun, or stopped, being
+        # guarded on their default rather than by a reviewed override
+        # (ADR-0016, ADR-0019).
         report_uncovered_mounts
         ;;
     system)
@@ -1617,6 +1720,10 @@ case $MODE in
             # Root-owned and not user-writable, which is the invariant --
             # NOT a particular mode. See assert_audit_dir().
             assert_audit_dir "$AUDIT"
+            # A fresh install forgets which mounts an earlier one reported,
+            # so the first poll after it names every mount on its default
+            # once (ADR-0019). The audit trail beside it is left alone.
+            rm -f "$UNCOVERED_STATE"
             link_farm "$BIN"
             for _wh in $SG_HOOKS_REQUIRED; do
                 write_hook "$_wh"
@@ -1730,6 +1837,9 @@ SYS
         # since the rmdir below would then fail into its own `|| true`.
         sweep_unclaimed "$BIN" ""
         rmdir "$BIN" 2>/dev/null || true
+        # The report-on-change memory is upkeep state, not a record; the
+        # spool stays for the audit trail it holds.
+        rm -f "$UNCOVERED_STATE"
         echo "walk-blocker: removed from$_removed and $BIN"
         echo "walk-blocker: $SG_SPOOL_DIR left in place; it holds the audit trail"
         ;;

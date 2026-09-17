@@ -72,6 +72,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Key a mount's class on filesystem type alone, or allow an unknown remote type by default | ADR-0016 — remoteness default, unknown remote is guarded, overrides loosen |
 | Prompt the admin interactively at install time for the mount list | ADR-0016, ADR-0005 — config is reviewed data, not an answer typed at a prompt |
 | Ship a default timer slot, add `RandomizedDelaySec`, or leave `AccuracySec` at its default | ADR-0017 — the slot is chosen against the live schedule; jitter and coalescing undo the choice |
+| Report `uncovered_mount` on every poll again, or drop the `covered`/`unmounted` answers, or move its memory out of the spool | ADR-0019 — on change, three states, memory beside the trail it is not part of; a new boot reports once more |
 | Report the guarded path's `awk` as a fork-rule violation, or add a second program beside it | ADR-0018 — the fork-free rule is the fast path's; the guarded path's one documented program is the `awk` over `/proc/mounts`, and a second is a design change |
 | Copy a figure from a predecessor record into this tree | ADR-0014 — state the class and the re-measure condition |
 | Refuse a non-root-owned source tree | ADR-0006 — rejected three times |
@@ -110,6 +111,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0016 | Mount class: remoteness default, per-mount overrides, out-of-band survey (narrows 0007) |
 | 0017 | Timer slot is site config chosen against the live schedule; no default, no jitter, no coalescing |
 | 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
+| 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
 
 ## Non-negotiables a prompt must restate
 
