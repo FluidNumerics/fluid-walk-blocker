@@ -140,7 +140,8 @@ still there — never a claimed kill that did not land.
 Every refusal names it. It submits the traversal to `[slurm].partition`
 under `[slurm].qos` with a wall-clock limit the scheduler enforces, always
 passing `--mem` because a partition with an unlimited default charges the
-whole node to a job that names none (ADR-0007). The bound moves from depth
+whole node to a job that names none (ADR-0007), and always `--no-requeue`
+because a preempted walk that is requeued walks the filesystem again. The bound moves from depth
 to wall clock, and unlike `-maxdepth` it is not advisory. It moves load off
 the login node, not off the filesystem; every place it is documented says
 so. `docs/alternatives.md` is where the walks it replaces are catalogued,

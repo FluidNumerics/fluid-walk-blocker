@@ -204,6 +204,15 @@ wherever the guard is and nowhere the guard is not.
   stop; the scheduler kills a job that runs past its limit, so a walk nobody
   is watching still ends. A namespace too large to bound by depth without
   answering a different question is bounded by time instead (ADR-0007).
+- **What preemption does to it.** A walk-job is submitted at whatever QoS the
+  site configured, usually a low one, which is where a preemption policy aims
+  first. It is always submitted `--no-requeue`: under the common
+  `PreemptMode=REQUEUE` a preempted job goes back on the queue and **starts
+  the walk again**, turning one traversal into as many as the scheduler
+  decides, each paying the full metadata cost with nobody watching. With
+  `--no-requeue` a preemption costs one dead job and a message you can act
+  on. If walk-jobs at your site are preempted often, the QoS is the thing to
+  change, not this.
 - **What it does not buy**: it moves load off the login node, not off the
   filesystem. The same metadata operations reach the same storage from a
   different client. A walk that should not happen at all is not fixed by

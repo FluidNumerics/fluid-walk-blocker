@@ -23,10 +23,10 @@
     "docs/adr/0019-uncovered-mounts-are-reported-on-change.md": "844f1c504c694791690ecdf24e1ebc895861ffb980258c499022adf42290c821",
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
-    "docs/alternatives.md": "2dc2c2bc3143a044987367b34e26e61b1e1e2c4cc6d75f9416be4024c3290551",
+    "docs/alternatives.md": "c0abb2c14cd3974e643c3011bbd2dc87c01f7cb8ed767c863a7d0a883c1579f0",
     "docs/evidence.md": "145521a85d3f3909d1ea20100ebc9c58d7fe8ff4a0fd35e96c7ba3a3fbfb2a68",
     "docs/operating.md": "1bee2118e5b12788de5ffa508b60d68a283dafa1ef21ac1bf602e60ad49a382f",
-    "docs/plan.md": "e96764ae5a0ecd527c4814e5d7ec24d060794bad4b7c7cb0b771754625463902",
+    "docs/plan.md": "28cf553549d1fea0bb7068cc47e4bcd01e33f74ed155811eee74432d383c6a07",
     "docs/site-config.md": "44877ed688effa199d0b8bd89ed78a2c5400877f205bc0a607d3c69cd5380c1d",
     "docs/what-to-run-instead.md": "fbef93235075ffc8ac9421f0181bff7cb099e4e75bffe42535d6b499ee33b3d3",
     "reaper.py": "94a673f2c8ed38851ba0fbda3e3c8aa7438e115617c3e60f4adede89207297a6",
@@ -38,7 +38,7 @@
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",
     "survey.py": "dc7b5025e67bf1800f778b2d12a8b394c7e5758468bbeb4b7583fcfe67a65cba",
-    "walk-job": "c9d2e81921ce1281bc25e921137896afc0eba1e54305dc4b15bd619142d27ab9"
+    "walk-job": "bf772e8138a1f520b1ca38c612b2f5e3765f9023ff2e0797a12019c021487c4b"
   },
   "schema_version": 1,
   "site_sha256": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",

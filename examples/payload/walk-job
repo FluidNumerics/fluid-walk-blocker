@@ -292,6 +292,16 @@ fi
 # --qos and --account are appended only when set: a site may use neither, and
 # an empty name is not the same request as no option (see the overrides
 # above).
+#
+# --no-requeue, always. A walk-job is normally submitted at a site's lowest
+# QoS, which is where a preemption policy aims first; under the common
+# `PreemptMode=REQUEUE` a preempted job is put back on the queue and STARTS
+# THE WALK AGAIN. One traversal of a filesystem this tool exists to protect
+# then becomes as many as the scheduler feels like, each paying the full
+# metadata cost, with nobody watching. Preemption should cost one dead job
+# and a message the caller can act on, not a silent repeat. Measured at a
+# reference deployment: the partition the sanctioned alternative submits to
+# was preemptible by the very QoS its ordinary traffic uses.
 set -- \
     --parsable \
     --job-name "$WJ_SELF" \
@@ -300,6 +310,7 @@ if [ -n "$WJ_QOS" ]; then set -- "$@" --qos "$WJ_QOS"; fi
 if [ -n "$WJ_ACCOUNT" ]; then set -- "$@" --account "$WJ_ACCOUNT"; fi
 set -- "$@" \
     --time "$WJ_TIME" \
+    --no-requeue \
     --nodes 1 \
     --ntasks 1 \
     --cpus-per-task 1 \
