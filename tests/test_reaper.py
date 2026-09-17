@@ -1808,6 +1808,71 @@ def test_layer2_does_not_name_a_mount_a_device_bound_walk_never_enters(
     assert hits, "a depth-bounded walk of an expensive mount is still worth naming"
 
 
+# Every argv the rule table calls malformed-depth: the flag with nothing
+# after it, with an empty value, with another flag's spelling, with an
+# ordinary word, and tree's second `-L` left dangling. Each is ALLOWED by
+# check() -- the tool validates and exits before opening anything -- and
+# each is still a finding here.
+_MALFORMED_DEPTH = (
+    ["find", "/scratch", "-maxdepth", "-L", "-name", "x"],
+    ["find", "/scratch", "-maxdepth", "word", "-name", "x"],
+    ["find", "/scratch", "-maxdepth", "", "2", "-f", "/tmp/cheap"],
+    ["find", "/scratch", "-maxdepth"],
+    ["tree", "-L", "2", "/scratch", "-L"],
+)
+
+
+@pytest.mark.parametrize("argv", _MALFORMED_DEPTH,
+                         ids=lambda a: "-".join(a[1:])[:40])
+def test_layer2_deliberately_reports_a_malformed_depth_that_layer1_allows(
+        argv, mounts, policy, fixture_home):
+    """The asymmetry, named so it is a decision and not an oversight.
+
+    `check()` consults `depth_malformed()` and allows: it is judging an argv
+    BEFORE the tool runs, and refusing a command that walks nothing is the
+    false refusal an advisory layer cannot afford. `traversal_roots()` does
+    not consult it and reports: it is looking at a process that exists, past
+    budget or orphaned, which has already falsified the prediction that the
+    tool would exit while parsing its arguments. A backstop that stays quiet
+    because of a model the evidence contradicts is the clean bill of health
+    Layer 2 must never give.
+
+    Same shape as
+    `test_layer2_does_not_name_a_mount_a_device_bound_walk_never_enters`,
+    and the divergence runs the same way round: Layer 1 allows, Layer 2
+    names it, never the reverse.
+    """
+    profile = R.PROFILE_BY_NAME[argv[0]]
+    assert R.depth_malformed(profile, argv), (
+        "the row stopped being a malformed-depth row, so it no longer tests "
+        "the divergence: %s" % (argv,))
+    assert R.check(argv, "/var/tmp", mounts, policy) is None, (
+        "Layer 1 no longer allows this, so there is no asymmetry left to "
+        "document: %s" % (argv,))
+
+    hits, _unresolved, err = reaper.traversal_roots(
+        _Proc(argv, "/var/tmp"), mounts, policy)
+    assert err is None, err
+    assert [h[1] for h in hits] == ["/scratch"], (
+        "Layer 2 went quiet about a live process on an expensive mount "
+        "because its argv predicted the tool would not start: %s" % (hits,))
+
+
+def test_the_divergence_is_about_the_depth_value_not_about_reporting_everything(
+        mounts, policy, fixture_home):
+    """The inverse row. `traversal_roots()` reporting the argvs above would
+    mean nothing if it reported every argv: a tool told not to walk still
+    yields no hits, malformed depth or not."""
+    quiet = _Proc(["grep", "-d", "skip", "needle", "/scratch"], "/var/tmp")
+    assert reaper.traversal_roots(quiet, mounts, policy)[0] == []
+
+    # ...and the same tool told to walk is a finding, so the row above is
+    # not quiet for some unrelated reason.
+    loud = _Proc(["grep", "-r", "needle", "/scratch"], "/var/tmp")
+    assert [h[1] for h in reaper.traversal_roots(loud, mounts, policy)[0]] \
+        == ["/scratch"]
+
+
 def test_layer2_applies_the_base_directory_change(mounts, policy):
     """The specific miss, kept as its own row so the message is legible when
     it breaks."""

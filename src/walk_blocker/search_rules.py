@@ -1930,6 +1930,25 @@ def depth_malformed(profile, argv):
     stronger fact than "unbounded": unbounded still gets judged against the
     mount, this does not get judged at all. check() reads this before
     judging any root.
+
+    THE REAPER DELIBERATELY DOES NOT READ IT, and the reason is the same one
+    that keeps bounded() out of traversal_roots(): the two consumers are not
+    asked the same question. check() is handed an argv BEFORE the tool runs,
+    so "this will error out during argument parsing" is a prediction about a
+    command that has not started, and refusing a command that walks nothing
+    is the false refusal that teaches people to alias around an advisory
+    layer. The reaper is handed a process that EXISTS -- it is in the table,
+    it has an age, and the arms that make a finding of it want it past
+    budget or orphaned. For that process the prediction has already been
+    falsified: the tool did not exit during argument parsing, so whatever
+    this function models about that tool's validation does not hold for the
+    binary actually running. Suppressing the finding on the strength of a
+    prediction the evidence contradicts is exactly the clean bill of health
+    Layer 2 must never give, and the resulting divergence sits in the safe
+    direction -- Layer 1 allows, Layer 2 still names it.
+
+    Written down here rather than left to be rediscovered, and asserted by
+    `test_layer2_deliberately_reports_a_malformed_depth_that_layer1_allows`.
     """
     return _scan_bounds(profile, argv)[2]
 
