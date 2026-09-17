@@ -19,6 +19,7 @@ journal; the records are read back through the `WALK_BLOCKER_AUDIT` file sink.
 
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -447,7 +448,12 @@ def test_the_record_is_written_before_the_message(shim_env, tmp_path):
     bin_dir = tmp_path / "ordering-bin"
     bin_dir.mkdir()
     stub = bin_dir / "logger"
-    stub.write_text("#!/bin/sh\nwc -c < '%s' >> '%s'\nexit 0\n" % (stderr_file, seen))
+    # An absolute path to wc: the stub inherits the shim's PATH, which under
+    # the fixture holds only the tool stubs, and a `wc: not found` would go
+    # to the stderr the sink call silences -- an empty measurement that
+    # looks like a passing one until it is read.
+    stub.write_text("#!/bin/sh\n'%s' -c < '%s' >> '%s'\nexit 0\n"
+                    % (shutil.which("wc"), stderr_file, seen))
     stub.chmod(0o755)
     env = dict(os.environ)
     for seam in SHIM_SEAMS:

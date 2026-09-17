@@ -404,7 +404,11 @@ It carries three kinds of record:
   tool, the root it was asked to walk, the mount and type that judged it,
   the reason class and the caller's uid. This is the count that answers
   "did Layer 1 do anything", and the denominator for the escape-hatch
-  count when the time comes to read real findings against real traffic;
+  count when the time comes to read real findings against real traffic.
+  Two properties of journald apply: an ordinary user sees their own
+  records and the `adm` group and root see everyone's; and a session that
+  produces refusals faster than journald's per-unit rate limit loses the
+  excess, which journald marks with its own "suppressed N messages" line;
 - one **`uncovered_mount`** record per poll, at notice priority, for every
   mount in the live table that is expensive by its compiled default and
   covered by no `[[filesystems.mounts]]` override (ADR-0016). This is the
