@@ -1542,8 +1542,21 @@ def _dir_action_setting(profile, argv, i):
         if sep and (head == flag or resolve_for(profile, head, (flag,))):
             return (("recurse" if tail in on_values else "skip"), 1)
         if not sep and resolve_for(profile, head, (flag,)):
-            value = argv[i + 1] if i + 1 < len(argv) else None
-            return (("recurse" if value in on_values else "skip"), 2)
+            if i + 1 >= len(argv):
+                # Exactly the exact spelling's rule above, and for exactly
+                # the same reason: getopt resolves the abbreviation FIRST
+                # and then finds no argument for it. Measured, GNU grep 3.6:
+                # `grep -r pat d1 --di` and `grep -r pat d1 --dir` both
+                # answer "option '--directories' requires an argument" and
+                # exit 2, the same sentence `--directories` with no value
+                # gets -- while `grep -r pat d1 --di d2` answers "invalid
+                # argument 'd2' for '--directories'", which is what says the
+                # abbreviation really does consume the following token when
+                # there IS one. Reading the absent value as "skip" invented
+                # one, and it was the last shape in this table where the two
+                # consumers disagreed.
+                return None
+            return (("recurse" if argv[i + 1] in on_values else "skip"), 2)
         if len(flag) == 2 and flag[1] != "-" and token.startswith(flag) \
                 and len(token) > 2:
             return (("recurse" if token[2:] in on_values else "skip"), 1)
@@ -1930,6 +1943,25 @@ def depth_malformed(profile, argv):
     stronger fact than "unbounded": unbounded still gets judged against the
     mount, this does not get judged at all. check() reads this before
     judging any root.
+
+    THE REAPER DELIBERATELY DOES NOT READ IT, and the reason is the same one
+    that keeps bounded() out of traversal_roots(): the two consumers are not
+    asked the same question. check() is handed an argv BEFORE the tool runs,
+    so "this will error out during argument parsing" is a prediction about a
+    command that has not started, and refusing a command that walks nothing
+    is the false refusal that teaches people to alias around an advisory
+    layer. The reaper is handed a process that EXISTS -- it is in the table,
+    it has an age, and the arms that make a finding of it want it past
+    budget or orphaned. For that process the prediction has already been
+    falsified: the tool did not exit during argument parsing, so whatever
+    this function models about that tool's validation does not hold for the
+    binary actually running. Suppressing the finding on the strength of a
+    prediction the evidence contradicts is exactly the clean bill of health
+    Layer 2 must never give, and the resulting divergence sits in the safe
+    direction -- Layer 1 allows, Layer 2 still names it.
+
+    Written down here rather than left to be rediscovered, and asserted by
+    `test_layer2_deliberately_reports_a_malformed_depth_that_layer1_allows`.
     """
     return _scan_bounds(profile, argv)[2]
 

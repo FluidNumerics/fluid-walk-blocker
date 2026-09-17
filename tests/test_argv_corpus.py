@@ -97,89 +97,22 @@ TRAILING = {
 }
 
 
-def _long_flags(profile):
-    """Every long-option spelling this profile knows, for ambiguity checks."""
-    seen = []
-    for group in (profile.rec_flags, profile.value_flags, profile.pat_flags,
-                  profile.depth_flags, profile.device_flags,
-                  profile.device_off_flags, profile.exact_flags):
-        seen.extend(f for f in group if f.startswith("--"))
-    seen.extend(f for f, _values in profile.rec_value_flags
-                if f.startswith("--"))
-    return seen
-
-
-def _is_abbreviated_directories_last(argv):
-    """One known divergence's shape, and deliberately nothing adjacent to it.
-
-    An abbreviated spelling of `--directories` as the final token with no
-    value. The table reads the absent value as "skip" (ALLOW) while the shim
-    leaves the action at `recurse` (REFUSE). The live behaviour is the shim's,
-    so it is a false refusal on a command real grep rejects anyway -- no
-    bypass.
-
-    Matched on the MECHANISM, not on a `--d` prefix. The first version of this
-    matcher accepted any final token starting `--d`, which is harmless only
-    because `--directories` happens to be the sole abbreviatable
-    rec_value_flag in the table today: `--devices`, `--dereference-recursive`
-    and `--delay` all agree between the consumers. A future `--d*` flag with an
-    unrelated divergence would have been silenced by it without ever being
-    named. An xfail table that forgives more than it names is the same failure
-    mode as a corpus that cannot generate a shape -- one hides a bug by never
-    producing it, the other by pre-forgiving it.
-    """
-    profile = R.PROFILE_BY_NAME.get(argv[0]) if argv else None
-    if len(argv) < 2 or profile is None:
-        return False
-    # The MECHANISM, not a tool allowlist: this is a rec-value flag whose
-    # abbreviation loses its value, so the profile must actually have
-    # `--directories` as one. find has no such flag and cannot have this bug.
-    if "--directories" not in [f for f, _v in profile.rec_value_flags]:
-        return False
-    last = argv[-1]
-    if not (last.startswith("--") and len(last) > 2
-            and last != "--directories"
-            and "--directories".startswith(last)):
-        return False
-    # ...and UNAMBIGUOUS among this profile's own long flags, which is what
-    # getopt requires before it resolves an abbreviation at all.
-    #
-    # `--d` is the case this excludes, and excluding it matters: real grep
-    # answers `option '--d' is ambiguous; possibilities: '--devices'
-    # '--directories' '--dereference-recursive'` and walks nothing, and the two
-    # consumers AGREE on it -- both refuse. Forgiving it would have this table
-    # silence a shape that does not diverge. `--di` is unambiguous (the others
-    # all begin `--de`) and is the real shape.
-    others = [f for f in _long_flags(profile)
-              if f != "--directories" and f.startswith(last)]
-    return not others
-
-
 # Shapes where the two consumers are KNOWN to disagree, each owned by an open
 # issue. Listed rather than silently excluded: the corpus is worth more as a
 # record of what is broken than as a green light, and an entry here is deleted
 # by the fix, which tightens the test at the moment it can be tightened.
-KNOWN_DIVERGENCES = {
-    "abbreviated-directories-last": _is_abbreviated_directories_last,
-}
-
-
-def test_the_known_divergence_matcher_names_one_shape_and_not_its_neighbours():
-    """The tightening needs its own oracle, or it is the bug one level up."""
-    m = _is_abbreviated_directories_last
-    assert m(["grep", "-r", "pat", "/scratch", "--di"])
-    assert m(["grep", "-r", "pat", "/scratch", "--dir"])
-    assert m(["rgrep", "pat", "/scratch", "--directorie"])
-    for neighbour in ("--devices", "--dereference-recursive", "--delay",
-                      "--depth", "--dxyz", "--directories"):
-        assert not m(["grep", "-r", "pat", "/scratch", neighbour]), neighbour
-    # `--d` is AMBIGUOUS and the two consumers agree on it (both refuse).
-    assert not m(["grep", "-r", "pat", "/scratch", "--d"])
-    assert m(["grep", "-r", "pat", "/scratch", "--di"])
-    # ...and the shape only counts in FINAL position.
-    assert not m(["grep", "-r", "--di", "skip", "pat", "/scratch"])
-    # A tool with no `--directories` flag at all is not this shape.
-    assert not m(["find", "/scratch", "--di"])
+#
+# EMPTY, and that is the state to keep it in. The one entry it ever held --
+# an abbreviated `--directories` in final position, where the table read the
+# absent value as "skip" and the shim left the action at recurse -- was
+# deleted by the fix that made the abbreviated branch treat a missing value
+# the way the exact spelling already did (GNU grep 3.6, measured; the rows
+# are in `argv_cases.py` under "dir-action-with-no-value-abbreviated-long").
+# An entry added here needs an open issue and a matcher that names ONE shape
+# and nothing adjacent to it: the matcher that lived here started out
+# forgiving any final token beginning `--d`, which would have silenced an
+# unrelated future divergence without ever naming it.
+KNOWN_DIVERGENCES = {}
 
 
 # Leading-mode tools take their operands FIRST; everything else takes them last.

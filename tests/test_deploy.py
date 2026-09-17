@@ -551,7 +551,7 @@ def test_unowned_by_fails_closed_on_a_subtree_it_cannot_inspect(tmp_path):
     try:
         offenders = unowned_by_here(tree)
         assert offenders, "an uninspectable subtree reported no offenders"
-        assert any("could not be inspected" in why for _, why in offenders), \
+        assert any("could not be inspected" in o.reason for o in offenders), \
             offenders
     finally:
         (tree / "hidden").chmod(0o755)
@@ -571,8 +571,9 @@ def test_unowned_by_rejects_a_symlink_pointing_out_of_the_prefix(tmp_path):
     escaping.symlink_to(outside / "target.sh")
 
     offenders = unowned_by_here(tree)
-    assert [(p, why) for p, why in offenders
-            if p == str(escaping) and "escapes the prefix" in why], offenders
+    assert [o for o in offenders
+            if o.path == str(escaping)
+            and o.code == deploy.UNOWNED_ESCAPING_SYMLINK], offenders
 
 
 def test_unowned_by_allows_a_symlink_that_stays_inside_the_prefix(tmp_path):
@@ -596,13 +597,14 @@ def test_unowned_by_flags_a_foreign_owner_and_a_writable_mode(tmp_path):
     guard.write_text("#!/bin/sh\n")
 
     foreign = deploy.unowned_by(str(tree), uid=os.getuid() + 1)
-    assert [p for p, _ in foreign if p == str(guard)], foreign
-    assert all("owned by uid" in why for _, why in foreign), foreign
+    assert [o.path for o in foreign if o.path == str(guard)], foreign
+    assert all(o.code == deploy.UNOWNED_FOREIGN_UID for o in foreign), foreign
 
     guard.chmod(0o775)
     writable = unowned_by_here(tree)
-    assert [(p, why) for p, why in writable
-            if p == str(guard) and "writable beyond its owner" in why], writable
+    assert [o for o in writable
+            if o.path == str(guard)
+            and o.code == deploy.UNOWNED_PERMISSIVE_MODE], writable
 
 
 def test_unowned_by_flags_setuid_in_a_tree_root_executes_from(tmp_path):
@@ -611,8 +613,8 @@ def test_unowned_by_flags_setuid_in_a_tree_root_executes_from(tmp_path):
     odd = tree / "helper"
     odd.write_text("#!/bin/sh\n")
     odd.chmod(0o4755)
-    assert [why for _, why in unowned_by_here(tree) if "setuid" in why], \
-        unowned_by_here(tree)
+    assert [o for o in unowned_by_here(tree)
+            if o.code == deploy.UNOWNED_SETUID], unowned_by_here(tree)
 
 
 def test_unowned_by_checks_an_installed_file_not_only_a_directory(tmp_path):
@@ -624,8 +626,8 @@ def test_unowned_by_checks_an_installed_file_not_only_a_directory(tmp_path):
     assert unowned_by_here(lone) == []
 
     lone.chmod(0o666)
-    assert [why for _, why in unowned_by_here(lone)
-            if "writable beyond its owner" in why], "a loose mode passed"
+    assert [o for o in unowned_by_here(lone)
+            if o.code == deploy.UNOWNED_PERMISSIVE_MODE], "a loose mode passed"
 
     assert deploy.unowned_by(str(lone), uid=os.getuid() + 1), \
         "a foreign owner passed"
@@ -850,7 +852,9 @@ def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     monkeypatch.setattr(
         deploy, "unowned_by",
-        lambda root, uid=0: [("%s/shim/guard.sh" % root, "owned by uid 1000")])
+        lambda root, uid=0: [deploy.Unowned("%s/shim/guard.sh" % root,
+                                            deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid 1000")])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
@@ -876,7 +880,9 @@ def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     monkeypatch.setattr(
         deploy, "unowned_by",
-        lambda root, uid=0: [("%s/shim/guard.sh" % root, "owned by uid 1000")])
+        lambda root, uid=0: [deploy.Unowned("%s/shim/guard.sh" % root,
+                                            deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid 1000")])
 
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 5
@@ -1735,8 +1741,10 @@ def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
         (staged / name).write_text("")
     prefix = str(tmp_path / "prefix")
 
-    monkeypatch.setattr(deploy, "unowned_by",
-                        lambda root, uid=0: [(root, "owned by uid %d" % os.getuid())])
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [deploy.Unowned(root, deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid %d" % os.getuid())])
     assert deploy.uninstall_helper(prefix)[0] is None
 
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
@@ -2478,8 +2486,9 @@ def test_an_audit_directory_owned_by_someone_else_refuses_before_any_command(
     os.makedirs(args.spool_dir, exist_ok=True)
     monkeypatch.setattr(
         deploy, "unowned_by",
-        lambda root, uid=0: [(root, "owned by uid 1000")] if root == args.spool_dir
-        else [])
+        lambda root, uid=0: [deploy.Unowned(root, deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid 1000")]
+        if root == args.spool_dir else [])
 
     assert deploy.system_execute(args) == 6
     assert calls == [], calls
@@ -2624,8 +2633,9 @@ def test_the_preview_refuses_where_the_install_would(tmp_path, monkeypatch):
     os.makedirs(args.spool_dir, exist_ok=True)
     monkeypatch.setattr(
         deploy, "unowned_by",
-        lambda root, uid=0: [(root, "owned by uid 1000")] if root == args.spool_dir
-        else [])
+        lambda root, uid=0: [deploy.Unowned(root, deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid 1000")]
+        if root == args.spool_dir else [])
 
     assert deploy.audit_dir_blockers(args.spool_dir), "fixture must be blocked"
 
@@ -2690,24 +2700,72 @@ def test_an_ownership_blocker_names_the_offending_path_not_the_directory(
     assert "chown root:root %s" % child in text, text
 
 
-# The reason strings `unowned_by()` actually emits, one per class. Exemplars
-# rather than real filesystem state: the suite runs NON-ROOT, so every path
-# under tmp_path reports "owned by uid ..." first and the other branches are
-# unreachable from a real directory.
+# One exemplar per class: the CODE `unowned_by()` would emit, and the prose
+# it would carry. Exemplars rather than real filesystem state: the suite runs
+# NON-ROOT, so every path under tmp_path reports a foreign uid first and the
+# other branches are unreachable from a real directory. The last row is a
+# code from nowhere -- what a future edit that forgets the class map looks
+# like from here.
 _UNOWNED_EXEMPLARS = (
-    ("ownership", "owned by uid 1000", "chown root:root"),
-    ("permissive", "mode 0777 is writable beyond its owner", "chmod go-w"),
-    ("setuid", "mode 2755 is setuid or setgid", "chmod a-s"),
-    ("symlink", "symlink escapes the prefix -> /tmp/elsewhere", None),
-    ("unreadable", "could not be inspected: Permission denied", None),
-    ("unclassified", "a reason no future edit told this message about", None),
+    ("ownership", deploy.UNOWNED_FOREIGN_UID, "owned by uid 1000",
+     "chown root:root"),
+    ("permissive", deploy.UNOWNED_PERMISSIVE_MODE,
+     "mode 0777 is writable beyond its owner", "chmod go-w"),
+    ("setuid", deploy.UNOWNED_SETUID, "mode 2755 is setuid or setgid",
+     "chmod a-s"),
+    ("symlink", deploy.UNOWNED_ESCAPING_SYMLINK,
+     "symlink escapes the prefix -> /elsewhere", None),
+    ("unreadable", deploy.UNOWNED_UNINSPECTABLE,
+     "could not be inspected: Permission denied", None),
+    ("unclassified", "a_code_from_a_later_edit",
+     "a reason no future edit told this message about", None),
 )
 
 
-@pytest.mark.parametrize("cls,reason,remedy", _UNOWNED_EXEMPLARS)
+def test_every_code_unowned_by_can_emit_has_a_blocker_class():
+    """The codes are the contract between `unowned_by()` and the refusal.
+    One with no class would print the `unclassified` head -- true, but
+    uninformative -- for a condition this file knows the name of."""
+    for code in deploy.UNOWNED_CODES:
+        cls = deploy._classify_unowned(code)
+        assert cls != "unclassified", code
+        assert cls in deploy._REFUSAL_HEADS, (code, cls)
+    assert set(deploy.UNOWNED_CODES) == set(deploy._UNOWNED_CLASSES), \
+        "UNOWNED_CODES and _UNOWNED_CLASSES have drifted apart"
+
+
+def test_unowned_refuses_to_construct_an_offender_with_no_class():
+    """Construction-time, not call-site: a code added to `unowned_by()` and
+    forgotten in the class map cannot reach a caller silently."""
+    with pytest.raises(AssertionError):
+        deploy._unowned("/p", "a_code_from_a_later_edit", "why")
+
+
+@pytest.mark.parametrize("cls,code,reason,_remedy", _UNOWNED_EXEMPLARS)
+def test_a_reworded_reason_cannot_change_the_blocker_class(
+        cls, code, reason, _remedy, tmp_path, monkeypatch):
+    """The point of the code. `audit_dir_blockers()` must reach the same
+    class whatever the prose says -- including prose that reads like some
+    OTHER class's, which is exactly what a careless reword produces."""
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    args = _args(tmp_path)
+    os.makedirs(args.spool_dir, exist_ok=True)
+    offender = os.path.join(args.spool_dir, "offending-entry")
+    misleading = "owned by uid 1000, is setuid or setgid, could not be "\
+                 "inspected, symlink escapes the prefix"
+    for prose in (reason, misleading):
+        monkeypatch.setattr(
+            deploy, "unowned_by",
+            lambda root, uid=0, _p=prose: [deploy.Unowned(offender, code, _p)]
+            if root == args.spool_dir else [])
+        assert deploy.audit_dir_blockers(args.spool_dir) == [
+            (cls, offender, prose)], (code, prose)
+
+
+@pytest.mark.parametrize("cls,code,reason,remedy", _UNOWNED_EXEMPLARS)
 def test_every_ownership_reason_gets_a_true_head_and_a_remedy_that_works(
-        cls, reason, remedy, tmp_path):
-    assert deploy._classify_unowned(reason) == cls, reason
+        cls, code, reason, remedy, tmp_path):
+    assert deploy._classify_unowned(code) == cls, code
 
     spool = str(tmp_path / "var-log")
     offender = os.path.join(spool, "offending-entry")
@@ -2726,9 +2784,9 @@ def test_every_ownership_reason_gets_a_true_head_and_a_remedy_that_works(
         assert "fix with: %s %s\n" % (remedy, spool) not in text, text
 
 
-@pytest.mark.parametrize("cls,reason,_remedy", _UNOWNED_EXEMPLARS)
+@pytest.mark.parametrize("cls,code,reason,_remedy", _UNOWNED_EXEMPLARS)
 def test_both_callers_refuse_on_every_ownership_reason(
-        cls, reason, _remedy, tmp_path, monkeypatch):
+        cls, code, reason, _remedy, tmp_path, monkeypatch):
     """The class x caller matrix: every class against both callers."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
@@ -2742,7 +2800,8 @@ def test_both_callers_refuse_on_every_ownership_reason(
     offender = os.path.join(args.spool_dir, "offending-entry")
     monkeypatch.setattr(
         deploy, "unowned_by",
-        lambda root, uid=0: [(offender, reason)] if root == args.spool_dir else [])
+        lambda root, uid=0: [deploy.Unowned(offender, code, reason)]
+        if root == args.spool_dir else [])
 
     assert deploy.audit_dir_blockers(args.spool_dir) == [(cls, offender, reason)]
     assert deploy.system_execute(args) == 6, cls

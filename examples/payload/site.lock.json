@@ -1,7 +1,7 @@
 {
   "files": {
     "README.md": "ef344c61fe8141ad4727f4c48a23b2a240bf737c0da1550a5d277eb9aaa592da",
-    "deploy.py": "83b06c305d4d4b7f0e35bbac635b2df8804536b2deb8274d435feb377bf29ab7",
+    "deploy.py": "94ef98d7827ff6b4749114c52e8b7bb48c70d1ce88b9bf182b52a88bc30933ed",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -24,8 +24,8 @@
     "docs/operating.md": "2cdcf98feabdc05618fef9c5e768dd86306ae18d7fb1b5a7f8493afee5b6e135",
     "docs/plan.md": "873a03b23196088900444e21751eeae4559790037c297963cd82ce553fbb9f9b",
     "docs/site-config.md": "2fa7175a3d1a365d73a8a26086e4e30e9bbca6114db134d3645542b8763730d1",
-    "reaper.py": "aa90b9559c5b4a743bd8ad7975ea03b2d8569ec4a7f56d7f2f2b0e301d9c7d06",
-    "search_rules.py": "f637acf7f352920beec731ccf099924c907e3749f2a6d1a4840d5b99048f67f5",
+    "reaper.py": "053a3e0a843a5d1ce97e60e935de66efa124d725e53b31765a52914305568f53",
+    "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",
     "shim/guard.sh": "71c1ff859ecaa69da3f575bf310f9d3978e03f299bc30bc13bdadf8ed3455142",
     "shim/install.sh": "3bd5629f1ce8a1eb967a1dfc04d4ebd7fb2f1e205903b776ffde08920294e711",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",

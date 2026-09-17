@@ -1128,6 +1128,81 @@ def test_the_blind_records_carry_the_build_through_the_real_path(
     assert entries[0]["layer"] == "reaper"
 
 
+def _latch_keys(spool):
+    state = reaper.load_state(os.path.join(str(spool), "reaper-state.json"))
+    return sorted(state.get("logged_actions", {}))
+
+
+def test_the_state_file_holds_only_the_two_known_latch_key_shapes(
+        tmp_path, procfs, mounts_path):
+    """The enumeration. `logged_actions` is keyed by a blind sentinel or by
+    `verdict:pid:starttime`, and by nothing else -- driven through all three
+    of the places a key is built, against a state file each poll actually
+    wrote. A third shape would pass every other test in this file and break
+    the end-of-poll prune, which splits a key on `:` and asks whether the
+    tail is a live process."""
+    spool = tmp_path / "spool"
+    audit = tmp_path / "audit.jsonl"
+    empty_proc = tmp_path / "empty-proc"
+    empty_proc.mkdir()
+    (empty_proc / "uptime").write_text("1000000.0 1000000.0\n")
+    cg = tmp_path / "cg"
+
+    def _args(cgroup_root, proc_root):
+        return reaper.build_parser().parse_args([
+            "--spool", str(spool), "--audit", str(audit),
+            "--cgroup-root", str(cgroup_root), "--proc-root", str(proc_root),
+            "--mounts", mounts_path, "--min-interval", "0",
+        ])
+
+    seen = set()
+
+    # 1. no user slice at all -> the LATCH_BLIND_SLICES sentinel
+    assert reaper.run(_args(tmp_path / "no-such-cgroup-root", procfs),
+                      sleep=lambda _s: None) == reaper.EXIT_BLIND
+    seen.update(_latch_keys(spool))
+    assert reaper.LATCH_BLIND_SLICES in seen, seen
+
+    # 2. slices visible, /proc empty -> the LATCH_BLIND_PROCS sentinel
+    write_slice(cg, UID_B, io_full_total=0.0)
+    assert reaper.run(_args(cg, empty_proc), sleep=lambda _s: None) == \
+        reaper.EXIT_BLIND
+    seen.update(_latch_keys(spool))
+    assert reaper.LATCH_BLIND_PROCS in seen, seen
+
+    # 3. an ordinary standing finding -> a _finding_key()
+    write_proc(procfs, 4211, "find",
+               ["find", "/scratch/e", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    reaper.run(_args(cg, procfs), sleep=lambda _s: None)
+    finding_keys = [k for k in _latch_keys(spool)
+                    if k not in reaper.LATCH_SENTINELS]
+    assert finding_keys, _latch_keys(spool)
+    seen.update(_latch_keys(spool))
+
+    for key in seen:
+        if key in reaper.LATCH_SENTINELS:
+            continue
+        verdict, pid, starttime = key.split(":")
+        assert verdict and pid.isdigit() and starttime.isdigit(), key
+    assert set(reaper.LATCH_SENTINELS) == {reaper.LATCH_BLIND_SLICES,
+                                           reaper.LATCH_BLIND_PROCS}
+
+
+def test_a_latch_key_of_an_unknown_shape_is_refused_at_construction():
+    """Construction-time, because the symptom otherwise arrives weeks later
+    as audit rows that repeat or go missing."""
+    for key in ("", "blinded", "reported", "runaway_traversal:4211",
+                "runaway_traversal:notapid:99", "a:b:c:d"):
+        with pytest.raises(AssertionError):
+            reaper._latch_key(key)
+    assert reaper._latch_key("runaway_traversal:4211:99") == \
+        "runaway_traversal:4211:99"
+    for sentinel in reaper.LATCH_SENTINELS:
+        assert reaper._latch_key(sentinel) == sentinel
+
+
 def test_a_version_change_alone_does_not_defeat_the_dedup(
         tmp_path, procfs, mounts_path, monkeypatch):
     """The FIXED-STRING latch shape. `logged_actions["blind"]` stores a
@@ -1731,6 +1806,71 @@ def test_layer2_does_not_name_a_mount_a_device_bound_walk_never_enters(
     shallow = _Proc(["find", "/scratch", "-maxdepth", "1"], "/var/tmp")
     hits, _unresolved, _err = reaper.traversal_roots(shallow, mounts, policy)
     assert hits, "a depth-bounded walk of an expensive mount is still worth naming"
+
+
+# Every argv the rule table calls malformed-depth: the flag with nothing
+# after it, with an empty value, with another flag's spelling, with an
+# ordinary word, and tree's second `-L` left dangling. Each is ALLOWED by
+# check() -- the tool validates and exits before opening anything -- and
+# each is still a finding here.
+_MALFORMED_DEPTH = (
+    ["find", "/scratch", "-maxdepth", "-L", "-name", "x"],
+    ["find", "/scratch", "-maxdepth", "word", "-name", "x"],
+    ["find", "/scratch", "-maxdepth", "", "2", "-f", "/tmp/cheap"],
+    ["find", "/scratch", "-maxdepth"],
+    ["tree", "-L", "2", "/scratch", "-L"],
+)
+
+
+@pytest.mark.parametrize("argv", _MALFORMED_DEPTH,
+                         ids=lambda a: "-".join(a[1:])[:40])
+def test_layer2_deliberately_reports_a_malformed_depth_that_layer1_allows(
+        argv, mounts, policy, fixture_home):
+    """The asymmetry, named so it is a decision and not an oversight.
+
+    `check()` consults `depth_malformed()` and allows: it is judging an argv
+    BEFORE the tool runs, and refusing a command that walks nothing is the
+    false refusal an advisory layer cannot afford. `traversal_roots()` does
+    not consult it and reports: it is looking at a process that exists, past
+    budget or orphaned, which has already falsified the prediction that the
+    tool would exit while parsing its arguments. A backstop that stays quiet
+    because of a model the evidence contradicts is the clean bill of health
+    Layer 2 must never give.
+
+    Same shape as
+    `test_layer2_does_not_name_a_mount_a_device_bound_walk_never_enters`,
+    and the divergence runs the same way round: Layer 1 allows, Layer 2
+    names it, never the reverse.
+    """
+    profile = R.PROFILE_BY_NAME[argv[0]]
+    assert R.depth_malformed(profile, argv), (
+        "the row stopped being a malformed-depth row, so it no longer tests "
+        "the divergence: %s" % (argv,))
+    assert R.check(argv, "/var/tmp", mounts, policy) is None, (
+        "Layer 1 no longer allows this, so there is no asymmetry left to "
+        "document: %s" % (argv,))
+
+    hits, _unresolved, err = reaper.traversal_roots(
+        _Proc(argv, "/var/tmp"), mounts, policy)
+    assert err is None, err
+    assert [h[1] for h in hits] == ["/scratch"], (
+        "Layer 2 went quiet about a live process on an expensive mount "
+        "because its argv predicted the tool would not start: %s" % (hits,))
+
+
+def test_the_divergence_is_about_the_depth_value_not_about_reporting_everything(
+        mounts, policy, fixture_home):
+    """The inverse row. `traversal_roots()` reporting the argvs above would
+    mean nothing if it reported every argv: a tool told not to walk still
+    yields no hits, malformed depth or not."""
+    quiet = _Proc(["grep", "-d", "skip", "needle", "/scratch"], "/var/tmp")
+    assert reaper.traversal_roots(quiet, mounts, policy)[0] == []
+
+    # ...and the same tool told to walk is a finding, so the row above is
+    # not quiet for some unrelated reason.
+    loud = _Proc(["grep", "-r", "needle", "/scratch"], "/var/tmp")
+    assert [h[1] for h in reaper.traversal_roots(loud, mounts, policy)[0]] \
+        == ["/scratch"]
 
 
 def test_layer2_applies_the_base_directory_change(mounts, policy):

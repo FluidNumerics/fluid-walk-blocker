@@ -305,9 +305,13 @@ SHIM_SEAMS = ("WALK_BLOCKER_UNSCOPED", "WALK_BLOCKER_FSTYPES",
               "WALK_BLOCKER_AUDIT")
 
 
-def run_shim(shim_env, argv, cwd="/", env=None, stdin=b""):
-    """Invoke the shim the way the shell would: argv[0] is the tool name."""
-    tool = argv[0]
+def shim_invocation(shim_env, argv, cwd="/", env=None):
+    """(argv-after-the-shell, environment, cwd) for one shim run.
+
+    Split out of `run_shim` so a test that has to put something in FRONT of
+    the shell -- `strace`, say -- drives the same environment and the same
+    argv shape rather than a second, drifting copy of them.
+    """
     real_cwd = resolve_cwd(cwd, shim_env["node_fs"])
     if not os.path.isdir(real_cwd):
         # The case does not depend on the cwd -- every root in it is absolute.
@@ -328,7 +332,14 @@ def run_shim(shim_env, argv, cwd="/", env=None, stdin=b""):
     # Named explicitly rather than left to the shebang. The shim path is still
     # the first argument, so `$0` is unchanged and the shim reads the same
     # tool name out of its own basename that it would through a PATH lookup.
+    command = ([os.path.join(shim_env["shim_dir"], argv[0])] + list(argv[1:]))
+    return command, environ, real_cwd
+
+
+def run_shim(shim_env, argv, cwd="/", env=None, stdin=b""):
+    """Invoke the shim the way the shell would: argv[0] is the tool name."""
+    command, environ, real_cwd = shim_invocation(shim_env, argv, cwd, env)
     return subprocess.run(
-        [SHIM_SH, os.path.join(shim_env["shim_dir"], tool)] + list(argv[1:]),
+        [SHIM_SH] + command,
         capture_output=True, env=environ, cwd=real_cwd, input=stdin,
     )

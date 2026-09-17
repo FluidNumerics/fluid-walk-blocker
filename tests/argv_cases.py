@@ -971,6 +971,53 @@ CASES = [
      ["rgrep", "-d"],
      FAST_CWD, REFUSE, "rgrep starts recursive, so it stays recursive"),
 
+    # --- ...including the ABBREVIATED long spelling -----------------------
+    # getopt resolves the abbreviation FIRST and then finds no argument for
+    # it, so an abbreviated `--directories` in final position is the same
+    # fact as the exact one, not a different one. The table used to read the
+    # absent value as "skip" here while reading it as "nothing applied" for
+    # the exact spelling, which made it ALLOW where the shim REFUSED -- the
+    # last shape in this matrix where the two consumers disagreed.
+    #
+    # Measured, GNU grep 3.6, relative operands in a scratch tree:
+    #   grep -r pat d1 --di        "option '--directories' requires an
+    #   grep -r pat d1 --dir        argument", rc 2, walks nothing
+    #   grep -r pat d1 --directories  the same sentence, rc 2
+    #   grep -r pat d1 --di d2     "invalid argument 'd2' for
+    #                               '--directories'" -- so the abbreviation
+    #                               really does eat the next token when
+    #                               there is one
+    #   grep -r pat d1 --di skip   rc 1, no output: does not descend
+    #   grep -r pat d1 --di recurse  descends
+    #   grep -r pat d1 --d         "option '--d' is ambiguous", rc 2
+    ("dir-action-with-no-value-abbreviated-long",
+     ["grep", "-r", "pat", "/scratch", "--di"],
+     "/var/tmp", REFUSE,
+     "the -r still stands, because the abbreviation applied nothing"),
+    ("dir-action-with-no-value-abbreviated-long-longer",
+     ["grep", "-r", "pat", "/scratch", "--dir"],
+     "/var/tmp", REFUSE, "a longer abbreviation of the same flag"),
+    ("dir-action-abbreviated-long-with-a-value-still-allows",
+     ["grep", "-r", "pat", "/scratch", "--di", "skip"],
+     "/var/tmp", ALLOW,
+     "the inverse: the abbreviation with its value really does turn the "
+     "walk off, so the rows above are not a blanket refusal of `--di`"),
+    ("dir-action-abbreviated-long-repeated-last-has-no-value",
+     ["grep", "-r", "pat", "/scratch", "--di", "skip", "--dir"],
+     "/var/tmp", ALLOW,
+     "the repeated occurrence: a later valueless one applies nothing, so "
+     "the earlier skip is still what is in force"),
+    ("dir-action-with-no-value-abbreviated-on-rgrep",
+     ["rgrep", "pat", "/scratch", "--directorie"],
+     "/var/tmp", REFUSE,
+     "rgrep is grep -r and resolves the abbreviation the same way, so it "
+     "stays recursive"),
+    ("dir-action-ambiguous-long-prefix-applies-nothing",
+     ["grep", "-r", "pat", "/scratch", "--d"],
+     "/var/tmp", REFUSE,
+     "`--d` is ambiguous between --devices, --directories and "
+     "--dereference-recursive, so getopt resolves nothing and the -r stands"),
+
     # --- a token that is another flag's VALUE is not an exec introducer ----
     # The shim tested its exec-introducer list before honouring a pending
     # value, so `-x` as --exclude's value started a template that swallowed

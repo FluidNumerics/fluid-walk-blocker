@@ -935,6 +935,48 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
+# `logged_actions` in the state file is keyed by TWO shapes, deliberately,
+# and this is the whole list:
+#
+# * a BLIND SENTINEL -- one of `LATCH_SENTINELS`. It names a fact about the
+#   POLL: the tool could see no user slice, or no process at all. There is
+#   no pid to name, the value stored is a constant rather than an action,
+#   and the two sentinels are separate keys on purpose so a node with no
+#   user slices and a node with an unreadable `/proc` cannot dedup against
+#   each other -- they are different failures with different causes.
+# * a FINDING KEY -- `_finding_key()`, `verdict:pid:starttime`. It names one
+#   process in one arm, and the value stored is that finding's action.
+#
+# Folding them into one shape would mean either giving a blind poll a
+# fabricated pid, or giving a finding a name the end-of-poll prune cannot
+# take apart: that prune keeps a key whose tail after the first `:` is a
+# live `Proc.key`, which is exactly what makes a finding key prunable and a
+# sentinel not. What the two DO share is `_latch_key()`, so a third shape
+# cannot arrive unannounced.
+LATCH_BLIND_SLICES = "blind"
+LATCH_BLIND_PROCS = "procs_blind"
+LATCH_SENTINELS = (LATCH_BLIND_SLICES, LATCH_BLIND_PROCS)
+
+
+def _latch_key(key):
+    """`key`, having checked it is one of the two known shapes.
+
+    Construction-time, because the symptom of a third shape is not an
+    exception: it is a state file whose prune silently keeps or drops the
+    wrong entries, which surfaces as audit rows that repeat or go missing
+    weeks later. A key this function does not recognise is a bug in this
+    file, and the poll that would have written it is not one to trust.
+    """
+    if key in LATCH_SENTINELS:
+        return key
+    parts = key.split(":")
+    if len(parts) == 3 and all(parts) and parts[1].isdigit():
+        return key
+    raise AssertionError(
+        "latch key %r is neither a blind sentinel nor verdict:pid:starttime"
+        % (key,))
+
+
 def _finding_key(finding):
     """The identity latch()/the audit dedup/the NEW stdout marker all use.
 
@@ -944,8 +986,11 @@ def _finding_key(finding):
     is reused; PID plus the kernel's starttime is not, and the verdict is
     part of the identity because the same process can surface under a
     different verdict across polls.
+
+    The second of the two `logged_actions` key shapes; see `LATCH_SENTINELS`
+    above for the first and for why they are not unified.
     """
-    return "%s:%s" % (finding.verdict, finding.proc.key)
+    return _latch_key("%s:%s" % (finding.verdict, finding.proc.key))
 
 
 def latch(state, findings):
@@ -1131,18 +1176,19 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # logged again rather than being suppressed forever by a stale entry.
         err.write("no %s*%s found under %s\n"
                   % (SLICE_PREFIX, SLICE_SUFFIX, args.cgroup_root))
-        if logged_actions.get("blind") != "blind":
+        if logged_actions.get(LATCH_BLIND_SLICES) != LATCH_BLIND_SLICES:
             append_audit(audit_path,
                          [{"ts": time.time(), "layer": "reaper", "action": "blind",
                            "state": "no-user-slices"}])
-            logged_actions["blind"] = "blind"
+            logged_actions[_latch_key(LATCH_BLIND_SLICES)] = \
+                LATCH_BLIND_SLICES
             save_state(state_path, state)
         return EXIT_BLIND
     # Cleared unconditionally, not only when this poll goes on to save state
     # via the pruning near the end of this function. `stale` below can still
     # take a second reading and any later failure must not leave a recovered
     # node latched blind forever.
-    logged_actions.pop("blind", None)
+    logged_actions.pop(LATCH_BLIND_SLICES, None)
 
     stale = previous is None
     if not stale and (current["ts"] - previous["ts"]) < args.min_interval:
@@ -1210,11 +1256,12 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # two cannot dedup against each other, and state is saved so the
         # dedup survives to the next poll.
         err.write("no processes readable under %s\n" % args.proc_root)
-        if logged_actions.get("procs_blind") != "procs_blind":
+        if logged_actions.get(LATCH_BLIND_PROCS) != LATCH_BLIND_PROCS:
             append_audit(audit_path,
                          [{"ts": time.time(), "layer": "reaper",
                            "action": "blind", "state": "no-processes"}])
-            logged_actions["procs_blind"] = "procs_blind"
+            logged_actions[_latch_key(LATCH_BLIND_PROCS)] = \
+                LATCH_BLIND_PROCS
         # state["sample"] was already set to `current` above and is saved here
         # deliberately: the PSI read succeeded, only /proc failed, so the next
         # poll should difference against THIS sample.
@@ -1227,7 +1274,7 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     # its sibling above is in exactly the position this one would be in the day
     # someone adds an early return below: that pop WAS redundant too, until the
     # /proc check above made it load-bearing, and nothing warned.
-    logged_actions.pop("procs_blind", None)
+    logged_actions.pop(LATCH_BLIND_PROCS, None)
 
     findings = classify(all_procs, mounts, budget_s=args.budget,
                         fanout_n=args.fanout)
