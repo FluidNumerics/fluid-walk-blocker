@@ -841,6 +841,192 @@ def test_the_fork_check_would_catch_an_injected_fork(rendered_shim):
 
 
 # --------------------------------------------------------------------------
+# the same claim, from execution rather than from the text
+# --------------------------------------------------------------------------
+#
+# The scan above reasons about generated shell. It cannot see a construct it
+# was never taught to look for -- a builtin that forks under one shell and
+# not another, a here-string, a `read` from a process substitution -- so the
+# claim is also asserted the only way that cannot be fooled by wording: run
+# the thing and count the clones. The two checks stay side by side because
+# they fail on different mistakes. The text one runs everywhere and names the
+# offending line; this one needs `strace` and ptrace permission, and names
+# only that something forked.
+#
+# What it asserts is the design as written, not a slogan: the fast path
+# creates NO process, and the mount read creates exactly the ONE
+# `sg_load_mounts` documents -- the awk that parses the table in a single
+# pass. A second process on that path, or any process on the fast path, is
+# the finding. Measured here rather than assumed: the fork the mount read
+# makes is real and visible in every trace this test takes.
+
+# `execve` is here to find the boundary -- everything the shim does happens
+# before it execs the real tool -- and to say WHICH process each clone
+# became. `open`/`openat` are here so "reaches the mount helper" is a fact
+# this test checks rather than a claim its name makes.
+_TRACED_SYSCALLS = "clone,clone3,vfork,fork,execve,open,openat"
+_FORKING = ("clone", "clone3", "vfork", "fork")
+
+# `12345 openat(...)` when more than one process is traced, `openat(...)`
+# when only one is -- which is the difference this test is measuring, so the
+# parser cannot assume either.
+_TRACE_LINE = re.compile(r"^(?:\d+\s+)?([a-z_0-9]+)\(")
+
+
+def _shell_as_sh(tmp_path, shell):
+    """`shell` reachable under the name `sh`.
+
+    Through a symlink, not an argument: bash turns on POSIX mode from the
+    BASENAME it was invoked as, so `bash script` and `sh script` are two
+    different shells and only the second is the one a login node runs.
+    """
+    real = shutil.which(shell)
+    if real is None:
+        pytest.skip("%s is not installed, so the execution-based fork check "
+                    "cannot run under it" % shell)
+    directory = tmp_path / ("as-sh-" + shell)
+    directory.mkdir()
+    link = directory / "sh"
+    os.symlink(real, str(link))
+    return str(link)
+
+
+def _trace_shim(tmp_path, shell, shim_env, argv, cwd, label):
+    """The shim run under strace; returns (syscall lines, stdout).
+
+    Skips -- once, loudly, with the reason -- when strace is absent or
+    ptrace is not permitted, which is the ordinary state of a hardened
+    container and not a reason to fail a suite.
+    """
+    strace = shutil.which("strace")
+    if strace is None:
+        pytest.skip("strace is not on PATH; the execution-based fork check "
+                    "needs it (the text-based one still ran)")
+    trace_path = tmp_path / ("trace-%s.txt" % label)
+    command, environ, real_cwd = conftest.shim_invocation(
+        shim_env, argv, cwd=cwd)
+    try:
+        proc = subprocess.run(
+            [strace, "-f", "-e", "trace=" + _TRACED_SYSCALLS,
+             "-o", str(trace_path), shell] + command,
+            capture_output=True, env=environ, cwd=real_cwd, input=b"")
+    except PermissionError as exc:
+        pytest.skip("strace could not be run here (%s); the execution-based "
+                    "fork check needs ptrace permission" % exc)
+    stderr = proc.stderr.decode("utf-8", "replace")
+    first_line = (stderr.strip().splitlines() or ["no output"])[0]
+    text = trace_path.read_text(errors="replace") if trace_path.exists() else ""
+    if "ptrace" in stderr.lower() or "execve(" not in text:
+        pytest.skip("strace exited %d without a usable trace (%s); the "
+                    "execution-based fork check needs ptrace permission"
+                    % (proc.returncode, first_line))
+    lines = []
+    for line in text.splitlines():
+        match = _TRACE_LINE.match(line)
+        if match:
+            lines.append((match.group(1), line))
+    return lines, proc.stdout.decode("utf-8", "replace")
+
+
+def _sg_awk(guard_text):
+    """The trusted awk the shim was stamped with, unquoted."""
+    value = re.search(r"^SG_AWK=(.*)$", guard_text, re.M).group(1).strip()
+    return value.strip("'\"")
+
+
+@pytest.mark.parametrize("shell", ("dash", "bash"))
+@pytest.mark.parametrize("case", ("fast-path", "reaches-the-mount-table"))
+def test_the_shim_creates_no_process_the_design_does_not_document(
+        tmp_path, shim_env, rendered_shim, shell, case):
+    """Clones before the real tool is exec'd, counted rather than argued.
+
+    Two argvs, because they leave the shim by different doors: one decided
+    in the fast path, which never looks at a mount and must create nothing
+    at all, and one allowed only after the mount table has been read, which
+    may create exactly the one process `sg_load_mounts` explains and no
+    other. Both under dash and under bash-as-sh, because a builtin that
+    forks in one shell and not the other is precisely what the text scan
+    cannot see.
+    """
+    if case == "fast-path":
+        # grep only traverses when told to, and it was not told to.
+        argv = ["grep", "needle", "/tmp/haystack"]
+    else:
+        # Recursive, so the root has to be CLASSIFIED before it can be
+        # allowed -- which is the mount table, read. A merely depth-bounded
+        # argv would not do: the global ceiling settles that one without the
+        # table ever being opened, which is what makes this row distinct.
+        argv = ["grep", "-r", "needle", "/tmp/cheap"]
+
+    lines, stdout = _trace_shim(
+        tmp_path, _shell_as_sh(tmp_path, shell), shim_env, argv,
+        cwd="/home/someone", label="%s-%s" % (shell, case))
+
+    assert "RAN " in stdout, (
+        "the run was refused, so it never reached the exec this test is "
+        "about: %r" % stdout)
+
+    # The real tool, not the second execve: on the mount-table path the
+    # second execve is the awk, and a boundary that moves when the shim
+    # changes would quietly stop asserting anything.
+    real_tool = os.path.join(shim_env["bin_dir"], argv[0])
+    before = []
+    for name, line in lines:
+        if name == "execve" and ('"%s"' % real_tool) in line:
+            break
+        before.append((name, line))
+    else:
+        raise AssertionError("no execve of %s in the trace: %s"
+                             % (real_tool, [ln for _n, ln in lines][:12]))
+
+    opened = [line for name, line in before if name in ("open", "openat")]
+    reached = any(shim_env["mounts"] in line for line in opened)
+    if case == "fast-path":
+        assert not reached, (
+            "the fast-path argv read the mount table, so the two rows are no "
+            "longer distinct: %s" % opened)
+    else:
+        assert reached, (
+            "this argv was supposed to reach the mount helper and did not, "
+            "so it proves only what the fast-path row already proves: %s"
+            % opened)
+
+    created = [line for name, line in before if name in _FORKING]
+    execed = [line for name, line in before if name == "execve"][1:]
+
+    # WHICH programs ran, first: that is the shell-independent claim, and
+    # the one a fork the text scan cannot see would break. The only
+    # documented exception is the trusted awk `sg_load_mounts` runs once
+    # over the table, and it may appear only on the path that reads it.
+    # Counting the awk execs rather than hard-coding one keeps the row
+    # honest where SG_AWK does not exist and the pure-sh reader runs
+    # instead: there the answer is zero on both paths.
+    awk = _sg_awk(rendered_shim["guard_text"])
+    documented = [line for line in execed if ('"%s"' % awk) in line]
+    assert execed == documented, (
+        "a program the design does not document ran before the real tool "
+        "under %s: %s" % (shell, [ln for ln in execed if ln not in documented]))
+    if case == "fast-path":
+        assert documented == [], (
+            "the fast path ran the mount-table awk: %s" % documented)
+        assert created == [], (
+            "%d process(es) created on the fast path under %s -- ADR-0015's "
+            "whole argument for `sh`: %s" % (len(created), shell, created[:4]))
+        return
+
+    # HOW MANY, second, and this one is shell-dependent by a measured
+    # constant: for `sg_expensive=$(... awk ...)` dash forks once and exec's
+    # the awk in the child, while bash forks a subshell for the command
+    # substitution and then forks again to run the command in it. One extra
+    # process on the way to the same single read, never two -- a third would
+    # be a fork nothing here explains.
+    assert len(created) <= len(documented) + 1, (
+        "%d process(es) created before the exec of the real tool under %s "
+        "for %d documented read(s): %s"
+        % (len(created), shell, len(documented), created[:4]))
+
+
+# --------------------------------------------------------------------------
 # the renderer's contract with its templates
 # --------------------------------------------------------------------------
 
