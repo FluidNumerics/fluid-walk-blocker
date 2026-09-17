@@ -305,11 +305,13 @@ ExecStartPre=-{timeout} --kill-after={kill_after} {relink_timeout} {sh} {prefix}
 # NOT `-` prefixed, and that asymmetry is the point: the reaper's own exit
 # status has to reach the unit.
 ExecStart={python3} {prefix}/reaper.py --report --spool {spool}
-# THREE exit codes, and two of them fail the unit:
+# FOUR exit codes, and three of them fail the unit:
 #
 #   0  nothing new, or nothing new that anyone could act on
 #   1  a new ACTIONABLE finding
 #   2  BLIND: no user slice, or /proc unreadable. The tool cannot see.
+#   3  under --kill only: a kill was attempted and the process is not
+#      known to be gone. Recurs every poll it recurs; never latched.
 #
 # A non-zero exit already fails a Type=oneshot unit, and `SuccessExitStatus=`
 # is ADDITIVE to a success set that always contains 0 -- so the next line

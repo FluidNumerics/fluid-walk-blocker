@@ -15,6 +15,7 @@ and cgroup leaf is a fixture value (ADR-0014).
 """
 
 import io
+import errno
 import json
 import os
 import shutil
@@ -2596,7 +2597,8 @@ def test_a_kill_error_fails_the_unit_on_every_poll(tmp_path, procfs, mounts_path
         rcs.append(reaper.run(args, sleep=lambda _s: None, killer=killer,
                               alive=lambda pid: False))
     assert rcs == [reaper.EXIT_KILL_FAILED] * 2, rcs
-    assert reaper.KILL_DID_NOT_LAND == {"signalled_but_wedged", "kill_error"}
+    assert reaper.KILL_DID_NOT_LAND == {
+        "signalled_but_wedged", "signal_failed", "kill_error"}
 
 
 def test_a_report_only_unit_cannot_exit_kill_failed(tmp_path, procfs, mounts_path):
@@ -2615,3 +2617,72 @@ def test_a_report_only_unit_cannot_exit_kill_failed(tmp_path, procfs, mounts_pat
         rcs.append(reaper.run(args, sleep=lambda _s: None,
                               alive=lambda pid: True))
     assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs
+
+
+def test_a_signal_that_cannot_be_sent_fails_the_unit_on_every_poll(
+        tmp_path, procfs, mounts_path):
+    """`signal_failed`: os.kill refused with something other than ESRCH, so
+    nothing was delivered and the process is still there. The unit cannot
+    read green over a kill it was not allowed to make."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, 4113, "find",
+               ["find", "/scratch/h", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
+
+    def killer(pid, sig):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(args, sleep=lambda _s: None, killer=killer,
+                              alive=lambda pid: True))
+    assert rcs == [reaper.EXIT_KILL_FAILED] * 2, rcs
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert {e["action"] for e in entries} == {"signal_failed"}, entries
+
+
+def test_a_skip_sends_no_signal_and_never_exits_kill_failed(
+        tmp_path, procfs, mounts_path):
+    """The two standing POLICY skips -- another user's process without
+    --kill-others, and a finding over --max-kills -- send nothing, so they
+    are new-actionable once and quiet after, never code 3, however wedged
+    the process would have turned out to be."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    # Another user's process: skipped_other_user.
+    write_proc(procfs, 4114, "find",
+               ["find", "/scratch/h", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
+    args.kill_others = False
+    signalled = []
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(args, sleep=lambda _s: None,
+                              killer=lambda pid, sig: signalled.append(sig),
+                              alive=lambda pid: True))
+    assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs
+    assert signalled == []
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert {e["action"] for e in entries} == {"skipped_other_user"}, entries
+
+    # The cap: a second finding with --max-kills 0 is skipped_kill_cap.
+    write_proc(procfs, 4115, "find",
+               ["find", "/scratch/k", "-type", "f", "-name", "y"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    capped = _stalling_kill_args(tmp_path, cg, procfs, mounts_path,
+                                 extra=("--max-kills", "0"))
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(180.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(capped, sleep=lambda _s: None,
+                              killer=lambda pid, sig: signalled.append(sig),
+                              alive=lambda pid: True))
+    assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs
+    assert signalled == []
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert "skipped_kill_cap" in {e["action"] for e in entries}, entries

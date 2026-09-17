@@ -162,8 +162,9 @@ NEVER_KILL = frozenset((
 #   0  nothing new, or nothing new that anyone could act on
 #   1  a new ACTIONABLE finding -- a verdict outside NEVER_KILL
 #   2  BLIND: no user slice, or /proc unreadable. The tool cannot see.
-#   3  a real signal was sent this poll under --kill and did not land:
-#      `signalled_but_wedged` or `kill_error`. Every poll it recurs.
+#   3  a kill was attempted this poll under --kill and the process is not
+#      known to be gone: `signalled_but_wedged`, `signal_failed` or
+#      `kill_error`. Every poll it recurs.
 #
 # Measured at a reference deployment, unactionable findings outnumbered
 # actionable ones by a wide margin, and every one of them failed the unit,
@@ -206,10 +207,15 @@ EXIT_ACTIONABLE = 1
 EXIT_BLIND = 2
 EXIT_KILL_FAILED = 3
 
-# The terminate() outcomes that mean a real signal was sent and the process
-# is still there, or that whether it landed cannot be known. One set, so the
-# exit code and the audit trail's no-dedup rule cannot name different lists.
-KILL_DID_NOT_LAND = frozenset(("signalled_but_wedged", "kill_error"))
+# The terminate() outcomes that mean a kill was attempted this poll and the
+# process is not known to be gone: the signals landed and it is still there
+# (`signalled_but_wedged`); the first signal could not be sent at all
+# (`signal_failed`, an OSError other than ESRCH); or terminate() raised and
+# nothing about the attempt can be known (`kill_error`, set by run()).
+# `already_gone`, `terminated` and `killed` all mean the process is gone.
+# One set, so the exit code and the audit trail's no-dedup rule cannot name
+# different lists.
+KILL_DID_NOT_LAND = frozenset(("signalled_but_wedged", "signal_failed", "kill_error"))
 
 
 # --------------------------------------------------------------------------
