@@ -41,16 +41,7 @@ import jsonschema
 
 from . import __version__, config, paths, stamp
 from .render import manifest
-
-try:
-    from .render.shim import render_shim, render_wrapped_names
-except ModuleNotFoundError as _exc:  # pragma: no cover - transitional
-    # The shim renderer lands beside this module; until it does, the rest of
-    # the payload builds and the shim files are omitted with a warning.
-    # Only the module's own absence is tolerated, never an error inside it.
-    if _exc.name != "walk_blocker.render.shim":
-        raise
-    render_shim = render_wrapped_names = None
+from .render.shim import render_shim, render_wrapped_names
 
 BUILD_MARKER = ".walk-blocker-build"
 
@@ -132,10 +123,9 @@ def _verbatim(rel, source, consumers):
     return data
 
 
-def render_payload(site, site_bytes, version, warn=None):
+def render_payload(site, site_bytes, version):
     """The payload as `{relpath: (bytes, mode)}`, manifest and marker
-    included. `warn` receives one-line notices about what was omitted."""
-    warn = warn or (lambda msg: None)
+    included."""
     files = {}
 
     def put(rel, data, mode=MODE_FILE):
@@ -174,14 +164,11 @@ def render_payload(site, site_bytes, version, warn=None):
             raise BuildError("%s: %s" % (rel, "; ".join(findings)))
         put(rel, _generated(rel, text), MODE_EXEC if rel in EXECUTABLE else MODE_FILE)
 
-    if render_shim is None:
-        warn("shim renderer not available; shim/ omitted from this payload")
-    else:
-        policy = site.policy()
-        put("shim/guard.sh", _generated("shim/guard.sh",
-                                        render_shim(policy, site, version)), MODE_EXEC)
-        put("shim/wrapped_names.sh", _generated("shim/wrapped_names.sh",
-                                                render_wrapped_names(policy, site, version)))
+    policy = site.policy()
+    put("shim/guard.sh", _generated("shim/guard.sh",
+                                    render_shim(policy, site, version)), MODE_EXEC)
+    put("shim/wrapped_names.sh", _generated("shim/wrapped_names.sh",
+                                            render_wrapped_names(policy, site, version)))
 
     hashed = {rel: data for rel, (data, _mode) in files.items()}
     lock = manifest.render_manifest(site_bytes, version, site.lookup("schema_version"),
@@ -281,8 +268,7 @@ def build(site_path, out_dir, check=False, out=None, err=None):
             raise BuildError(str(exc))
         if not check:
             _refuse_unless_ours(out_dir)
-        files = render_payload(site, _read(site_path), version,
-                               warn=lambda msg: err.write("walk-blocker build: %s\n" % msg))
+        files = render_payload(site, _read(site_path), version)
         if check:
             if not os.path.isdir(out_dir):
                 out.write("missing: %s (not a directory)\n" % out_dir)
