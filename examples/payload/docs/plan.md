@@ -143,7 +143,8 @@ passing `--mem` because a partition with an unlimited default charges the
 whole node to a job that names none (ADR-0007). The bound moves from depth
 to wall clock, and unlike `-maxdepth` it is not advisory. It moves load off
 the login node, not off the filesystem; every place it is documented says
-so.
+so. `docs/alternatives.md` is where the walks it replaces are catalogued,
+question by question.
 
 ## The deployer's guarantees
 

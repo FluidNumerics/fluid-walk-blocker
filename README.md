@@ -71,8 +71,9 @@ default is `--report`.
    alone opens no file and creates no process; a call that needs a mount
    judgement reads `/proc/mounts` once, through one trusted `awk`, and
    nothing that can block. If the walk is bounded within the depth
-   ceiling, or every root is on a cheap mount, or the root is deeper than
-   `[filesystems].unscoped_depth`, it `exec`s the real tool.
+   ceiling, or every root is on a cheap mount, or the root sits at least
+   `[filesystems].unscoped_depth` components below the mount point, it
+   `exec`s the real tool.
 4. Otherwise it exits 2 with a refusal that names the bound the tool
    accepts, the allowance on that mount, and `walk-job`. Exit 2, never 1:
    `grep` uses 1 for "no match" and a refusal must never read as an empty
@@ -85,29 +86,13 @@ default is `--report`.
 
 ## What to run instead
 
-Every refusal prints the alternative for the tool that was refused. The
-table, for reading before you are refused:
-
-| Refused | Bound the walk with | Or |
-|---|---|---|
-| `find`, `bfs` | `-maxdepth N`; `-xdev` when the walk starts on a cheap mount and would descend into an expensive one | `walk-job -- find ...` |
-| `rg` | `--max-depth N`, `--one-file-system` | `walk-job -- rg ...` |
-| `fd` | `-d N`, `--one-file-system` | `walk-job -- fd ...` |
-| `tree` | `-L N`, `-x` | `walk-job -- tree ...` |
-| `du` | `-x` — its `-d` prunes output, not the walk, so no depth flag bounds it | `walk-job -- du -sh PATH`; a bounded walk, not a lookup, absent server-side accounting |
-| `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep` | no depth flag exists; change tool: `rg --max-depth N PATTERN PATH`, or `find PATH -maxdepth N -type f -exec grep ... {} +` | `walk-job -- grep ...` |
-| `ugrep` | `--depth N` | `walk-job -- ugrep ...` |
-| `fzf`, `sk` | not wrapped by default (`[shim].unwrapped_tools`): interactive finders bounded by the user's attention | — |
-
-`N` is the depth ceiling the refusal prints: the global
-`[filesystems].maxdepth_allowed`, or the mount's own `maxdepth` where the
-site measured one. A root deeper than `[filesystems].unscoped_depth`
-components below the mount point may be walked unbounded.
-
-`walk-job` submits the command to `[slurm].partition` under a wall-clock
-limit the scheduler enforces. It moves load off the login node, not off the
-filesystem: the same metadata operations reach the same storage from a
-different client. `walk-job -h` on the node has the options.
+Every refusal prints the alternative for the tool that was refused, and
+names two pages installed with the payload: `docs/what-to-run-instead.md`,
+rendered from the site's own `site.toml` — its mounts, their depth
+allowances, the survey's measurements and its `walk-job` — and
+`docs/alternatives.md`, the grimoire: the walk patterns seen at deployments
+of this tool, the question each was really asking, and the redirect for
+each, with a per-tool table. Read the grimoire before you are refused.
 
 **Refusals are recorded.** Every refusal writes one `refused` record to the
 journal under the `walk-blocker` tag, with the tool, the mount judgement and
@@ -145,6 +130,7 @@ after which nothing is measurable.
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
 | `docs/adr/` | the decisions, `0001` through `0020` |
+| `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/operating.md` | the operator's runbook |
 | `docs/plan.md` | the architecture as built, on one page |
@@ -214,5 +200,7 @@ configuration can be checked against a commit.
 3. `docs/adr/0001` through `docs/adr/0020`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook
-6. `docs/evidence.md` — where the evidence is, and why it is not here
-7. `CLAUDE.md` — the non-negotiables, and the parts that are easy to get wrong
+6. `docs/alternatives.md` — what to run instead: the users' grimoire, and the
+   generic half of the page every refusal names
+7. `docs/evidence.md` — where the evidence is, and why it is not here
+8. `CLAUDE.md` — the non-negotiables, and the parts that are easy to get wrong
