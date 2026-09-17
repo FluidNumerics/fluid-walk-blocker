@@ -276,7 +276,8 @@ account (ADR-0004):
   resolves in `[install].tool_search_path`, plus `walk-job`;
 - `[install].spool_dir` at mode `0755`: writable by root alone, readable
   by everyone, so the person who has to make the `--kill` decision can read
-  the trail (ADR-0012);
+  the trail (ADR-0012); the relink keeps `uncovered-mounts.state` there
+  too, its memory of which mounts it has reported (ADR-0019);
 - a hook block in each enabled shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
@@ -439,13 +440,19 @@ It carries three kinds of record:
   records and the `adm` group and root see everyone's; and a session that
   produces refusals faster than journald's per-unit rate limit loses the
   excess, which journald marks with its own "suppressed N messages" line;
-- one **`uncovered_mount`** record per poll, at notice priority, for every
-  mount in the live table that is expensive by its compiled default and
-  covered by no `[[filesystems.mounts]]` override (ADR-0016). This is the
-  visible cost of not having surveyed: read the mount and the type, run the
-  survey, and either add an override or keep the survey output beside
-  `site.toml` as the record that the default was chosen. Filter them out
-  with `-p warning` when you want only the other two kinds.
+- an **`uncovered_mount`** record, at notice priority, when a mount's
+  standing changes (ADR-0016, ADR-0019): `state: expensive` the first time
+  a mount in the live table is seen running on its compiled default with no
+  `[[filesystems.mounts]]` override, `covered` once an override or a
+  narrower default has taken it over, `unmounted` once it has left the
+  table. A steady state is silent. The `expensive` line is the visible cost
+  of not having surveyed: read the mount and the type, run the survey, and
+  either add an override — the next poll answers with `covered` — or keep
+  the survey output beside `site.toml` as the record that the default was
+  chosen. After a reboot every uncovered mount is named once more, so a
+  volatile journal is not left without the line. What the relink currently
+  believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
+  world-readable.
 
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used,

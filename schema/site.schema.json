@@ -167,7 +167,7 @@
         "spool_dir": {
           "$ref": "#/$defs/sink_path",
           "default": "/var/log/walk-blocker",
-          "description": "Where the reaper's audit trail is written. Local disk: a monitor that lives on what it monitors is unavailable exactly when it is needed."
+          "description": "Where the reaper's audit trail is written, and where the reconcile keeps its memory of which mounts it has reported (ADR-0019). Local disk: a monitor that lives on what it monitors is unavailable exactly when it is needed."
         },
         "audit_filename": {
           "type": "string",
