@@ -1,7 +1,8 @@
 {
   "files": {
-    "README.md": "5d7b2c503d14aada22aa57879cfa0a330eb4e51fe0abe2671c370eea95eae15d",
-    "deploy.py": "fb29d04df6a5995caa9a69d02b01c29f86e3dbadb78bf2fbf7bb2fa4642dbafd",
+    "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
+    "README.md": "a56dfea89ddd40ee67868ebf70b69a4dc5be89a5826497fb38952e098234d7a5",
+    "deploy.py": "dfdd0b3070c019c7b7ba7973ef3c926de7a81a9476c8c810185777324382fa1e",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -29,16 +30,16 @@
     "docs/plan.md": "209e5e9b44aecfed7ddd8143b12fcb2ca2552cead84d34f5c64f8fb6866981de",
     "docs/site-config.md": "44877ed688effa199d0b8bd89ed78a2c5400877f205bc0a607d3c69cd5380c1d",
     "docs/what-to-run-instead.md": "fbef93235075ffc8ac9421f0181bff7cb099e4e75bffe42535d6b499ee33b3d3",
-    "reaper.py": "94a673f2c8ed38851ba0fbda3e3c8aa7438e115617c3e60f4adede89207297a6",
+    "reaper.py": "6f9acca536a158f3ba7bec793c670c3ab721d0dcd2405811f818c18df707ed20",
     "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",
     "shim/guard.sh": "00495dbe16528d198880944b07683e92eacc28c625603575edfa4524c5982791",
-    "shim/install.sh": "401f238919bb187474aa101ffb1b51bad38a2cbabd317eedba1931cfd08f7973",
+    "shim/install.sh": "92d2cb1d63436aee5091b9d921838fe4cb29e2752bbc4b3353ce0bd312f26579",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "9907c4b3931eac71c4ff67b5a27b12596c33fe7febf0af8998a3192051f993f2",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",
-    "survey.py": "dc7b5025e67bf1800f778b2d12a8b394c7e5758468bbeb4b7583fcfe67a65cba",
-    "walk-job": "5146145c460900eca0d0b2451e19986e8929a0b68debf74487d25a8d34ee0282"
+    "survey.py": "ced99dcc5e7dd71b5d31f40ccc872e4ae712cb4eb9d03b6b98e5b25f14075fa3",
+    "walk-job": "400a826d3354af236876ab4b8eaa74fa01197bde6cec9fca133b25e8fe599ee3"
   },
   "schema_version": 1,
   "site_sha256": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",

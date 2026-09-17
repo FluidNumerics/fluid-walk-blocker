@@ -44,6 +44,16 @@ def node_dir():
     )
 
 
+def license_file():
+    """The licence, shipped in the payload: BSD-3 clause 1 requires the
+    notice and terms to travel with a redistribution, and copying the
+    payload onto a node is one."""
+    return _first_existing(
+        os.path.join(_CHECKOUT_ROOT, "LICENSE"),
+        os.path.join(_HERE, "LICENSE"),
+    )
+
+
 def readme_file():
     """The repo README, shipped in the payload: the hook block every login
     shell sources points users at it to explain why their PATH changed."""

@@ -1,30 +1,30 @@
 # fluid-walk-blocker
 
 ```text
-  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗
-  ◆·║  ·······║  ···║     ║   ║        ·····║       ║
-  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║
-  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║
-  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║
-  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║
-  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║
-  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║
-  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║
-  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║
-  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║
-  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║
-  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║
-  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║
-  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣
-  ║ ║·······║···║·······║           ║·║ ║···║       ║
-  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║
-  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║
-  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║
-  ║ ║     ║  ·····║        ···║    ·····║···········◆
-  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■
+  ╶─┬─────────┬─────┬─────┬───┬─────────────┬───────┐
+  🯇╮│  ╭┈┈┈┈┈╮│  ╭┈╮│     │   │        ╭┈┈┈╮│       │
+  ╷┊│ ╷┊┌───╴┊│ ╷┊╷┊│ ╷ ╶─┘ ╷ ╵ ┌─┬───┐┊┌─┐┊└───┐ ╷ │
+  │┊│ │┊│╭┈┈┈╯│ │┊│┊│ │     │   │ │╭┈╮│┊│ │╰┈┈┈╮│ │ │
+  │┊└─┤┊│┊╶─┬─┘ │┊│┊│ └─────┴───┘ │┊╷┊╵┊│ └───╴┊│ │ │
+  │╰┈╮│┊│╰┈╮│   │┊│┊│             │┊│╰┈╯│╭┈┈┈┈┈╯│ │ │
+  ├─╴┊│┊└─┐┊└─┬─┘┊│┊├─────────────┤┊├───┤┊╶─┬───┴─┘ │
+  │╭┈╯│╰┈╮│╰┈╮│╭┈╯│┊│𝐹𝑙𝑢𝑖𝑑𝑁𝑢𝑚𝑒𝑟𝑖𝑐𝑠│┊│   │╰┈╮│       │
+  │┊╶─┤ ╷┊└─┐┊╵┊┌─┘┊│             │┊│ ╶─┼─╴┊│ ╷ ┌─╴ │
+  │╰┈╮│ │╰┈╮│╰┈╯│╭┈╯│ 𝒘𝒂𝒍𝒌𝒃𝒍𝒐𝒄𝒌𝒆𝒓 │┊│   │╭┈╯│ │ │   │
+  ├─╴┊├─┴─╴┊├───┤┊╶─┤             │┊│ ╷ │┊╶─┤ │ └─┐ │
+  │╭┈╯│╭┈┈┈╯│   │╰┈╮│ stops slow  │┊│ │ │╰┈╮│ │   │ │
+  │┊╶─┤┊╶───┤ ╶─┴─╴┊│ filesystem  │┊└─┤ └─┐┊├─┴─╴ │ │
+  │╰┈╮│╰┈┈┈╮│╭┈┈┈┈┈╯│ traversals  │╰┈╮│   │┊│     │ │
+  ├─┐┊└───╴┊│┊╶─┬───┴───┬─────────┘ ╷┊│ ╷ ╵┊│ ╶───┴─┤
+  │ │╰┈┈┈┈┈╯│╰┈╮│╭┈┈┈┈┈╮│           │┊│ │╭┈╯│       │
+  │ └───┬───┼─╴┊│┊┌───┐┊└───┬───────┤┊└─┤┊┌─┘ ╶───┐ │
+  │     │   │╭┈╯│┊│   │╰┈┈┈╮│╭┈┈┈┈┈╮│╰┈╮│┊│       │ │
+  │ ╷ ╶─┘ ╷ ╵┊╶─┘┊│ ╶─┴───╴┊╵┊┌───╴┊└─╴┊│┊└───────┘ ╵
+  │ │     │  ╰┈┈┈╯│        ╰┈╯│    ╰┈┈┈╯│╰┈┈┈┈┈┈┈┈┈┈🯈
+  └─┴─────┴───────┴───────────┴─────────┴───────────╴
 ```
 
-The maze was generated on 2026-09-17 by tkphd with the [asciiart.eu maze generator](https://www.asciiart.eu/ascii-maze-generator); the route and the words are Fluid Numerics' own.
+The maze was generated on 2026-09-17 by tkphd with the [asciiart.eu maze generator](https://www.asciiart.eu/ascii-maze-generator), then redrawn by hand; the route, the walkers and the words are the author's own.
 
 Two guardrails for a shared HPC login node, generic and config-driven: a
 PATH shim that refuses an unbounded filesystem walk before it starts, and a
@@ -36,8 +36,9 @@ Every fact about a particular site lives in `site.toml`, is validated by
 `schema/site.schema.json`, and is compiled into the node artifacts by
 `walk-blocker build`. The node never reads configuration.
 
-Copyright (c) 2026 Fluid Numerics LLC. All rights reserved. This repository is
-private; see `LICENSE`.
+Copyright (c) 2026 Trevor Keller, PhD. Licensed under the BSD 3-Clause
+License; see `LICENSE`, which every payload carries so the terms travel with
+the code it installs.
 
 ## Why
 

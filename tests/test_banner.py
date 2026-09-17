@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
 import pytest
 
@@ -39,7 +40,12 @@ def test_the_readme_banner_is_a_maze_with_an_attribution():
     banner = readme_banner()
     lines = banner.split("\n")
     assert len(lines) >= 20 and len({len(l) for l in lines}) <= 2, "not the maze"
-    assert "FluidNumerics" in banner
+    # The wordmarks, through a compatibility fold: the art sets them in
+    # mathematical italics, and which styling the artwork uses is the
+    # artist's business, not this test's.
+    folded = unicodedata.normalize("NFKC", banner)
+    assert "FluidNumerics" in folded
+    assert "walkblocker" in folded
     assert "asciiart.eu" in _read("README.md")
     # Nothing a shell single-quoted printf argument or a Python triple-quoted
     # literal would have to escape: that is what lets the copies be literal.

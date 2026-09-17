@@ -45,9 +45,28 @@ def test_python_m_walk_blocker_answers_version():
     assert out.stdout.strip().splitlines()[-1] == "walk-blocker %s" % walk_blocker.__version__
 
 
-def test_license_names_the_owner_and_year():
+def test_license_is_bsd_3_clause_and_names_the_holder():
+    """Three numbered clauses and the disclaimer, so a truncated or
+    two-clause licence fails rather than passing as "a BSD licence"."""
     with open(os.path.join(ROOT, "LICENSE"), encoding="utf-8") as fh:
         text = fh.read()
-    assert "Fluid Numerics LLC" in text
-    assert "2026" in text
-    assert "All rights reserved" in text
+    assert text.startswith("BSD 3-Clause License")
+    assert "Copyright (c) 2026, Trevor Keller, PhD" in text
+    for clause in ("1. Redistributions of source code",
+                   "2. Redistributions in binary form",
+                   "3. Neither the name of the copyright holder"):
+        assert clause in text, clause
+    assert "AS IS" in text and "NO EVENT SHALL" in text
+
+
+def test_the_payload_carries_the_licence(tmp_path):
+    """Clause 1 travels with the redistribution: a node that has the code
+    has the terms, beside it, without asking anyone."""
+    from walk_blocker import build, paths
+    out = tmp_path / "payload"
+    code = build.build(os.path.join(ROOT, "examples", "site.example.toml"), str(out))
+    assert code == 0
+    shipped = out / "LICENSE"
+    assert shipped.exists()
+    with open(str(shipped), encoding="utf-8") as fh:
+        assert fh.read() == open(paths.license_file(), encoding="utf-8").read()

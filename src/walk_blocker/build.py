@@ -132,6 +132,9 @@ def render_payload(site, site_bytes, version):
     node = paths.node_dir()
     put("site.toml", site_bytes)
     put("README.md", _read(paths.readme_file()))
+    # Clause 1 of the licence: a redistribution keeps the notice and the
+    # terms. Copying this payload onto a node is a redistribution.
+    put("LICENSE", _read(paths.license_file()))
     docs = paths.docs_dir()
     for rel in _tree_files(docs):
         put("docs/" + rel, _read(os.path.join(docs, rel)))
