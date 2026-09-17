@@ -72,6 +72,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Key a mount's class on filesystem type alone, or allow an unknown remote type by default | ADR-0016 — remoteness default, unknown remote is guarded, overrides loosen |
 | Prompt the admin interactively at install time for the mount list | ADR-0016, ADR-0005 — config is reviewed data, not an answer typed at a prompt |
 | Ship a default timer slot, add `RandomizedDelaySec`, or leave `AccuracySec` at its default | ADR-0017 — the slot is chosen against the live schedule; jitter and coalescing undo the choice |
+| Report the guarded path's `awk` as a fork-rule violation, or add a second program beside it | ADR-0018 — the fork-free rule is the fast path's; the guarded path's one documented program is the `awk` over `/proc/mounts`, and a second is a design change |
 | Copy a figure from a predecessor record into this tree | ADR-0014 — state the class and the re-measure condition |
 | Refuse a non-root-owned source tree | ADR-0006 — rejected three times |
 | Add a per-user install mode | ADR-0004 |
@@ -108,6 +109,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0015 | Node code is POSIX `sh` or stdlib Python 3.9; the shim is `sh` |
 | 0016 | Mount class: remoteness default, per-mount overrides, out-of-band survey (narrows 0007) |
 | 0017 | Timer slot is site config chosen against the live schedule; no default, no jitter, no coalescing |
+| 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
 
 ## Non-negotiables a prompt must restate
 
@@ -118,7 +120,7 @@ Name the ones the task touches; do not paste all of them.
 - **The node never reads config.** A site value is a `site.toml` key, compiled by `walk-blocker build`. Adding a runtime read is an ADR-0013 question, not a convenience.
 - `node/` and `deploy.py` are **stdlib-only Python 3.9 or POSIX `sh`** — no PEP 723 there, no 3.10 syntax.
 - `guard.sh`, `wrapped_names.sh` and every stamped constant line are **generated**; change the rule table or `site.toml` and rebuild. `walk-blocker build --check` must pass.
-- Everything before `sg_exec_real` **forks nothing** and reads only `/proc/mounts` — no `$(...)`, no backticks, no pipelines, no `statfs`, no network.
+- The **fast path forks nothing and opens nothing**; the **guarded path runs exactly one program** before the decision, the trusted `awk` over `/proc/mounts`; the **audit path** (refusal, escape hatch, seam record) is past the decision and off both counts, four programs by its own comment (ADR-0018). No `statfs`, no network, no config on any path. A second program on the guarded path is a design change.
 - **Table and shim must agree.** A divergence outranks the parsing question under it.
 - Refusal exits **2**, never 1.
 - Never claim a kill that did not land; never report a clean bill of health Layer 2 did not earn.

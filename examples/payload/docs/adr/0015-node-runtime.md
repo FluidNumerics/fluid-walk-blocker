@@ -1,6 +1,7 @@
 # ADR-0015: Node code is POSIX `sh` or stdlib-only Python 3.9, and the shim is the `sh` part
 
 **Status:** accepted, 2026-09-16
+The clause "Before `sg_exec_real`, the shim forks nothing — no `$(...)`, no backticks, no pipeline" is narrowed by ADR-0018: the fork-free rule is the fast path's, and the guarded path pays one documented fork — the trusted `awk` over `/proc/mounts` — before the real tool.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0015 — see `docs/evidence.md`
 
 ## Context
