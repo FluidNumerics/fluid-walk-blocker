@@ -244,6 +244,8 @@ root.
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports
-6. `docs/evidence.md` — where the evidence is, and why it is not here
-7. `CLAUDE.md` — this file: the non-negotiables and the parts that are easy
+6. `docs/alternatives.md` — what to run instead: observed walk patterns and
+   their redirects, shipped in every payload beside the site-rendered page
+7. `docs/evidence.md` — where the evidence is, and why it is not here
+8. `CLAUDE.md` — this file: the non-negotiables and the parts that are easy
    to get wrong
