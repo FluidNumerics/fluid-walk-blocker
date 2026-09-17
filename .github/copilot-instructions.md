@@ -70,6 +70,7 @@ a round and gets the same answer. ADRs live under `docs/adr/`.
 | Refuse to deploy from a source tree that is not root-owned | Rejected by the owner; the trust boundary is the installed artifact | ADR-0006 |
 | Rewrite the shim in Python | Measured at a reference deployment: interpreter start is roughly an order of magnitude slower than `sh`, and a Python shim cannot be fork-free | ADR-0015, `node/shim/measure.sh` |
 | Add a `statfs`, network or configuration read to the shim | The shim reads `/proc/mounts` and nothing else; a guard that hangs when the filesystem hangs is worse than no guard | ADR-0015, ADR-0007, ADR-0016 |
+| Report the guarded path's one `awk` as a violation of "forks nothing", or add a second program beside it | The fork-free rule is the fast path's; the guarded path runs exactly one documented program, counted under `strace` | ADR-0018 |
 | Hardcode a mount, host or path in the rule table | Paths are `site.toml` rows, compiled in; the rule table contains none | ADR-0007, ADR-0014, ADR-0016 |
 | Key a mount's class on filesystem type alone, or allow an unknown remote type by default | Type is the default, remoteness is the fallback, an unknown remote mount is guarded; overrides loosen | ADR-0016 |
 | Prompt the administrator interactively at install time | Unreviewable; the mount list is a diff, and `walk-blocker survey` proposes it out of band | ADR-0016, ADR-0005 |

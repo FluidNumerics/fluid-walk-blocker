@@ -41,10 +41,11 @@ default is `--report`.
    first on `PATH`.
 2. The user runs `grep -r`, `find`, `du`, `rg` or another wrapped name. The
    symlink in `<prefix>/bin` resolves to `guard.sh`.
-3. The shim reads its argv, its cwd and `/proc/mounts` — one file, no
-   fork, nothing that can block. If the walk is bounded within the depth
-   ceiling, or every root is on a cheap mount, or the root is deeper than
-   `[filesystems].unscoped_depth`, it `exec`s the real tool.
+3. The shim reads its argv, its cwd and `/proc/mounts` — one file, read
+   through one documented fork, nothing that can block. If the walk is
+   bounded within the depth ceiling, or every root is on a cheap mount, or
+   the root is deeper than `[filesystems].unscoped_depth`, it `exec`s the
+   real tool.
 4. Otherwise it exits 2 with a refusal that names the bound the tool
    accepts, the allowance on that mount, and `walk-job`. Exit 2, never 1:
    `grep` uses 1 for "no match" and a refusal must never read as an empty
@@ -115,7 +116,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0017` |
+| `docs/adr/` | the decisions, `0001` through `0018` |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/operating.md` | the operator's runbook |
 | `docs/plan.md` | the architecture as built, on one page |
@@ -182,7 +183,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0017`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0018`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook
 6. `docs/evidence.md` — where the evidence is, and why it is not here

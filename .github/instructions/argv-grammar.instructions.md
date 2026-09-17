@@ -56,7 +56,11 @@ version:
 ## The fast path
 
 Everything before `sg_exec_real` runs on **every** `grep`, `find` and `du`
-invocation on the node. It must fork nothing: no `$(...)`, no backticks, no
-pipelines — and it reads only `/proc/mounts`: no `statfs`, no network, no
-config file (ADR-0015). There is a test for each; do not propose changes that
-would trip them, and do not propose adding forks or reads there for tidiness.
+invocation on the node. The fast path — a call decided without a mount
+judgement — must fork nothing: no `$(...)`, no backticks, no pipelines. The
+guarded path runs exactly one program before the real tool, the trusted `awk`
+that reads `/proc/mounts` once (ADR-0018); a second is a design change, not a
+tidy-up. Both paths read only `/proc/mounts`: no `statfs`, no network, no
+config file (ADR-0015). There is a test for each, counting under `strace`; do
+not propose changes that would trip them, and do not propose adding forks or
+reads there for tidiness.

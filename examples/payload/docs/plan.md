@@ -35,8 +35,10 @@ sits underneath it.
 first on `PATH`; each wrapped name there is a symlink to `guard.sh`, which
 reads its argv, its cwd and `/proc/mounts`, and either `exec`s the real
 tool or refuses with exit 2 and a message naming the alternative. Before it
-decides, it forks nothing and opens one file; no `statfs`, no network, no
-configuration read, so it cannot hang when the filesystem does (ADR-0015).
+decides, it opens one file and forks nothing on the fast path — one trusted
+`awk` reads the mount table on the guarded path (ADR-0018) — with no
+`statfs`, no network, no configuration read, so it cannot hang when the
+filesystem does (ADR-0015).
 It is advisory: an absolute path, a private `PATH`, a container, a batch
 script, a second-level shell or a shell function all go around it, and the
 docstrings say so. Every refusal is journaled, and `WALK_BLOCKER_UNSCOPED=1`

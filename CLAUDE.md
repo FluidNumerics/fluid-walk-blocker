@@ -15,7 +15,7 @@ configuration.
 
 Copyright Fluid Numerics LLC. All rights reserved. This tree is private.
 
-Read `README.md` first, then `docs/adr/0001` through `0017` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0018` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -64,10 +64,14 @@ a container, a scheduler job script, a shell function. That is not a bug;
 it is the reason Layer 2 exists. Describing the shim as enforcement invites
 reliance it cannot support. See ADR-0001.
 
-**The shim forks nothing before `exec` and reads nothing that can block.**
-Before `sg_exec_real` there is no `$(...)`, no backtick, no pipeline; the
-only file it opens is `/proc/mounts`. No `statfs`, no network, no config.
-There is a test. See ADR-0015 and ADR-0016.
+**The fast path forks nothing; the guarded path pays one documented fork;
+nothing before `exec` reads anything that can block.** A call decided
+without a mount judgement creates no process: no `$(...)`, no backtick, no
+pipeline. A call that reaches a mount judgement runs exactly one program
+before the real tool, the trusted `awk` over `/proc/mounts`, and nothing
+else. On both paths the only file opened is `/proc/mounts`. No `statfs`, no
+network, no config. Both are tested by counting under `strace`, in both
+shells. See ADR-0015, ADR-0018 and ADR-0016.
 
 **A mount's class is decided from `/proc/mounts` fields and site config,
 never from a measurement at run time.** Remote or listed types are expensive
@@ -234,7 +238,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0017`, in order — the decisions
+3. `docs/adr/0001` … `0018`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports

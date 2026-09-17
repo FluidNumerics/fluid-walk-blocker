@@ -53,6 +53,7 @@ the ADR it bears on.
 | 0015 Node code is POSIX `sh` or stdlib-only Python 3.9, and the shim is the `sh` part | `sh` versus `python3 -S` start cost; the budget history against load |
 | 0016 A mount's class defaults from remoteness, is overridden per mount in site config, and is measured only out of band | n/a: design discussion |
 | 0017 The reaper's timer slot is site configuration chosen against the live schedule of the target node | Timer census at a reference deployment: the neighbours, their accuracy and delay settings, and the slot chosen |
+| 0018 The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table | Guarded-path timing with the trusted `awk` against the pure-`sh` reader on a reference deployment's mount table; the clone and program counts under `strace` are tool facts and live in the test |
 
 ## What this file is not
 
