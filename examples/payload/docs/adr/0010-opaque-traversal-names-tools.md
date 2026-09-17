@@ -1,6 +1,7 @@
 # ADR-0010: `opaque_traversal` names unmodelled tools, not unmodelled waiting
 
 **Status:** accepted, 2026-09-16
+The clause "a tool this tree has not modelled, doing something in D that might be a walk" is narrowed by ADR-0020: the arm names a process observed in D at two consecutive polls, not one.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0010 — see `docs/evidence.md`
 
 ## Context

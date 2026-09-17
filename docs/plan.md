@@ -120,7 +120,7 @@ branch in the logic (ADR-0007).
 | `orphan_traversal` | a known tool, a root on an expensive mount, reparented to init — the founding incident's shape, whatever its age | no |
 | `fanout_traversal` | `[reaper].fanout_n` or more concurrent traversals under one effective parent — the parallelised walk | no |
 | `orphan_idle` | an orphaned known tool with no expensive root and almost no CPU: a leak, not a load | yes |
-| `opaque_traversal` | a tool this tree has not modelled, in D state past budget, with a command line, not a stream filter | yes |
+| `opaque_traversal` | a tool this tree has not modelled, in D state at this poll and the one before, past budget, with a command line, not a stream filter | yes |
 | `unparsed_traversal` | the reaper could not parse the argv | yes |
 
 `NEVER_KILL` is the partition between what `--kill` may act on and what it

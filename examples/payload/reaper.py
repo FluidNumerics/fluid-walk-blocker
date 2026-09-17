@@ -156,6 +156,20 @@ CLK_TCK = os.sysconf("SC_CLK_TCK")
 NEVER_KILL = frozenset((
     "orphan_idle", "opaque_traversal", "unparsed_traversal"))
 
+# How many CONSECUTIVE polls a process must be observed in D before the
+# opaque_traversal arm will name it (ADR-0020). One observation is a
+# snapshot, not evidence: on a node whose expensive filesystem blocks a
+# plain stat() from time to time, any long-lived shell, interpreter or
+# daemon is in D at the instant of some poll, and `past_budget` is trivially
+# true of anything old. A walk stays blocked poll after poll; a blocked stat
+# clears. Two is the smallest count that means "persisted across a poll
+# interval", and the interval is the site's `[timer].on_calendar`, so this
+# is not a site knob: a site that needs a longer streak has a signal-to-
+# noise problem a new record should name. The known-tool arms do not use
+# it -- a `find` on an expensive root past budget is a walk however it is
+# caught -- and neither does anything killable.
+OPAQUE_D_POLLS = 2
+
 # What the process exit status means, and therefore what `systemctl --failed`
 # is tracking. Four codes, because meanings that once shared one were split:
 #
@@ -733,15 +747,25 @@ class Finding(object):
         return entry
 
 
-def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None):
+def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None,
+             d_streak=None):
     """Findings for one poll, over every process handed in.
 
     Every process, not a subset: PSI no longer narrows the candidate list
     (ADR-0009), and there is no seam for re-narrowing it -- one whose only
     remaining effect would be to make re-narrowing look supported.
+
+    `d_streak` maps `Proc.key` to how many consecutive polls, this one
+    included, the process has been observed in D; run() carries it in the
+    state file. It is read by the opaque_traversal arm alone (ADR-0020). A
+    caller that classifies one snapshot and passes nothing gets no
+    opaque_traversal findings at all, which is the honest answer: one
+    observation is not evidence of anything, and the known-tool arms do not
+    need it.
     """
     budget_s = TRAVERSAL_BUDGET_S if budget_s is None else budget_s
     fanout_n = FANOUT_N if fanout_n is None else fanout_n
+    d_streak = {} if d_streak is None else d_streak
     all_procs = procs
 
     findings = []
@@ -798,12 +822,24 @@ def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None):
             findings.append(Finding(proc, "orphan_idle", detail))
             continue
 
+        d_polls = d_streak.get(proc.key, 0)
         if ((not known_tool) and any(proc.argv)
                 and not R.is_stream_filter(proc.argv, STREAM_FILTERS)
-                and proc.state == "D" and past_budget):
+                and proc.state == "D" and past_budget
+                and d_polls >= OPAQUE_D_POLLS):
             # python3 in os.walk, rsync, tar. Counted, because otherwise the
             # corpus reports the tool list complete when it has only ever
             # looked for itself.
+            #
+            # `d_polls >= OPAQUE_D_POLLS`: in D at this poll AND the one
+            # before it (ADR-0020). Learned from a predecessor's report-only
+            # trail: this arm recorded two orders of magnitude more distinct
+            # processes than the known-tool arms, almost all long-lived
+            # shells, interpreters and daemons caught blocked in stat() at
+            # the instant of one poll, none of them a walk. The count is
+            # carried on the record as `d_polls` so a reader can see how
+            # long the process has been blocked, and a process that clears
+            # and blocks again starts over -- a streak, not a total.
             #
             # `is_stream_filter` excludes tools that cannot walk a tree under
             # any argv -- `tail -F` is the canonical member. Same kind of
@@ -849,6 +885,7 @@ def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None):
             # have named nothing, which is what the guard is for, and a
             # process still alive at the next poll reads its argv fine and is
             # classified then.
+            detail["d_polls"] = d_polls
             findings.append(Finding(proc, "opaque_traversal", detail))
 
     # Fan-out is an aggregate verdict: N bounded walks under one parent are one
@@ -1311,8 +1348,23 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     # /proc check above made it load-bearing, and nothing warned.
     logged_actions.pop(LATCH_BLIND_PROCS, None)
 
+    # Consecutive polls in D, per live process (ADR-0020). A process seen in
+    # D this poll extends its streak from the last poll's state; one seen in
+    # any other state, or not seen at all, drops out -- so a streak is
+    # exactly that, and a process that clears and blocks again counts from
+    # one. Keyed on `Proc.key` (pid:starttime) so a reused pid cannot inherit
+    # a streak. Saved with the rest of the state below; the blind returns
+    # above leave the previous poll's streaks in place, since a poll that
+    # saw nothing is not evidence that anything cleared.
+    previous_streak = state.get("d_streak", {})
+    d_streak = {}
+    for proc in all_procs.values():
+        if proc.state == "D":
+            d_streak[proc.key] = previous_streak.get(proc.key, 0) + 1
+    state["d_streak"] = d_streak
+
     findings = classify(all_procs, mounts, budget_s=args.budget,
-                        fanout_n=args.fanout)
+                        fanout_n=args.fanout, d_streak=d_streak)
     new = latch(state, findings)
     new_keys = set(_finding_key(f) for f in new)
 
