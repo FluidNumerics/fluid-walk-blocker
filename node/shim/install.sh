@@ -19,6 +19,7 @@
 #                                      runs this as root on every poll.
 #   install.sh --uninstall             as root, reverse a --system install
 #   install.sh --version
+#   install.sh --help
 #
 # There are NO path flags. Every location this script writes as root is a
 # literal stamped in by `walk-blocker build` from site.toml (ADR-0013): the
@@ -41,6 +42,50 @@ VERSION='@@VERSION@@'  # GENERATED from VERSION
 # One payload, one number -- see deploy.py. A literal because this script
 # runs on the node with nothing to read it from.
 
+sg_banner() {
+    # The maze on the README. printf is a builtin, so this answers where
+    # PATH is empty; no line carries a quote, a backslash or a percent.
+    printf '%s\n' \
+        '  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗' \
+        '  ◆·║  ·······║  ···║     ║   ║        ·····║       ║' \
+        '  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║' \
+        '  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║' \
+        '  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║' \
+        '  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║' \
+        '  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║' \
+        '  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║' \
+        '  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║' \
+        '  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║' \
+        '  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║' \
+        '  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║' \
+        '  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║' \
+        '  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║' \
+        '  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣' \
+        '  ║ ║·······║···║·······║           ║·║ ║···║       ║' \
+        '  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║' \
+        '  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║' \
+        '  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║' \
+        '  ║ ║     ║  ·····║        ···║    ·····║···········◆' \
+        '  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■' \
+        ''
+}
+
+sg_usage() {
+    sg_banner
+    printf '%s\n' \
+        'usage: install.sh --system [--i-have-approval] | --relink | --uninstall | --version' \
+        '' \
+        '  --system              print what an install would do and exit' \
+        '  --system --i-have-approval' \
+        '                        as root, actually install' \
+        '  --relink              reconcile the shim farm, hooks, audit directory and' \
+        '                        mount table; the timer runs this as root every poll' \
+        '  --uninstall           as root, reverse a --system install' \
+        '  --version             the walk-blocker version this was built from' \
+        '' \
+        'There are no path flags: every location is stamped in from site.toml.'
+}
+
 MODE=''
 APPROVED=0
 
@@ -48,9 +93,10 @@ while [ $# -gt 0 ]; do
     case $1 in
         --system|--uninstall|--relink) MODE=${1#--} ;;
         --i-have-approval) APPROVED=1 ;;
+        -h|--help) sg_usage; exit 0 ;;
         # Exits here rather than setting a MODE: this has to answer on a node
         # where the install is broken, which is when it is asked.
-        --version) printf 'walk-blocker %s\n' "$VERSION"; exit 0 ;;
+        --version) sg_banner; printf 'walk-blocker %s\n' "$VERSION"; exit 0 ;;
         *) echo "install.sh: unknown argument $1" >&2; exit 64 ;;
     esac
     shift

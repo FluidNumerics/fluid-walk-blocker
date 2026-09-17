@@ -42,7 +42,7 @@ def test_python_m_walk_blocker_answers_version():
                          capture_output=True, text=True, cwd=ROOT,
                          env={**os.environ, "PYTHONPATH": os.path.join(ROOT, "src")})
     assert out.returncode == 0
-    assert out.stdout.strip() == "walk-blocker %s" % walk_blocker.__version__
+    assert out.stdout.strip().splitlines()[-1] == "walk-blocker %s" % walk_blocker.__version__
 
 
 def test_license_names_the_owner_and_year():

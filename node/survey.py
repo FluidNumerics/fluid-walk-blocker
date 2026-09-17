@@ -224,9 +224,39 @@ def render_toml(rows):
     return "\n".join(out) + "\n"
 
 
+# The maze on the README, printed by --help so the payload on a node
+# introduces itself the way the repository does.
+BANNER = """\
+  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗
+  ◆·║  ·······║  ···║     ║   ║        ·····║       ║
+  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║
+  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║
+  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║
+  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║
+  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║
+  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║
+  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║
+  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║
+  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║
+  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║
+  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║
+  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║
+  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣
+  ║ ║·······║···║·······║           ║·║ ║···║       ║
+  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║
+  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║
+  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║
+  ║ ║     ║  ·····║        ···║    ·····║···········◆
+  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■
+"""
+
+
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(
-        description="Measure the mounts on this node and propose a "
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=BANNER + "\n\nMeasure the mounts on this node and propose a "
                     "[[filesystems.mounts]] block. Writes nothing.")
     parser.add_argument("--mounts", default="/proc/mounts", metavar="FILE")
     parser.add_argument("--timeout", type=float, default=2.0, metavar="SECONDS",

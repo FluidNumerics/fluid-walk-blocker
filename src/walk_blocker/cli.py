@@ -80,12 +80,39 @@ def cmd_build(args):
     return build.build(args.site, args.out, check=args.check)
 
 
+# The maze on the README, printed by --help and --version.
+BANNER = """\
+  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗
+  ◆·║  ·······║  ···║     ║   ║        ·····║       ║
+  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║
+  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║
+  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║
+  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║
+  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║
+  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║
+  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║
+  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║
+  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║
+  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║
+  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║
+  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║
+  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣
+  ║ ║·······║···║·······║           ║·║ ║···║       ║
+  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║
+  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║
+  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║
+  ║ ║     ║  ·····║        ···║    ·····║···········◆
+  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■
+"""
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="walk-blocker",
-        description="Compile and check a site's walk-blocker configuration.")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=BANNER + "\n\nCompile and check a site's walk-blocker configuration.")
     parser.add_argument("--version", action="version",
-                        version="walk-blocker %s" % __version__)
+                        version="%s\nwalk-blocker %s" % (BANNER, __version__))
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("validate", help="schema and semantic checks on a site.toml")
@@ -117,6 +144,8 @@ def build_parser():
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:

@@ -198,7 +198,7 @@ def test_version_prints_the_walk_blocker_version(tmp_path, walk_job):
     bin_dir = _bin(tmp_path)
     r = run_wj(walk_job, tmp_path, ["--version"], bin_dir)
     assert r.returncode == 0, r.stderr
-    assert r.stdout == "walk-blocker %s\n" % __version__
+    assert r.stdout.endswith("\nwalk-blocker %s\n" % __version__), r.stdout
 
 
 # --- argv survives the trip through --wrap ---------------------------------

@@ -337,7 +337,7 @@ def test_version_answers_without_a_mode():
     proc = subprocess.run([NODE_PYTHON, os.path.join(deploy.REPO, "deploy.py"),
                            "--version"], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "walk-blocker %s" % walk_blocker.__version__
+    assert proc.stdout.strip().splitlines()[-1] == "walk-blocker %s" % walk_blocker.__version__
 
 
 @pytest.fixture(scope="module")
@@ -363,7 +363,7 @@ def test_the_built_payload_ships_deploy_py_executable_and_stamped(built_payload)
     proc = subprocess.run([NODE_PYTHON, str(path), "--version"],
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "walk-blocker %s" % walk_blocker.__version__
+    assert proc.stdout.strip().splitlines()[-1] == "walk-blocker %s" % walk_blocker.__version__
     compiled = subprocess.run([NODE_PYTHON, "-m", "py_compile", str(path)],
                               capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stderr

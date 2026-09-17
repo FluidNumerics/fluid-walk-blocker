@@ -153,6 +153,32 @@ CLK_TCK = os.sysconf("SC_CLK_TCK")
 # precisely the inversion CLAUDE.md forbids when it says a stalling slice is
 # evidence about a user, not a process, and that the /proc step naming a
 # specific offender is what makes an action defensible.
+# The maze on the README, printed by --help and --version so the payload
+# on a node introduces itself the way the repository does. Never on a poll.
+BANNER = """\
+  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗
+  ◆·║  ·······║  ···║     ║   ║        ·····║       ║
+  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║
+  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║
+  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║
+  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║
+  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║
+  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║
+  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║
+  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║
+  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║
+  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║
+  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║
+  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║
+  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣
+  ║ ║·······║···║·······║           ║·║ ║···║       ║
+  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║
+  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║
+  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║
+  ║ ║     ║  ·····║        ···║    ·····║···········◆
+  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■
+"""
+
 NEVER_KILL = frozenset((
     "orphan_idle", "opaque_traversal", "unparsed_traversal"))
 
@@ -1172,8 +1198,9 @@ def default_spool():
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="reaper.py",
-        description="Report (and, only when told to, stop) unbounded "
-                    "filesystem walks on this login node.")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=BANNER + "\n\nReport (and, only when told to, stop) "
+                    "unbounded filesystem walks on this login node.")
     # Outside the mode group because asking what is installed is not a mode,
     # not because it survives a broken payload -- it does not: the module-level
     # `import search_rules as R` above must succeed before this parser exists,
@@ -1181,7 +1208,7 @@ def build_parser():
     # invocation. The answer that DOES survive a half-installed payload is the
     # payload marker, which the installer writes before this file.
     parser.add_argument("--version", action="version",
-                        version="walk-blocker %s" % __version__)
+                        version="%s\nwalk-blocker %s" % (BANNER, __version__))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--report", action="store_true", default=True,
                       help="find and report; take no action (the default)")
@@ -1512,6 +1539,10 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
 
 
 def main(argv=None):
+    # The banner is not ASCII. A node whose locale cannot encode it must get
+    # a replaced character, not a traceback, from --help or --version.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     if args.kill:
         args.report = False
