@@ -19,7 +19,7 @@
     "docs/adr/0015-node-runtime.md": "d4b557d263e2a8e57a1437016625d4806ec39dd535752432c98330a7d3953f5a",
     "docs/adr/0016-mount-policy-three-tiers.md": "e2926c66149d1659544d085957257507917e9ad14e9497fcb5b456a02b791ef1",
     "docs/adr/0017-timer-slot-is-site-config.md": "afdba4dbf39b63d8a7fb9dd841dfa75770e8e0bfcc1c16c8cd181ea81ee04f2d",
-    "docs/adr/0018-fork-free-is-the-fast-path.md": "c946dd27a72ba72f8fa78360ad4772301aa166dd580c3c68e21f7a733d323ec8",
+    "docs/adr/0018-fork-free-is-the-fast-path.md": "6346a723dc251bc7a9ac0d53660c9af443d69a369a749605a5dc58bcbccc4330",
     "docs/adr/0019-uncovered-mounts-are-reported-on-change.md": "844f1c504c694791690ecdf24e1ebc895861ffb980258c499022adf42290c821",
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
