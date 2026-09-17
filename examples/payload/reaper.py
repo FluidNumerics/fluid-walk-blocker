@@ -993,6 +993,23 @@ def _finding_key(finding):
     return _latch_key("%s:%s" % (finding.verdict, finding.proc.key))
 
 
+def _latch_blind(logged_actions, audit_path, sentinel, state_word):
+    """One blind record for `sentinel`, appended and latched -- unless the
+    last poll already did, in which case nothing is written.
+
+    The two blind arms in run() differ only in which sentinel they latch and
+    what the record's `state` says; the record's SHAPE is this function's,
+    so the two cannot drift apart. Returns whether a record was written, so
+    the caller can decide whether that alone is worth a state save.
+    """
+    if logged_actions.get(sentinel) == sentinel:
+        return False
+    append_audit(audit_path, [{"ts": time.time(), "layer": "reaper",
+                               "action": "blind", "state": state_word}])
+    logged_actions[_latch_key(sentinel)] = sentinel
+    return True
+
+
 def latch(state, findings):
     """Which findings are new since the last poll.
 
@@ -1176,12 +1193,8 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # logged again rather than being suppressed forever by a stale entry.
         err.write("no %s*%s found under %s\n"
                   % (SLICE_PREFIX, SLICE_SUFFIX, args.cgroup_root))
-        if logged_actions.get(LATCH_BLIND_SLICES) != LATCH_BLIND_SLICES:
-            append_audit(audit_path,
-                         [{"ts": time.time(), "layer": "reaper", "action": "blind",
-                           "state": "no-user-slices"}])
-            logged_actions[_latch_key(LATCH_BLIND_SLICES)] = \
-                LATCH_BLIND_SLICES
+        if _latch_blind(logged_actions, audit_path, LATCH_BLIND_SLICES,
+                        "no-user-slices"):
             save_state(state_path, state)
         return EXIT_BLIND
     # Cleared unconditionally, not only when this poll goes on to save state
@@ -1256,12 +1269,8 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # two cannot dedup against each other, and state is saved so the
         # dedup survives to the next poll.
         err.write("no processes readable under %s\n" % args.proc_root)
-        if logged_actions.get(LATCH_BLIND_PROCS) != LATCH_BLIND_PROCS:
-            append_audit(audit_path,
-                         [{"ts": time.time(), "layer": "reaper",
-                           "action": "blind", "state": "no-processes"}])
-            logged_actions[_latch_key(LATCH_BLIND_PROCS)] = \
-                LATCH_BLIND_PROCS
+        _latch_blind(logged_actions, audit_path, LATCH_BLIND_PROCS,
+                     "no-processes")
         # state["sample"] was already set to `current` above and is saved here
         # deliberately: the PSI read succeeded, only /proc failed, so the next
         # poll should difference against THIS sample.
