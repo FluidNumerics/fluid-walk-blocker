@@ -891,12 +891,13 @@ def _shell_as_sh(tmp_path, shell):
     return str(link)
 
 
-def _trace_shim(tmp_path, shell, shim_env, argv, cwd, label):
+def _trace_shim(tmp_path, shell, shim_env, argv, cwd, label, env=None):
     """The shim run under strace; returns (syscall lines, stdout).
 
     Skips -- once, loudly, with the reason -- when strace is absent or
     ptrace is not permitted, which is the ordinary state of a hardened
-    container and not a reason to fail a suite.
+    container and not a reason to fail a suite. `env` is merged into the
+    shim's environment the way run_shim() merges it.
     """
     strace = shutil.which("strace")
     if strace is None:
@@ -904,7 +905,7 @@ def _trace_shim(tmp_path, shell, shim_env, argv, cwd, label):
                     "needs it (the text-based one still ran)")
     trace_path = tmp_path / ("trace-%s.txt" % label)
     command, environ, real_cwd = conftest.shim_invocation(
-        shim_env, argv, cwd=cwd)
+        shim_env, argv, cwd=cwd, env=env)
     try:
         proc = subprocess.run(
             [strace, "-f", "-e", "trace=" + _TRACED_SYSCALLS,
@@ -930,8 +931,30 @@ def _trace_shim(tmp_path, shell, shim_env, argv, cwd, label):
 
 def _sg_awk(guard_text):
     """The trusted awk the shim was stamped with, unquoted."""
-    value = re.search(r"^SG_AWK=(.*)$", guard_text, re.M).group(1).strip()
+    return _sg_var(guard_text, "SG_AWK")
+
+
+def _sg_var(guard_text, name):
+    """One of the shim's stamped trusted-binary constants, unquoted."""
+    value = re.search(r"^%s=(.*)$" % name, guard_text, re.M).group(1).strip()
     return value.strip("'\"")
+
+
+_EXECVE_PROGRAM = re.compile(r'^(?:\d+\s+)?execve\("([^"]*)"')
+
+
+def _programs_run(lines):
+    """The programs that actually started, in order, after the shell itself.
+
+    A failed execve is not a program: dash searches PATH by attempting
+    execve in each directory, so `logger` reached through the fallback
+    leaves ENOENT lines for every earlier PATH entry under dash and none
+    under bash, which stats first. Counting those would make the answer
+    shell-dependent for a reason that is not a fork.
+    """
+    started = [line for name, line in lines
+               if name == "execve" and "= -1" not in line]
+    return [_EXECVE_PROGRAM.match(line).group(1) for line in started][1:]
 
 
 @pytest.mark.parametrize("shell", ("dash", "bash"))
@@ -1154,3 +1177,52 @@ def test_the_template_lives_under_node_and_the_renderer_finds_it():
     assert render.template_path(render.GUARD_TEMPLATE).startswith(os.path.join(ROOT, "node"))
     assert os.path.exists(render.template_path(render.GUARD_TEMPLATE))
     assert os.path.exists(render.template_path(render.NAMES_TEMPLATE))
+
+
+@pytest.mark.parametrize("shell", ("dash", "bash"))
+def test_a_refusal_runs_exactly_the_programs_the_audit_path_documents(
+        tmp_path, shim_env, rendered_shim, logger_stub, shell):
+    """The audit path, counted (ADR-0018, #29). A refused walk is past the
+    decision and off both of the design's counts; `sg_audit_emit`'s own
+    comment says it runs four programs -- the trusted `date`, `id`, `awk`
+    and `logger` -- to write the record, and until now that number rested
+    on the comment's word. Before it, the guarded path pays its one `awk`
+    to read the mount table. Five program starts, four distinct programs,
+    the mount-table `awk` first, and nothing else: an unexplained program
+    on this path is a change to the record's cost that the comment and the
+    ADR would both be wrong about.
+
+    The fixture site points the trusted logger at nothing, so the record's
+    fourth program is reached through the documented PATH fallback -- the
+    stub on `logger_stub["bin"]` -- and its path is what the trace shows.
+    """
+    argv = ["grep", "-r", "needle", "/scratch"]
+    env = {"PATH": "%s:%s:%s" % (shim_env["shim_dir"], logger_stub["bin"],
+                                 shim_env["bin_dir"])}
+    lines, stdout = _trace_shim(
+        tmp_path, _shell_as_sh(tmp_path, shell), shim_env, argv,
+        cwd="/home/someone", label="%s-refused" % shell, env=env)
+    assert "RAN " not in stdout, (
+        "the walk was allowed, so this is not the refusal path: %r" % stdout)
+
+    guard = rendered_shim["guard_text"]
+    awk = _sg_var(guard, "SG_AWK")
+    date = _sg_var(guard, "SG_DATE")
+    ident = _sg_var(guard, "SG_ID")
+    logger = os.path.join(logger_stub["bin"], "logger")
+    for path in (awk, date, ident):
+        assert os.access(path, os.X_OK), (
+            "%s is not executable here, so the trace would show the PATH "
+            "fallback instead of the documented program" % path)
+
+    programs = _programs_run(lines)
+    assert programs[:1] == [awk], (
+        "the guarded path's mount-table read is not the first program under "
+        "%s: %s" % (shell, programs))
+    assert sorted(programs[1:]) == sorted([date, ident, awk, logger]), (
+        "the audit path under %s ran %s; the design documents exactly "
+        "date, id, awk and logger" % (shell, programs[1:]))
+
+    calls = [line for line in logger_stub["log"].read_text().splitlines()
+             if line.strip()]
+    assert len(calls) == 1 and '"action":"refused"' in calls[0], calls
