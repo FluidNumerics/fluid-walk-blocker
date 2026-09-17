@@ -14,6 +14,7 @@ them; `md_cell` is the check that does not depend on remembering which.
 """
 import os
 import re
+import textwrap
 
 from .. import paths
 from .. import search_rules as R
@@ -23,6 +24,80 @@ TEMPLATE = "what-to-run-instead.md.in"
 PAYLOAD_PATH = shim.GUIDE_REL
 
 _MD_UNSAFE = re.compile(r"[|`\n\r]")
+
+# The template's prose is hard-wrapped by hand, but the substitutions land
+# inside those lines: a placeholder is almost never the width of the value
+# that replaces it. A one-character depth sits in an 18-character hole and
+# leaves a short line; a site that lists a dozen filesystem types runs to a
+# few hundred columns. Rendered as Markdown none of this shows, because
+# consecutive lines are one paragraph -- but the page is installed beside the
+# code on the node and gets read with `cat` and `less`, which is the reading
+# this exists for. So the prose is re-flowed AFTER substitution, at the width
+# the template was written to.
+WRAP_WIDTH = 76
+
+# What must survive untouched, because in Markdown its line breaks are
+# significant: fenced and indented code, table rows, list items, headings and
+# block quotes. Everything else is a paragraph and is filled.
+_FENCE = re.compile(r"^ {0,3}(?:```|~~~)")
+_VERBATIM = (
+    re.compile(r"^(?: {4,}|\t)"),      # indented code
+    re.compile(r"^ {0,3}\|"),          # table row
+    re.compile(r"^ {0,3}[-*+](?:\s|$)"),   # bullet list item
+    re.compile(r"^ {0,3}#"),           # heading
+    re.compile(r"^ {0,3}>"),           # block quote
+)
+
+# An ordered list is the one structure a SUBSTITUTION can conjure by
+# accident: a placeholder at the start of a template line is replaced by a
+# number, and `2. The measurements are ...` then looks like a list item. It
+# is not one -- CommonMark lets an ordered list interrupt a paragraph only
+# when it starts at 1 -- and treating it as one strands the rest of the
+# sentence on its own line, which is the exact raggedness this pass removes.
+_ORDERED = re.compile(r"^ {0,3}(\d+)[.)](?:\s|$)")
+
+
+def _is_prose(line, mid_paragraph):
+    """A line the wrapper may join to its neighbours and re-break."""
+    if not line.strip():
+        return False
+    if any(rx.match(line) for rx in _VERBATIM):
+        return False
+    m = _ORDERED.match(line)
+    return not (m and (not mid_paragraph or m.group(1) == "1"))
+
+
+def reflow(text, width=WRAP_WIDTH):
+    """Re-wrap the paragraphs of a rendered page, leaving structure alone.
+
+    A blank line, a heading, a table row, a list item, a quote or any code
+    ends the paragraph being gathered and is emitted as it stands. Long words
+    are never broken: a path or a URL that does not fit goes on a line of its
+    own and over the width, which is what a reader wants from a value they
+    may need to copy."""
+    out = []
+    paragraph = []
+    fenced = False
+
+    def flush():
+        if paragraph:
+            out.extend(textwrap.wrap(
+                " ".join(paragraph), width=width,
+                break_long_words=False, break_on_hyphens=False))
+            del paragraph[:]
+
+    for line in text.split("\n"):
+        if _FENCE.match(line):
+            flush()
+            fenced = not fenced
+            out.append(line)
+        elif fenced or not _is_prose(line, bool(paragraph)):
+            flush()
+            out.append(line)
+        else:
+            paragraph.append(line.strip())
+    flush()
+    return "\n".join(out)
 
 
 def template_path():
@@ -160,4 +235,6 @@ def substitutions(policy, site, version):
 
 def render_page(policy, site, version):
     """The full text of `docs/what-to-run-instead.md`."""
-    return shim._fill(_read_template(), substitutions(policy, site, version), TEMPLATE)
+    filled = shim._fill(
+        _read_template(), substitutions(policy, site, version), TEMPLATE)
+    return reflow(filled)
