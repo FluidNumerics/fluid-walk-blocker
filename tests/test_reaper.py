@@ -2823,3 +2823,42 @@ def test_classify_alone_names_no_opaque_traversal_without_a_streak(procfs, mount
     _unknown_tool_in_d(procfs)
     findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
     assert findings == [], [(f.verdict, f.proc.pid) for f in findings]
+
+
+@pytest.mark.parametrize("other", ["S", "R", "T", "Z"])
+def test_any_state_but_d_resets_the_streak(tmp_path, procfs, mounts_path, other):
+    """"Any other state drops the key" means any: sleeping, running, stopped
+    or a zombie between two D observations is not persistence."""
+    cg = tmp_path / "cg"
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    for io_total, state in ((60.0, "D"), (120.0, other), (180.0, "D")):
+        write_slice(cg, UID_B, io_full_total=io_total * 1e6)
+        _unknown_tool_in_d(procfs, state=state)
+        reaper.run(args, sleep=lambda _s: None)
+    assert not (tmp_path / "audit.jsonl").exists() or \
+        _read_audit(str(tmp_path / "audit.jsonl")) == [], other
+    state = json.loads((tmp_path / "spool" / "reaper-state.json").read_text())
+    assert list(state["d_streak"].values()) == [1], (other, state)
+
+
+def test_a_blind_poll_neither_extends_nor_resets_the_streak(
+        tmp_path, procfs, mounts_path):
+    """A poll that saw no user slice saw nothing, and nothing is not evidence
+    that the process cleared (ADR-0020): D, blind, D is two observations in
+    D with no contrary one between, so the second names it."""
+    cg = tmp_path / "cg"
+    seeing = _report_args(tmp_path, cg, procfs, mounts_path)
+    blind = _blind_args(tmp_path, procfs, mounts_path)
+
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    _unknown_tool_in_d(procfs)
+    assert reaper.run(seeing, sleep=lambda _s: None) == reaper.EXIT_QUIET
+    assert reaper.run(blind, sleep=lambda _s: None) == reaper.EXIT_BLIND
+    state = json.loads((tmp_path / "spool" / "reaper-state.json").read_text())
+    assert list(state["d_streak"].values()) == [1], state
+
+    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
+    assert reaper.run(seeing, sleep=lambda _s: None) == reaper.EXIT_QUIET
+    entries = [e for e in _read_audit(str(tmp_path / "audit.jsonl"))
+               if e["action"] != "blind"]
+    assert [(e["verdict"], e["d_polls"]) for e in entries] == [("opaque_traversal", 2)], entries
