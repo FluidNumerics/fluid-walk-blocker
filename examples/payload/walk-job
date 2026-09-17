@@ -293,10 +293,11 @@ fi
 # an empty name is not the same request as no option (see the overrides
 # above).
 #
-# --no-requeue, always. A walk-job is normally submitted at a site's lowest
-# QoS, which is where a preemption policy aims first; under the common
-# `PreemptMode=REQUEUE` a preempted job is put back on the queue and STARTS
-# THE WALK AGAIN. One traversal of a filesystem this tool exists to protect
+# --no-requeue, always. A walk-job is submitted at whatever QoS the site
+# configured, often a low one, which is where a preemption policy aims
+# first; where that policy's PreemptMode is REQUEUE -- one of the settings
+# a site enabling preemption chooses between, alongside CANCEL and SUSPEND
+# -- a preempted job is put back on the queue and STARTS THE WALK AGAIN. One traversal of a filesystem this tool exists to protect
 # then becomes as many as the scheduler feels like, each paying the full
 # metadata cost, with nobody watching. Preemption should cost one dead job
 # and a message the caller can act on, not a silent repeat. Measured at a
