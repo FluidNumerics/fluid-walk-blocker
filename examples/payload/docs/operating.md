@@ -385,7 +385,9 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 `[reaper].audit_max_bytes`. Every record carries the build version,
 `layer`, an `action`, and — for a finding — the verdict, the pid,
 `starttime`, the uid, the `origin` label, `age_s`, `cpu_s`,
-`io_pressure_delta` and `stalling_slice`. Read it as an unprivileged
+`io_pressure_delta` and `stalling_slice` — and, on `opaque_traversal`
+alone, `d_polls`, the consecutive polls the process has been seen in D
+(ADR-0020). Read it as an unprivileged
 account; it is world-readable by decision. (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account

@@ -35,12 +35,23 @@ Three ways of narrowing the arm were weighed.
   the weakest: it is a list a site maintains, it hides a real `python
   os.walk` offender behind the name of its interpreter, and ADR-0010's
   own consequence warns that an exclusion list is where defects hide.
-- **Measure the budget from the first D observation** rather than from
-  process start, for this arm only. Rejected because it needs the same
-  per-process memory as persistence and adds a second meaning of "budget"
-  — a walker blocked for less than the budget would be unrecorded for as
-  long as a daemon blocked for the same time, which is not the distinction
-  wanted.
+- **Measure blocked time from the first D observation**, in seconds, for
+  this arm only. In its strongest form this is the better-shaped rule: a
+  threshold in seconds is independent of the poll interval, so a
+  one-minute site and a fifteen-minute site get the same semantics; it
+  subsumes persistence, since blocked longer than one interval is two
+  polls; and it discriminates finer than a poll. Rejected all the same,
+  on three grounds. A duration in seconds is a site figure — it needs
+  measuring per site and a new `[reaper]` key, which is the knob the
+  Decision below declines to mint — whereas two polls inherits its
+  duration from an interval the site already chose against its live
+  schedule (ADR-0017). The per-process memory is not a wash: a first-D
+  timestamp has to be forgotten when the process clears and blocks again,
+  or it decays into "ever blocked since", and that forgetting rule *is*
+  the streak — so the alternative is the streak plus a tunable, not an
+  alternative to it. And at equal duration it separates the two
+  populations no better: a daemon blocked for a given time and a walker
+  blocked for the same time are indistinguishable under either rule.
 - **Persistence**: require D at two consecutive polls. Chosen. It is the
   smallest change that turns a snapshot into evidence, it needs one
   integer per live process in the state file that already carries per-poll
@@ -83,14 +94,20 @@ start, are unchanged.
 ## Consequences
 
 **The trail's `opaque_traversal` rows mean what ADR-0010 said they mean.**
-A process named by this arm has been blocked across at least one full
-poll interval, which is what "might be a walk" needed to say and did not.
+A process named by this arm was blocked at two successive observations.
+That is not proof it stayed blocked between them — it may have cleared
+and blocked again, and a missed poll stretches the gap without the streak
+noticing, since the streak counts runs, not wall-clock time — but it is
+the evidence "might be a walk" needed and did not have: a tool in D at a
+small fraction of instants clears the bar at roughly the square of that
+fraction, while a walk on a slow filesystem is in D at most instants.
 
-**A flickering unknown tool is not recorded.** A process in D at every
-other poll never reaches two consecutive, and leaves no row. That is the
-intended reading: a walk on a slow filesystem is in D at most instants, a
-daemon that blocks briefly is not, and the test fixture that models a
-first weekend's trail says so.
+**Flicker produces fewer rows, not none.** A process in D at strictly
+every other poll never reaches two consecutive and leaves no row; a
+process that blocks at random will land two in a row now and then and be
+named when it does. The test fixture that models a first weekend's trail
+uses strict alternation and cannot generate the random case, so it shows
+the reduction, not an absence.
 
 **A real unknown walker is named one poll later than before**, and never
 if it finishes inside one interval. Accepted: the arm exists to grow the
@@ -107,8 +124,21 @@ about another term of the arm — the kernel-thread guard, the stream-filter
 exclusion, the argv-not-comm keying — says so in one argument, and a
 reader can see which term it is about.
 
+**ADR-0009's re-measure procedure reads the trail, not a snapshot.** It
+counts findings inside and outside `NEVER_KILL` to justify the exit-code
+split; a hand-run `classify()` over the live table now sees no
+`opaque_traversal` at all, so take that ratio from the trail `run()`
+produced with its streaks, where the rows are.
+
+**The first poll after the state file is absent or reset names no
+`opaque_traversal` for one interval** — a fresh install, a wiped spool —
+the same class of consequence ADR-0019 writes down for a new boot. It
+heals on the next poll.
+
 **The interim advice to read the trail with `verdict != "opaque_traversal"`
-first is withdrawn.** The arm is now selective enough to read as recorded.
+first is withdrawn** where it was given, which is the first deployment's
+own notes rather than this tree. The arm is now selective enough to read
+as recorded.
 
 ## Re-measure when
 
