@@ -69,6 +69,7 @@ it does not make -- in the preview and in the install alike.
 
 import argparse
 import atexit
+import collections
 import errno
 import os
 import re
@@ -364,6 +365,47 @@ def _is_root():
     return os.geteuid() == 0
 
 
+# The ways `unowned_by()` can refuse. The CODE is what a caller switches on;
+# the reason is prose for the operator and nothing reads it. Splitting them
+# is the point: before this, `_UNOWNED_CLASSES` matched the English, so
+# rewording a message here moved a path into a different blocker class --
+# and a different remedy -- in a function that never mentions it.
+UNOWNED_UNINSPECTABLE = "uninspectable"
+UNOWNED_FOREIGN_UID = "foreign_uid"
+UNOWNED_SELF_SYMLINK = "self_symlink"
+UNOWNED_ESCAPING_SYMLINK = "escaping_symlink"
+UNOWNED_UNRESOLVABLE_SYMLINK = "unresolvable_symlink"
+UNOWNED_PERMISSIVE_MODE = "permissive_mode"
+UNOWNED_SETUID = "setuid_bit"
+
+# Every code `unowned_by()` can emit. `_UNOWNED_CLASSES` must cover all of
+# them; a test asserts it, and `_unowned()` refuses one that is missing.
+UNOWNED_CODES = (
+    UNOWNED_UNINSPECTABLE,
+    UNOWNED_FOREIGN_UID,
+    UNOWNED_SELF_SYMLINK,
+    UNOWNED_ESCAPING_SYMLINK,
+    UNOWNED_UNRESOLVABLE_SYMLINK,
+    UNOWNED_PERMISSIVE_MODE,
+    UNOWNED_SETUID,
+)
+
+# A named 3-tuple, so `sorted(set(...))` still works and a caller can say
+# `offender.reason` instead of indexing into prose.
+Unowned = collections.namedtuple("Unowned", "path code reason")
+
+
+def _unowned(path, code, reason):
+    """One constructor for every offender, so a code with no blocker class
+    cannot reach a caller. Raising here is deliberate: an unclassifiable
+    refusal is a bug in this file, not a state of the filesystem, and the
+    install is refusing either way."""
+    if code not in _UNOWNED_CLASSES:
+        raise AssertionError(
+            "unowned_by(): %r has no entry in _UNOWNED_CLASSES" % (code,))
+    return Unowned(path, code, reason)
+
+
 def unowned_by(root, uid=0):
     """Paths under `root` not owned by `uid`, or otherwise still reachable.
 
@@ -386,6 +428,9 @@ def unowned_by(root, uid=0):
       executes the target.
     * **The target of an in-tree link** still has to satisfy the same test,
       which it does: the walk reaches it separately.
+
+    Each offender is an `Unowned(path, code, reason)`: callers classify on
+    the code, and print the reason.
     """
     bad = []
     real_root = os.path.realpath(root)
@@ -395,22 +440,27 @@ def unowned_by(root, uid=0):
         try:
             info = os.lstat(root)
         except OSError as exc:
-            return [(root, "could not be inspected: %s" % exc.strerror)]
+            return [_unowned(root, UNOWNED_UNINSPECTABLE,
+                             "could not be inspected: %s" % exc.strerror)]
         if info.st_uid != uid:
-            return [(root, "owned by uid %d" % info.st_uid)]
+            return [_unowned(root, UNOWNED_FOREIGN_UID,
+                             "owned by uid %d" % info.st_uid)]
         if stat.S_ISLNK(info.st_mode):
-            return [(root, "the installed entry is itself a symlink -> %s"
-                     % os.path.realpath(root))]
+            return [_unowned(root, UNOWNED_SELF_SYMLINK,
+                             "the installed entry is itself a symlink -> %s"
+                             % os.path.realpath(root))]
         if info.st_mode & 0o022:
-            return [(root, "mode %04o is writable beyond its owner"
-                     % (info.st_mode & 0o7777))]
+            return [_unowned(root, UNOWNED_PERMISSIVE_MODE,
+                             "mode %04o is writable beyond its owner"
+                             % (info.st_mode & 0o7777))]
         return []
 
     def note_walk_error(exc):
         # A directory that cannot be listed is an unverifiable subtree, not
         # an empty one.
-        bad.append((getattr(exc, "filename", root) or root,
-                    "could not be inspected: %s" % exc.strerror))
+        bad.append(_unowned(getattr(exc, "filename", root) or root,
+                            UNOWNED_UNINSPECTABLE,
+                            "could not be inspected: %s" % exc.strerror))
 
     for base, dirnames, filenames in os.walk(root, onerror=note_walk_error):
         for name in [""] + dirnames + filenames:
@@ -418,10 +468,13 @@ def unowned_by(root, uid=0):
             try:
                 info = os.lstat(path)
             except OSError as exc:
-                bad.append((path, "could not be inspected: %s" % exc.strerror))
+                bad.append(_unowned(path, UNOWNED_UNINSPECTABLE,
+                                    "could not be inspected: %s"
+                                    % exc.strerror))
                 continue
             if info.st_uid != uid:
-                bad.append((path, "owned by uid %d" % info.st_uid))
+                bad.append(_unowned(path, UNOWNED_FOREIGN_UID,
+                                    "owned by uid %d" % info.st_uid))
                 continue
             if stat.S_ISLNK(info.st_mode):
                 # The link's own mode is meaningless (lrwxrwxrwx always), and
@@ -429,24 +482,28 @@ def unowned_by(root, uid=0):
                 try:
                     target = os.path.realpath(path)
                 except OSError as exc:
-                    bad.append((path, "target could not be resolved: %s"
-                                % exc.strerror))
+                    bad.append(_unowned(path, UNOWNED_UNRESOLVABLE_SYMLINK,
+                                        "target could not be resolved: %s"
+                                        % exc.strerror))
                     continue
                 if target != real_root and not target.startswith(
                         real_root + os.sep):
-                    bad.append((path, "symlink escapes the prefix -> %s"
-                                % target))
+                    bad.append(_unowned(path, UNOWNED_ESCAPING_SYMLINK,
+                                        "symlink escapes the prefix -> %s"
+                                        % target))
                 continue
             if info.st_mode & 0o022:
-                bad.append((path, "mode %04o is writable beyond its owner"
-                            % (info.st_mode & 0o7777)))
+                bad.append(_unowned(path, UNOWNED_PERMISSIVE_MODE,
+                                    "mode %04o is writable beyond its owner"
+                                    % (info.st_mode & 0o7777)))
             elif info.st_mode & (stat.S_ISUID | stat.S_ISGID):
                 # The copy no longer preserves ownership, so a setuid bit
                 # carried over from the source would sit on a ROOT-owned
                 # inode. Inert on the scripts this installs, but not a
                 # property to leave unasserted in a tree root executes from.
-                bad.append((path, "mode %04o is setuid or setgid"
-                            % (info.st_mode & 0o7777)))
+                bad.append(_unowned(path, UNOWNED_SETUID,
+                                    "mode %04o is setuid or setgid"
+                                    % (info.st_mode & 0o7777)))
     return sorted(set(bad))
 
 
@@ -761,25 +818,24 @@ def untraversable_for_users(prefix):
 
 
 # What `unowned_by()` can report, mapped to a class that has a TRUE head and
-# a remedy that works. The prose is matched because `unowned_by()` returns
-# English, not a code -- it is shared with the prefix checks. An unmatched
-# reason falls to "unclassified", which still refuses.
-_UNOWNED_CLASSES = (
-    ("owned by uid ", "ownership"),
-    ("is writable beyond its owner", "permissive"),
-    ("is setuid or setgid", "setuid"),
-    ("the installed entry is itself a symlink", "symlink"),
-    ("symlink escapes the prefix", "symlink"),
-    ("could not be inspected", "unreadable"),
-    ("target could not be resolved", "unreadable"),
-)
+# a remedy that works. Keyed on the CODE, never on the prose: two codes can
+# share a class (both symlink shapes want the same remedy) but a rewritten
+# sentence must not move one. A code with no entry is a bug `_unowned()`
+# raises on; a code from somewhere else falls to "unclassified", which
+# still refuses.
+_UNOWNED_CLASSES = {
+    UNOWNED_FOREIGN_UID: "ownership",
+    UNOWNED_PERMISSIVE_MODE: "permissive",
+    UNOWNED_SETUID: "setuid",
+    UNOWNED_SELF_SYMLINK: "symlink",
+    UNOWNED_ESCAPING_SYMLINK: "symlink",
+    UNOWNED_UNINSPECTABLE: "unreadable",
+    UNOWNED_UNRESOLVABLE_SYMLINK: "unreadable",
+}
 
 
-def _classify_unowned(reason):
-    for fragment, cls in _UNOWNED_CLASSES:
-        if fragment in reason:
-            return cls
-    return "unclassified"
+def _classify_unowned(code):
+    return _UNOWNED_CLASSES.get(code, "unclassified")
 
 
 def installer_owned_spool_files(spool):
@@ -942,8 +998,8 @@ def audit_dir_blockers(spool):
         # (ownership, symlink, setuid, unreadable) still blocks on these
         # paths, because `chmod go-w` does not fix any of them.
         repairable = set(path for path, _mode in spool_mode_repairs(spool))
-        for path, reason in unowned_by(spool):
-            cls = _classify_unowned(reason)
+        for path, code, reason in unowned_by(spool):
+            cls = _classify_unowned(code)
             if cls == "permissive" and path in repairable:
                 continue
             bad.append((cls, path, reason))
@@ -1100,7 +1156,7 @@ def validate_root_write_paths(args, attrs=None):
                         "deploy.py: refusing %s %s: %s. It is sourced as "
                         "root to verify\n  the hook fires, so its owner "
                         "would be choosing what runs during the deploy.\n"
-                        % (attr, path, offenders[0][1]))
+                        % (attr, path, offenders[0].reason))
                     return 6
     return 0
 
@@ -1517,7 +1573,8 @@ def uninstall_helper(prefix):
             return (None, "%s does not exist" % path)
         offenders = unowned_by(path)
         if offenders:
-            return (None, "%s: %s" % offenders[0])
+            return (None, "%s: %s" % (offenders[0].path,
+                                      offenders[0].reason))
     chain = untrusted_prefix_chain(directory)
     if chain:
         return (None, "%s: %s" % chain[0])
@@ -1760,7 +1817,7 @@ def system_execute(args, env=None):
             sys.stderr.write(
                 "deploy.py: %s is not root-owned after install; refusing to "
                 "wire it up.\n" % args.prefix)
-            for path, why in sorted(set(offenders))[:10]:
+            for path, _code, why in sorted(set(offenders))[:10]:
                 sys.stderr.write("  %s: %s\n" % (path, why))
             # Remove what this run wrote, rather than leaving a rejected
             # payload on disk for someone to widen later. Bounded to the
@@ -1805,7 +1862,7 @@ def system_execute(args, env=None):
             sys.stderr.write(
                 "deploy.py: %s failed the ownership check AFTER install.sh "
                 "ran.\n" % args.prefix)
-            for path, why in sorted(set(offenders))[:10]:
+            for path, _code, why in sorted(set(offenders))[:10]:
                 sys.stderr.write("  %s: %s\n" % (path, why))
             sys.stderr.write(
                 "  No systemd unit was written and no timer enabled, but the\n"
