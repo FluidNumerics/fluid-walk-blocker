@@ -24,7 +24,9 @@ jobs:
       - name: Install git, python3, dash, and a non-root test user
         run: |
           dnf install -y epel-release
-          dnf install -y git python3 dash shadow-utils
+          # strace: the execution-based fork count in test_shim_agrees.py skips
+          # without it, and a skipped assertion is not an assertion CI made.
+          dnf install -y git python3 dash shadow-utils strace
           useradd -m ciuser
 
       - uses: actions/checkout@v4
