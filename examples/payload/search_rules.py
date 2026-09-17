@@ -1542,8 +1542,21 @@ def _dir_action_setting(profile, argv, i):
         if sep and (head == flag or resolve_for(profile, head, (flag,))):
             return (("recurse" if tail in on_values else "skip"), 1)
         if not sep and resolve_for(profile, head, (flag,)):
-            value = argv[i + 1] if i + 1 < len(argv) else None
-            return (("recurse" if value in on_values else "skip"), 2)
+            if i + 1 >= len(argv):
+                # Exactly the exact spelling's rule above, and for exactly
+                # the same reason: getopt resolves the abbreviation FIRST
+                # and then finds no argument for it. Measured, GNU grep 3.6:
+                # `grep -r pat d1 --di` and `grep -r pat d1 --dir` both
+                # answer "option '--directories' requires an argument" and
+                # exit 2, the same sentence `--directories` with no value
+                # gets -- while `grep -r pat d1 --di d2` answers "invalid
+                # argument 'd2' for '--directories'", which is what says the
+                # abbreviation really does consume the following token when
+                # there IS one. Reading the absent value as "skip" invented
+                # one, and it was the last shape in this table where the two
+                # consumers disagreed.
+                return None
+            return (("recurse" if argv[i + 1] in on_values else "skip"), 2)
         if len(flag) == 2 and flag[1] != "-" and token.startswith(flag) \
                 and len(token) > 2:
             return (("recurse" if token[2:] in on_values else "skip"), 1)
