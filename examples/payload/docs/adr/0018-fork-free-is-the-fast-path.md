@@ -99,9 +99,10 @@ substitution forks a subshell the guarded path creates two clones and one
 program, and a builtin that forks in one shell and not the other is
 precisely what a clone count would confuse with a design change. It counts
 the `awk` execs it finds rather than asserting one, so it stays honest in
-the configuration without a trusted `awk`. The audit path has no such
-row: its count rests on the comment in `sg_audit_emit` until a refusal row
-is added.
+the configuration without a trusted `awk`. The audit path has its own
+row: a refused walk is traced to exit and the programs started after the
+shell must be the mount-table `awk` and then exactly the four the record
+documents, under both shells.
 
 **A second program on the guarded path is a design change, not a tuning.**
 The test fails on it by name. Moving work from the shell into that one
