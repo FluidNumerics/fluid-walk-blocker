@@ -71,8 +71,9 @@ default is `--report`.
    alone opens no file and creates no process; a call that needs a mount
    judgement reads `/proc/mounts` once, through one trusted `awk`, and
    nothing that can block. If the walk is bounded within the depth
-   ceiling, or every root is on a cheap mount, or the root is deeper than
-   `[filesystems].unscoped_depth`, it `exec`s the real tool.
+   ceiling, or every root is on a cheap mount, or the root sits at least
+   `[filesystems].unscoped_depth` components below the mount point, it
+   `exec`s the real tool.
 4. Otherwise it exits 2 with a refusal that names the bound the tool
    accepts, the allowance on that mount, and `walk-job`. Exit 2, never 1:
    `grep` uses 1 for "no match" and a refusal must never read as an empty
