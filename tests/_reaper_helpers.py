@@ -8,20 +8,13 @@ to a scratch directory beside a copy of `search_rules.py` -- the payload is
 flat, and the reaper imports the rule table as a sibling -- and imports it
 from there. Nothing here is a site's value (ADR-0014).
 """
-import atexit
 import copy
-import importlib.util
 import os
 import shutil
-import sys
-import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+import _node_helpers as _node
+from walk_blocker import __version__, paths, stamp
 
-from walk_blocker import __version__, config, paths, stamp  # noqa: E402
-
-EXAMPLE_SITE = os.path.join(ROOT, "examples", "site.example.toml")
 REAPER_SOURCE = os.path.join(paths.node_dir(), "reaper.py")
 RULES_SOURCE = paths.rules_file()
 
@@ -68,7 +61,7 @@ def site_values(**overrides):
     """The `values` mapping for `stamp_text`: VERSION plus every `[reaper]`
     and `[filesystems]` key of the fictional site. `overrides` are keyed the
     way the mapping is (`"site.toml:reaper.origins"`)."""
-    data = copy.deepcopy(config.load_site(EXAMPLE_SITE).data)
+    data = _node.example_site()
     data["filesystems"].update(copy.deepcopy(FIXTURE_FILESYSTEMS))
     values = {"VERSION": __version__}
     for section in ("reaper", "filesystems"):
@@ -79,20 +72,13 @@ def site_values(**overrides):
 
 
 def source_text():
-    with open(REAPER_SOURCE, "r", encoding="utf-8") as fh:
-        return fh.read()
+    return _node.read_source(REAPER_SOURCE)
 
 
 def stamped_text(values):
     """`node/reaper.py` with `values` stamped in, checked current and
     complete before it is handed back."""
-    text = stamp.stamp_text(source_text(), values, "py")
-    findings = stamp.check_text(text, values, "py", REQUIRED_SOURCES)
-    assert findings == [], findings
-    return text
-
-
-_loaded = [0]
+    return _node.stamped_text(REAPER_SOURCE, values, REQUIRED_SOURCES)
 
 
 def load_stamped_reaper(values, directory=None):
@@ -100,15 +86,9 @@ def load_stamped_reaper(values, directory=None):
     `directory` (a fresh scratch directory by default, removed at exit) and
     import the reaper from there under a unique module name."""
     if directory is None:
-        directory = tempfile.mkdtemp(prefix="walk-blocker-reaper-")
-        atexit.register(shutil.rmtree, directory, True)
+        directory = _node.scratch_dir("walk-blocker-reaper-")
     path = os.path.join(directory, "reaper.py")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(stamped_text(values))
     shutil.copy(RULES_SOURCE, os.path.join(directory, "search_rules.py"))
-    _loaded[0] += 1
-    spec = importlib.util.spec_from_file_location(
-        "reaper_under_test_%d" % _loaded[0], path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return _node.load_module(path, "reaper_under_test")
