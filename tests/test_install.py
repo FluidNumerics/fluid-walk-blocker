@@ -1851,3 +1851,18 @@ def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
     assert not state.exists()
     assert layout.spool.is_dir() and layout.audit.exists()
     assert "left in place" in result.stdout
+
+
+def test_the_memory_is_world_readable_whatever_the_umask(tmp_path):
+    """ADR-0019 says the memory is readable like the rest of the spool; a
+    root relink under a 077 umask would otherwise leave it 0600 and make
+    that sentence true only by the accident of a 022 default."""
+    layout = _stateful_layout(tmp_path)
+    before = os.umask(0o077)
+    try:
+        result, _records = relink_with_a_recording_logger(tmp_path, layout)
+    finally:
+        os.umask(before)
+    assert result.returncode == 0, result.stderr
+    mode = stat.S_IMODE((layout.spool / STATE_NAME).stat().st_mode)
+    assert mode == 0o644, oct(mode)

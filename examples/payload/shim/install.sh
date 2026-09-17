@@ -1566,6 +1566,11 @@ report_uncovered_mounts() {
     _um_new=''
     if [ -d "$SG_SPOOL_DIR" ] && : > "$UNCOVERED_STATE.new" 2>/dev/null; then
         _um_new=$UNCOVERED_STATE.new
+        # World-readable like the spool around it (ADR-0012), whatever the
+        # caller's umask: systemd's default and a root shell's differ, and
+        # the person reading the journal should be able to read what the
+        # relink currently believes without being root.
+        chmod 0644 "$_um_new" 2>/dev/null || :
         printf 'boot %s\n' "$sg_boot" > "$_um_new"
     fi
     # Fresh means: report everything current, compare against nothing.
