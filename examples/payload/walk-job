@@ -152,6 +152,10 @@ globs and spaces survive:
 
 This moves the walk off the login node. It does not make the walk cheap: the
 same metadata load reaches the same storage cluster from a different client.
+
+The job is submitted --no-requeue. If the scheduler preempts it, the walk
+ends and you resubmit; it is never put back on the queue to start the walk
+again unwatched.
 USAGE
 }
 

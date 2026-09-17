@@ -38,7 +38,7 @@
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",
     "survey.py": "dc7b5025e67bf1800f778b2d12a8b394c7e5758468bbeb4b7583fcfe67a65cba",
-    "walk-job": "6c38ff63810b0e3a247f103ee018fd625ed7ea7bb284033e041a94c9dbabecd2"
+    "walk-job": "5146145c460900eca0d0b2451e19986e8929a0b68debf74487d25a8d34ee0282"
   },
   "schema_version": 1,
   "site_sha256": "3309fe4ac69abdbefb2bf6b08eb481577037478cb1789e670f663408543f284c",

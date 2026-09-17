@@ -586,6 +586,10 @@ def test_help_exits_zero_and_names_the_cost_it_does_not_remove(tmp_path, walk_jo
     # The stamped defaults are what the help advertises.
     assert "(walkers, qos low)" in r.stdout
     assert "default ./walk-job-%j.out" in r.stdout
+    # And the one thing that happens to a preempted job, since the help is
+    # where a refused user arrives and the behaviour has no flag to discover.
+    assert "--no-requeue" in r.stdout
+    assert "start the walk\nagain" in r.stdout or "start the walk again" in r.stdout
 
 
 # --- what it must NOT do ---------------------------------------------------
