@@ -1,7 +1,7 @@
 {
   "files": {
     "README.md": "e5e3742f09353753fbe7cbb53fed9140b21f15e3c1d6b07ac3ba5096b64a674e",
-    "deploy.py": "a7cc72289de3273463813352ec8fb5f9e5688c86c0ac2ceb7744e1cb2a7b488b",
+    "deploy.py": "6206f115666cbfb0eb662f9ab624a10da34fa9108c66010033bc5279e0a0f2d3",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -23,10 +23,10 @@
     "docs/adr/0019-uncovered-mounts-are-reported-on-change.md": "844f1c504c694791690ecdf24e1ebc895861ffb980258c499022adf42290c821",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "9e7736173aa089ca62bf4b301de3408b420d9c827bcde444fc3acfe61816c2b8",
-    "docs/operating.md": "569eba144caa5ee8408f5288f826a55535f81fbe09f0fd09f781f6d99bcc3e6e",
+    "docs/operating.md": "89947a572104920c465a30cdd93e635ddf3c165d90779578f69906675538a50e",
     "docs/plan.md": "391e9a5c0c596e465c527ab48450a7f9a6e672556746c231211496843a6194e0",
     "docs/site-config.md": "2fa7175a3d1a365d73a8a26086e4e30e9bbca6114db134d3645542b8763730d1",
-    "reaper.py": "c623d08a18bdd237f58a816cba51aff48c8a8a19a6fc608886cfac2e618d134f",
+    "reaper.py": "be388cd88af6386a3369ce3f36e2aea68a34a71c186c01e99748449a3d8cd9a4",
     "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",
     "shim/guard.sh": "71c1ff859ecaa69da3f575bf310f9d3978e03f299bc30bc13bdadf8ed3455142",
     "shim/install.sh": "7f277afe174999ca785c0e62ef48871bce60206867b465feac57065294b68b7b",
