@@ -49,7 +49,7 @@ def test_every_mount_has_a_row_with_its_depth_and_measurement(page, example):
             assert cells[2] == "not bounded (cheap)"
     # The example records fictional figures on /home and none on the cheap export.
     home = [ln for ln in page.splitlines() if ln.startswith("| `/home` |")][0]
-    assert "24.4M inodes" in home and "81.9 TiB" in home and "as of 2026-01-15" in home
+    assert "24.4M inodes in use" in home and "81.9 TiB" in home and "as of 2026-01-15" in home
     tools = [ln for ln in page.splitlines() if ln.startswith("| `/opt/site-tools` |")][0]
     assert tools.endswith("| not surveyed |")
 

@@ -82,7 +82,7 @@ person whose process is in it (ADR-0012).
 
 Keys: `[filesystems].remote_fstypes`, `remote_proxy`,
 `[[filesystems.mounts]]` with `path`, `class`, `maxdepth`, and the measured
-`inodes`, `capacity_bytes`, `surveyed`. Decision record: ADR-0016.
+`inodes_used`, `capacity_bytes`, `surveyed`. Decision record: ADR-0016.
 
 A mount's class defaults from `/proc/mounts` fields alone: a type on the
 remote list, a `host:` source, or a `_netdev`/`addr=` option makes it
@@ -109,9 +109,11 @@ the fix for one small export.
    the survey output beside `site.toml`: it is the record that the default
    was seen and chosen, not overlooked. The reconcile logs a line per mount
    that no override covers, so the choice stays visible on the node too.
-5. **Keep the figures with the entry.** The survey proposes `inodes`,
+5. **Keep the figures with the entry.** The survey proposes `inodes_used`,
    `capacity_bytes` and `surveyed` on every measured mount; paste them with
-   the entry. Nothing on the node reads them — they are shown on the
+   the entry. In use, not capacity: a network filesystem's inode total is
+   often a quota or a synthetic ceiling, and what a full walk visits is what
+   is there. Nothing on the node reads them — they are shown on the
    payload's `docs/what-to-run-instead.md`, the page every refusal names,
    so a refused user sees what a full walk of that mount would visit and
    when that was last measured. A figure without `surveyed` fails

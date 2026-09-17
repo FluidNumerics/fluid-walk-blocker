@@ -95,8 +95,8 @@ def mount_rows(policy, site):
             depth = "not bounded (cheap)"
         entry = recorded.get(_normalised(path), {})
         facts = []
-        if "inodes" in entry:
-            facts.append("%s inodes" % human_count(entry["inodes"]))
+        if "inodes_used" in entry:
+            facts.append("%s inodes in use" % human_count(entry["inodes_used"]))
         if "capacity_bytes" in entry:
             facts.append(human_bytes(entry["capacity_bytes"]))
         if facts:

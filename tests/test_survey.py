@@ -144,7 +144,7 @@ def test_render_table_marks_unmeasured(mount_table):
     rows = survey.survey(mount_table, timeout=0.3, statvfs_command=HANGING_CHILD)
     text = survey.render_table(rows)
     assert text.splitlines()[0].split() == [
-        "mountpoint", "fstype", "remote", "default_class", "capacity", "inodes", "measured"]
+        "mountpoint", "fstype", "remote", "default_class", "capacity", "inodes", "in_use", "measured"]
     assert "unmeasured: timeout" in text
     assert "yes (option)" in text
 
@@ -163,13 +163,14 @@ def test_proposed_block_parses_and_validates(mount_table):
     assert measured, "the fixture measures nothing"
     for r in measured:
         m = by_path[r["mountpoint"]]
-        assert (m["inodes"], m["capacity_bytes"]) == (r["inodes"], r["capacity_bytes"])
+        assert (m["inodes_used"], m["capacity_bytes"]) == (r["inodes_used"], r["capacity_bytes"])
+        assert r["inodes_used"] == r["inodes"] - r["inodes_free"]
         assert m["surveyed"] == datetime.date.today().isoformat()
     for r in rows:
         if not r["measured"] and r["mountpoint"] in by_path:
-            assert "inodes" not in by_path[r["mountpoint"]]
+            assert "inodes_used" not in by_path[r["mountpoint"]]
     dated = tomllib.loads(survey.render_toml(rows, today="2026-02-03"))["filesystems"]["mounts"]
-    assert {m.get("surveyed") for m in dated if "inodes" in m} == {"2026-02-03"}
+    assert {m.get("surveyed") for m in dated if "inodes_used" in m} == {"2026-02-03"}
 
     # Spliced into the example site in place of its own overrides.
     with open(os.path.join(ROOT, "examples", "site.example.toml"), "rb") as fh:

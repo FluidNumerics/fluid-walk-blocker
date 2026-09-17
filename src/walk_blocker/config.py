@@ -217,7 +217,7 @@ def check_semantics(schema, data):
         # A measurement carries its date. The figures are shown to users as
         # "as of <date>"; a figure with no date would be shown as a fact about
         # today, which a year-old survey is not (ADR-0016, tier three).
-        for figure in ("inodes", "capacity_bytes"):
+        for figure in ("inodes_used", "capacity_bytes"):
             if figure in mount and "surveyed" not in mount:
                 raise ConfigError(where + "." + figure,
                                   "a measurement carries its date: set "

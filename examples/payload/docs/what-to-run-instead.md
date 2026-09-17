@@ -16,13 +16,13 @@ refusal prints the depth that applied.
 
 | Mount | Class | Bounded walk allowed to depth | Measured |
 |---|---|---|---|
-| `/home` | expensive | 4 | 24.4M inodes, 81.9 TiB, as of 2026-01-15 |
+| `/home` | expensive | 4 | 24.4M inodes in use, 81.9 TiB, as of 2026-01-15 |
 | `/opt/site-tools` | cheap | not bounded (cheap) | not surveyed |
 
 Any other mount whose filesystem type is one of `lustre`, `wekafs`, `beegfs`, `gpfs`, `ceph`, `nfs4`, `nfs`, `cifs`, `smb3`, `glusterfs`, `panfs`, `fuse.*`, `9p`, `sshfs`, `s3fs`, `daos`, or that
 is mounted from a remote source, is guarded on the compiled default: depth
 2. The measurements are what `walk-blocker survey` read on the
-date shown; a full walk visits every inode in that column.
+date shown; a full walk visits every inode in use on that mount.
 
 ## Ask the question, not the filesystem
 

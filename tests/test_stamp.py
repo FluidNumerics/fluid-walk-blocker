@@ -288,7 +288,7 @@ def test_the_mounts_value_carries_only_what_a_judgement_reads():
     carries a figure it does not read, and a capacity in bytes is exactly
     the kind of literal the IP gate hunts."""
     site = config.load_site(EXAMPLE_SITE)
-    assert any("inodes" in m for m in site.lookup("filesystems.mounts")), \
+    assert any("inodes_used" in m for m in site.lookup("filesystems.mounts")), \
         "the example no longer exercises the projection"
     rows = stamp.SiteValues(site, "0.0.0")["site.toml:filesystems.mounts"]
     assert rows and all(set(r) <= set(stamp.JUDGEMENT_MOUNT_KEYS) for r in rows), rows

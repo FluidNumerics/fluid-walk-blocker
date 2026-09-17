@@ -127,7 +127,7 @@ UNSCOPED_DEPTH = 2  # GENERATED from site.toml:filesystems.unscoped_depth
 DEPTH_ALLOWANCE_MAX = 8  # GENERATED from site.toml:filesystems.depth_allowance_max
 # `[[filesystems.mounts]]` as the build emits it: a tuple of `{path, class,
 # maxdepth?}` rows, converted to Policy's `{path: (class, maxdepth)}` below.
-# The site's measured keys (`inodes`, `capacity_bytes`, `surveyed`) are
+# The site's measured keys (`inodes_used`, `capacity_bytes`, `surveyed`) are
 # projected out at stamp time: they are for the users' page, never for a
 # judgement, and nothing on the node carries a figure it does not read.
 MOUNT_OVERRIDES = ({'path': '/home', 'class': 'expensive', 'maxdepth': 4}, {'path': '/opt/site-tools', 'class': 'cheap'})  # GENERATED from site.toml:filesystems.mounts

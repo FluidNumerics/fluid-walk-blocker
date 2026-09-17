@@ -21,7 +21,7 @@ refusal prints the depth that applied.
 Any other mount whose filesystem type is one of @@REMOTE_FSTYPES@@, or that
 is mounted from a remote source, is guarded on the compiled default: depth
 @@MAXDEPTH@@. The measurements are what `walk-blocker survey` read on the
-date shown; a full walk visits every inode in that column.
+date shown; a full walk visits every inode in use on that mount.
 
 ## Ask the question, not the filesystem
 
