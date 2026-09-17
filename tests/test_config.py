@@ -331,3 +331,16 @@ def test_systemd_analyze_rejects_a_malformed_calendar():
     with pytest.raises(config.ConfigError) as exc:
         config.from_dict(data)
     assert exc.value.path == "timer.on_calendar"
+
+
+def test_a_load_error_is_worded_by_its_class():
+    """The one wording both `validate` and `build` use: dotted key for a
+    semantic fault, JSON pointer for a shape fault, the bare message for an
+    unreadable or malformed file -- with no empty field left in between."""
+    site = "site.toml"
+    assert config.describe_load_error(
+        site, config.ConfigError("slurm.qos", "not a name")) == "site.toml: slurm.qos: not a name"
+    shape = jsonschema.ValidationError("is not of type 'integer'", path=["reaper", "fanout_n"])
+    assert config.describe_load_error(site, shape) == "site.toml: /reaper/fanout_n: is not of type 'integer'"
+    assert config.describe_load_error(site, OSError("no such file")) == "site.toml: no such file"
+    assert config.describe_load_error(site, ValueError("Invalid statement")) == "site.toml: Invalid statement"

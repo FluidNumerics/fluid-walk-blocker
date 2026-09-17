@@ -2518,3 +2518,16 @@ def test_a_quiet_poll_names_what_it_examined(tmp_path, procfs, mounts_path):
     assert reaper.run(args, out=out, sleep=lambda _s: None) == reaper.EXIT_QUIET
     assert "2 process(es) across 1 user slice(s), 0 of them stalling" in out.getvalue()
     assert not os.path.exists(str(tmp_path / "audit.jsonl"))
+
+
+def test_a_standing_blind_poll_does_not_rewrite_the_state_file(
+        tmp_path, procfs, mounts_path):
+    """The no-user-slice arm saves state only when it wrote a record; a
+    standing blind poll writes nothing and leaves the state file untouched.
+    save_state() replaces atomically, so a rewrite shows as a new inode."""
+    args = _blind_args(tmp_path, procfs, mounts_path)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_BLIND
+    state_path = tmp_path / "spool" / "reaper-state.json"
+    before = os.stat(str(state_path)).st_ino
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_BLIND
+    assert os.stat(str(state_path)).st_ino == before, "a standing blind poll rewrote state"

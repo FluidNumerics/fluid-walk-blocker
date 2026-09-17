@@ -1705,3 +1705,13 @@ def test_the_stub_shells_and_sink_are_what_the_harness_says(tmp_path):
     assert FIXTURE_POLICY.mounts["/opt/site-tools"] == ("cheap", None)
     stage_walk_job(tmp_path / "p")
     assert (tmp_path / "p" / "walk-job").exists()
+
+
+def test_the_next_copy_dir_is_fresh_after_every_install(tmp_path):
+    """Each unapproved run stands in for its own checkout; a directory reused
+    across runs would let one run's stamped copy answer for another's."""
+    layout = Layout(tmp_path)
+    first = H.next_copy_dir(layout)
+    stamped_install(tmp_path, dest=first, layout=layout)
+    second = H.next_copy_dir(layout)
+    assert second != first and not second.exists(), (first, second)
