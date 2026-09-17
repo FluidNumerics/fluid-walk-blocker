@@ -872,16 +872,17 @@ def test_an_actionable_finding_still_fails_the_unit_beside_one_that_is_not(
                         ("runaway_traversal", 4106)], entries
 
 
-def test_the_three_exit_codes_are_distinct():
+def test_the_four_exit_codes_are_distinct():
     """They have to be, or the split is decorative: a cgroup-layout change
     that blinds Layer 2 permanently and someone running a long grep were the
-    same event in `systemctl --failed` until they were separated."""
+    same event in `systemctl --failed` until they were separated, and a kill
+    that did not land was the same event as a quiet poll until it was."""
     assert len({reaper.EXIT_QUIET, reaper.EXIT_ACTIONABLE,
-                reaper.EXIT_BLIND}) == 3
-    # Both failure codes are nonzero, which is the whole mechanism: a
+                reaper.EXIT_BLIND, reaper.EXIT_KILL_FAILED}) == 4
+    # Every failure code is nonzero, which is the whole mechanism: a
     # non-zero exit fails a Type=oneshot unit BY DEFAULT.
     assert reaper.EXIT_QUIET == 0
-    assert reaper.EXIT_ACTIONABLE and reaper.EXIT_BLIND
+    assert reaper.EXIT_ACTIONABLE and reaper.EXIT_BLIND and reaper.EXIT_KILL_FAILED
 
 
 def test_a_changed_action_is_appended_again(tmp_path, procfs, mounts_path):
@@ -926,17 +927,22 @@ def test_a_repeated_identical_kill_attempt_is_not_deduplicated(
     args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
 
     killed = []
+    rcs = []
     for i in range(3):
         write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
-        reaper.run(args, sleep=lambda _s: None,
-                   killer=lambda pid, sig: killed.append(sig),
-                   alive=lambda pid: True)
+        rcs.append(reaper.run(args, sleep=lambda _s: None,
+                              killer=lambda pid, sig: killed.append(sig),
+                              alive=lambda pid: True))
 
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
     assert len(entries) == 3, entries
     assert {e["action"] for e in entries} == {"signalled_but_wedged"}
     assert len(killed) == 6, (
         "3 polls x TERM+KILL each -- every one a real signal, not a retry")
+    # And the unit fails on every one of those polls, not just the first: a
+    # standing failing kill is not a standing finding, it is a fresh failed
+    # action each poll, and the exit code agrees with the trail.
+    assert rcs == [reaper.EXIT_KILL_FAILED] * 3, rcs
 
 
 def test_a_standing_kill_cap_skip_is_not_reappended_every_poll(
@@ -2531,3 +2537,81 @@ def test_a_standing_blind_poll_does_not_rewrite_the_state_file(
     before = os.stat(str(state_path)).st_ino
     assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_BLIND
     assert os.stat(str(state_path)).st_ino == before, "a standing blind poll rewrote state"
+
+
+def test_a_kill_that_lands_fails_the_unit_once_and_a_wedged_one_every_poll(
+        tmp_path, procfs, mounts_path):
+    """The two sides of the exit contract under --kill. A finding whose
+    process dies on TERM is a new actionable finding on its first poll and
+    gone on the next; the unit fails once. A process that survives TERM and
+    KILL is signalled again on every poll, and every one of those polls
+    exits EXIT_KILL_FAILED -- so `systemctl status` cannot read green while
+    the trail records signals that changed nothing (never claim a kill that
+    did not land, in the exit code too)."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, 4109, "find",
+               ["find", "/scratch/h", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
+
+    # Dies on TERM: one actionable poll, then the process is gone.
+    rc = reaper.run(args, sleep=lambda _s: None,
+                    killer=lambda pid, sig: None, alive=lambda pid: False)
+    assert rc == reaper.EXIT_ACTIONABLE, rc
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert [e["action"] for e in entries] == ["terminated"], entries
+
+    # The same shape, wedged: every poll a real signal, every poll code 3,
+    # including polls where the finding is no longer NEW.
+    write_proc(procfs, 4110, "find",
+               ["find", "/scratch/w", "-type", "f", "-name", "y"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(120.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(args, sleep=lambda _s: None,
+                              killer=lambda pid, sig: None,
+                              alive=lambda pid: pid == 4110))
+    assert rcs == [reaper.EXIT_KILL_FAILED] * 2, rcs
+
+
+def test_a_kill_error_fails_the_unit_on_every_poll(tmp_path, procfs, mounts_path):
+    """kill_error is ambiguous about whether the signal landed, which is
+    exactly why it cannot be read as success: same code as wedged, every
+    poll, and the two are one set in the source so they cannot drift."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, 4111, "find",
+               ["find", "/scratch/h", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
+
+    def killer(pid, sig):
+        raise RuntimeError("injected: killer wedged")
+
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(args, sleep=lambda _s: None, killer=killer,
+                              alive=lambda pid: False))
+    assert rcs == [reaper.EXIT_KILL_FAILED] * 2, rcs
+    assert reaper.KILL_DID_NOT_LAND == {"signalled_but_wedged", "kill_error"}
+
+
+def test_a_report_only_unit_cannot_exit_kill_failed(tmp_path, procfs, mounts_path):
+    """Nothing is signalled under --report, so the code that means "a real
+    signal did not land" is unreachable there: the same wedged process
+    exits ACTIONABLE once and QUIET after."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, 4112, "find",
+               ["find", "/scratch/h", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    rcs = []
+    for i in range(2):
+        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
+        rcs.append(reaper.run(args, sleep=lambda _s: None,
+                              alive=lambda pid: True))
+    assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs

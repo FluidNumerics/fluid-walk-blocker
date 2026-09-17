@@ -157,11 +157,13 @@ NEVER_KILL = frozenset((
     "orphan_idle", "opaque_traversal", "unparsed_traversal"))
 
 # What the process exit status means, and therefore what `systemctl --failed`
-# is tracking. Three codes, because two meanings once shared one:
+# is tracking. Four codes, because meanings that once shared one were split:
 #
 #   0  nothing new, or nothing new that anyone could act on
 #   1  a new ACTIONABLE finding -- a verdict outside NEVER_KILL
 #   2  BLIND: no user slice, or /proc unreadable. The tool cannot see.
+#   3  a real signal was sent this poll under --kill and did not land:
+#      `signalled_but_wedged` or `kill_error`. Every poll it recurs.
 #
 # Measured at a reference deployment, unactionable findings outnumbered
 # actionable ones by a wide margin, and every one of them failed the unit,
@@ -187,9 +189,27 @@ NEVER_KILL = frozenset((
 # `systemctl --failed`, from someone running a long grep. Both still fail the
 # unit -- a non-zero exit fails the Type=oneshot unit by default, and nothing
 # lists 1 or 2 as success -- but they are no longer the same event.
+#
+# 3 is the one code that is NOT latched. The others fail the unit for a NEW
+# fact and go quiet while the fact stands, because a months-old finding
+# failing the unit forever is an alert nobody reads. A kill that did not
+# land is not a standing fact: every poll sends the process a fresh TERM
+# and KILL, every one is a real signal, and every one fails to end it. The
+# audit trail already refuses to dedup those rows ("never claim a kill that
+# did not land"); the exit code has to agree, or the unit reads green in
+# `systemctl status` while the trail fills with signals that changed
+# nothing -- the shape the predecessor's trail showed under --kill. This
+# only ever fires under --kill, which a site promotes to by decision; a
+# --report unit cannot exit 3.
 EXIT_QUIET = 0
 EXIT_ACTIONABLE = 1
 EXIT_BLIND = 2
+EXIT_KILL_FAILED = 3
+
+# The terminate() outcomes that mean a real signal was sent and the process
+# is still there, or that whether it landed cannot be known. One set, so the
+# exit code and the audit trail's no-dedup rule cannot name different lists.
+KILL_DID_NOT_LAND = frozenset(("signalled_but_wedged", "kill_error"))
 
 
 # --------------------------------------------------------------------------
@@ -1302,6 +1322,7 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     me = os.getuid()
     entries = []
     acted = 0
+    failed_kills = 0
     for finding in findings:
         # Set only in the branch that actually calls terminate(): a REAL
         # signal was sent (or attempted) this poll, which is a new fact
@@ -1345,6 +1366,8 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
                     finding.detail = dict(finding.detail,
                                           kill_error="%s: %s" % (
                                               type(exc).__name__, exc))
+                if finding.action in KILL_DID_NOT_LAND:
+                    failed_kills += 1
         elif finding.verdict in NEVER_KILL:
             finding.action = "reported_never_killed"
         # `io_by_uid` holds exactly the uids stalling_slices() produced a
@@ -1414,6 +1437,13 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         for finding, entry in zip(findings, entries):
             out.write(format_finding(entry, _finding_key(finding) in new_keys) + "\n")
 
+    # A real signal that did not land fails the unit on EVERY poll it
+    # recurs: it is not a standing fact but a fresh failed action, and the
+    # trail already carries one row per attempt. Checked first, because a
+    # poll that both found something new and failed to kill something is
+    # the second event more than the first. See EXIT_* above.
+    if failed_kills:
+        return EXIT_KILL_FAILED
     # A new ACTIONABLE finding fails the unit so `systemctl --failed` surfaces
     # it. A standing one does not, or one months-old finding fails the unit
     # forever and the unit stops being a signal anyone reads -- and neither

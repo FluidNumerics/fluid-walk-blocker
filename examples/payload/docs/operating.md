@@ -407,9 +407,14 @@ Three habits when reading it:
 - **Sort by `NEVER_KILL`.** `orphan_idle`, `opaque_traversal` and
   `unparsed_traversal` can never be acted on and exit the unit 0; a new
   `runaway_traversal`, `orphan_traversal` or `fanout_traversal` exits 1; a
-  `blind` record — no user slice, or `/proc` unreadable — exits 2. That is
-  what `systemctl --failed` is tracking, and it is dominated at some sites by
-  other tenants' failed session scopes; know what else is in it.
+  `blind` record — no user slice, or `/proc` unreadable — exits 2. Under
+  `--kill` only, a real signal that did not land — an action of
+  `signalled_but_wedged` or `kill_error` — exits 3, and does so on every
+  poll it recurs, because each poll sends the process a fresh TERM and KILL
+  and the unit must not read green while the trail fills with signals that
+  changed nothing. That is what `systemctl --failed` is tracking, and it is
+  dominated at some sites by other tenants' failed session scopes; know
+  what else is in it.
 
 **The journal**, under the `walk-blocker` tag, is where Layer 1 writes,
 because a monitored account cannot append to a root-owned file:
