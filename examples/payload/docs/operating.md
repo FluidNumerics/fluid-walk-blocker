@@ -408,11 +408,12 @@ Three habits when reading it:
   `unparsed_traversal` can never be acted on and exit the unit 0; a new
   `runaway_traversal`, `orphan_traversal` or `fanout_traversal` exits 1; a
   `blind` record — no user slice, or `/proc` unreadable — exits 2. Under
-  `--kill` only, a real signal that did not land — an action of
-  `signalled_but_wedged` or `kill_error` — exits 3, and does so on every
-  poll it recurs, because each poll sends the process a fresh TERM and KILL
-  and the unit must not read green while the trail fills with signals that
-  changed nothing. That is what `systemctl --failed` is tracking, and it is
+  `--kill` only, a kill that was attempted and left the process not known
+  to be gone — an action of `signalled_but_wedged`, `signal_failed` or
+  `kill_error` — exits 3, and does so on every poll it recurs, because each
+  poll attempts the kill afresh and the unit must not read green while the
+  trail fills with attempts that changed nothing. That is what
+  `systemctl --failed` is tracking, and it is
   dominated at some sites by other tenants' failed session scopes; know
   what else is in it.
 
