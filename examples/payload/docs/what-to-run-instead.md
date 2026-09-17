@@ -8,9 +8,9 @@ and the walk patterns seen at other sites and what replaced them — is
 `/usr/local/lib/walk-blocker`/docs/alternatives.md.
 
 The rule is about the shape of the walk, not the tool: a walk bounded within
-the mount's depth allowance, or one that starts more than 2
-directory components below the mount point, is allowed and always was. The
-refusal prints the depth that applied.
+the mount's depth allowance, or one whose root sits at least
+2 directory components below the mount point, is allowed and
+always was. The refusal prints the depth that applied.
 
 ## The mounts this node guards
 
@@ -53,7 +53,7 @@ the walk, so `du -d 1 DIR` costs exactly what `du -sh DIR` costs.
     ls DIR
     walk-job -- find DIR -name 'PATTERN'     # when the bound does not answer it
 
-Start from the deepest directory you can name: a root more than
+Start from the deepest directory you can name: a root at least
 2 components below the mount point may be walked unbounded.
 
 ### Which files under this dataset match?
