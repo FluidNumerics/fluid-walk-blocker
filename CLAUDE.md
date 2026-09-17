@@ -15,7 +15,7 @@ configuration.
 
 Copyright Fluid Numerics LLC. All rights reserved. This tree is private.
 
-Read `README.md` first, then `docs/adr/0001` through `0019` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0020` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -240,7 +240,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0019`, in order — the decisions
+3. `docs/adr/0001` … `0020`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports

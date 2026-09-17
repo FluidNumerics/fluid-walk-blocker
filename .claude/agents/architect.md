@@ -80,6 +80,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Describe Layer 1 as enforcement | ADR-0001 — advisory, bypassable by design |
 | Let PSI gate what is scanned, or gate `--kill` on a stall | ADR-0009 |
 | Gate `opaque_traversal` on "on an expensive mount" | ADR-0010 — makes the arm unreachable |
+| Let `opaque_traversal` fire on one D observation again, make the streak a site key, or exclude shells and interpreters by name | ADR-0020 — two consecutive polls, a constant measured in the site's own poll interval; a name list is the rejected weakest option |
 | Assume stdin is a terminal in Layer 2 | ADR-0011 |
 | Fold a best-effort hook shell into the hard gate, or soften a required one to match | ADR-0008 — the class is config, chosen from a census |
 | Read PSI per-scope instead of per-slice | ADR-0003 |
@@ -112,6 +113,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0017 | Timer slot is site config chosen against the live schedule; no default, no jitter, no coalescing |
 | 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
 | 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
+| 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
 
 ## Non-negotiables a prompt must restate
 

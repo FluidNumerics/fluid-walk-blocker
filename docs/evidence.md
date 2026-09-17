@@ -55,6 +55,7 @@ the ADR it bears on.
 | 0017 The reaper's timer slot is site configuration chosen against the live schedule of the target node | Timer census at a reference deployment: the neighbours, their accuracy and delay settings, and the slot chosen |
 | 0018 The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table | Guarded-path timing with the trusted `awk` against the pure-`sh` reader on a reference deployment's mount table; the clone and program counts under `strace` are tool facts and live in the test |
 | 0019 The reconcile reports an uncovered mount when its state changes, not on every poll | n/a: design discussion, prompted by the owner's reading of the first deployment plan |
+| 0020 `opaque_traversal` names a process blocked at two consecutive polls, not one | A predecessor's report-only trail over several days at a reference deployment: distinct processes per verdict, and what the `opaque_traversal` rows were |
 
 ## What this file is not
 

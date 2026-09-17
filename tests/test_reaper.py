@@ -142,6 +142,13 @@ def scan(procfs_root):
     return reaper.scan_procs(str(procfs_root))
 
 
+def persisted(procs):
+    """A d_streak saying every process has been in D for as many polls as
+    the opaque_traversal arm requires (ADR-0020), for tests that classify
+    one snapshot and are about some other term of that arm."""
+    return {p.key: reaper.OPAQUE_D_POLLS for p in procs.values()}
+
+
 def _read_audit(path):
     with open(path) as fh:
         return [json.loads(line) for line in fh if line.strip()]
@@ -480,8 +487,10 @@ def test_opaque_traversal_is_counted_but_not_actionable(procfs, mounts_path):
     write_proc(procfs, 900, "rsync", ["rsync", "-a", "/scratch/x", "/tmp/y"],
                uid=UID_B, ppid=800, state="D", cpu_s=99.0, age_s=3600)
     procs = scan(procfs)
-    findings = reaper.classify(procs, read_mounts(mounts_path))
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
     assert [f.verdict for f in findings] == ["opaque_traversal"]
+    assert findings[0].detail["d_polls"] == reaper.OPAQUE_D_POLLS
     assert "opaque_traversal" in reaper.NEVER_KILL
 
 
@@ -720,9 +729,11 @@ def test_a_flickering_finding_is_not_relogged_while_its_process_lives(
     what was latched -- so a standing finding that dropped out of the arm for
     one poll came back as new and wrote a second row.
 
-    Three polls. The middle one has the process in `S`, so it is not a finding
-    at all; the third has it back in `D`. The process never died, so the
-    episode never ended, so one row."""
+    Five polls. The first two have the process in `D`, which is what the
+    opaque_traversal arm needs to name it at all (ADR-0020); the third has
+    it in `S`, so it is not a finding; the last two have it back in `D` for
+    the two polls the arm requires. The process never died, so the episode
+    never ended, so one row."""
     cg = tmp_path / "cg"
     args = _report_args(tmp_path, cg, procfs, mounts_path)
     # An unmodelled tool: this is the opaque_traversal arm, where D-state
@@ -730,7 +741,8 @@ def test_a_flickering_finding_is_not_relogged_while_its_process_lives(
     argv = ["node", "agent/index.js"]
 
     for poll, (state, io_total) in enumerate(
-            (("D", 60.0), ("S", 120.0), ("D", 180.0)), start=1):
+            (("D", 60.0), ("D", 120.0), ("S", 180.0), ("D", 240.0), ("D", 300.0)),
+            start=1):
         write_slice(cg, UID_B, io_full_total=io_total * 1e6)
         # Same pid AND same starttime throughout: uptime advances with the
         # age so the computed starttime does not move, which is what makes
@@ -750,9 +762,12 @@ def test_flickering_processes_reduce_to_one_row_each(
     """A synthetic population of long-lived unmodelled processes, each
     flickering between D and S across six polls the way a wedged process
     does on a live node. The trail must hold one row per process that can
-    produce a record -- never one per D episode -- and the stream followers
-    among them must leave no row at all (ADR-0010). The origin labels come
-    along on the same sample."""
+    produce a record -- never one per D episode -- the stream followers
+    among them must leave no row at all (ADR-0010), and an unmodelled tool
+    that is in D only every other poll is never named, because one poll's D
+    is not two consecutive polls' D (ADR-0020). The known tool that flickers
+    is still named: its arm does not need persistence. The origin labels
+    come along on the same sample."""
     # (pid, comm, argv, cgroup leaf, whether it flickers)
     sample = [
         (2001, "ugrep", ["ugrep", "-rln", "needle", "/"], SEATED, True),
@@ -782,9 +797,12 @@ def test_flickering_processes_reduce_to_one_row_each(
 
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
     seen = sorted(e["pid"] for e in entries)
-    expected = sorted(pid for pid, comm, *_ in sample if comm != "tail")
+    # Every row that can be produced, once: no stream follower, and no
+    # unmodelled tool that never held D across two consecutive polls.
+    expected = sorted(pid for pid, comm, _argv, _cg, flickers in sample
+                      if comm != "tail" and (comm == "ugrep" or not flickers))
     assert seen == expected, [(e["pid"], e["cmdline"]) for e in entries]
-    assert len(entries) == len(sample) - 2
+    assert len(entries) == len(expected)
     # `ugrep -rln needle /` is a KNOWN tool walking an expensive mount with a
     # live parent, past budget: the one actionable verdict in the sample.
     by_pid = {e["pid"]: e for e in entries}
@@ -806,20 +824,25 @@ def test_a_pid_reused_by_a_new_process_is_logged_again(
     args = _report_args(tmp_path, cg, procfs, mounts_path)
     argv = ["node", "agent/index.js"]
 
-    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
-    write_proc(procfs, 4105, "node", argv, uid=UID_B, ppid=900, state="D",
-               cpu_s=6652.1, age_s=4 * 86400, uptime=1000000.0)
-    reaper.run(args, sleep=lambda _s: None)
+    # Two polls each, since the opaque_traversal arm needs the process in D
+    # at two consecutive polls before it names it (ADR-0020).
+    for io_total in (60.0, 120.0):
+        write_slice(cg, UID_B, io_full_total=io_total * 1e6)
+        write_proc(procfs, 4105, "node", argv, uid=UID_B, ppid=900, state="D",
+                   cpu_s=6652.1, age_s=4 * 86400, uptime=1000000.0)
+        reaper.run(args, sleep=lambda _s: None)
 
     # Same pid, younger by a day against the same uptime -- a different
-    # starttime, so a different process.
-    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
-    write_proc(procfs, 4105, "node", argv, uid=UID_B, ppid=900, state="D",
-               cpu_s=6652.1, age_s=3 * 86400, uptime=1000000.0)
-    reaper.run(args, sleep=lambda _s: None)
+    # starttime, so a different process, and a streak that starts over.
+    for io_total in (180.0, 240.0):
+        write_slice(cg, UID_B, io_full_total=io_total * 1e6)
+        write_proc(procfs, 4105, "node", argv, uid=UID_B, ppid=900, state="D",
+                   cpu_s=6652.1, age_s=3 * 86400, uptime=1000000.0)
+        reaper.run(args, sleep=lambda _s: None)
 
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
     assert len(entries) == 2, entries
+    assert len({e["starttime"] for e in entries}) == 2, entries
 
 
 def test_a_finding_nobody_can_act_on_does_not_fail_the_unit(
@@ -834,11 +857,15 @@ def test_a_finding_nobody_can_act_on_does_not_fail_the_unit(
     Reporting is untouched: the row is still written and the table still
     marks it NEW. Only the alerting channel changed."""
     cg = tmp_path / "cg"
-    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
     write_proc(procfs, 4105, "node", ["node", "agent/index.js"],
                uid=UID_B, ppid=900, state="D", cpu_s=6652.1, age_s=4 * 86400)
     args = _report_args(tmp_path, cg, procfs, mounts_path)
 
+    # Two polls in D before the arm names it (ADR-0020); the second is the
+    # poll the finding is NEW on, and it still exits quiet.
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_QUIET
+    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
     out = io.StringIO()
     assert reaper.run(args, out=out, sleep=lambda _s: None) == reaper.EXIT_QUIET
 
@@ -855,14 +882,18 @@ def test_an_actionable_finding_still_fails_the_unit_beside_one_that_is_not(
     list -- is where `all` would fail in one direction; the empty list is
     where it fails in the other, and the quiet test above pins that edge."""
     cg = tmp_path / "cg"
-    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
     write_proc(procfs, 4105, "node", ["node", "agent/index.js"],
                uid=UID_B, ppid=900, state="D", cpu_s=6652.1, age_s=4 * 86400)
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    # The unmodelled tool needs two polls in D before it is named
+    # (ADR-0020); the known tool arrives on the second and is named at once.
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_QUIET
     # A known tool, rooted on the expensive mount, live parent, past budget.
     write_proc(procfs, 4106, "find",
                ["find", "/scratch/e", "-type", "f", "-name", "x"],
                uid=UID_B, ppid=500, state="D", cpu_s=73657.0, age_s=4 * 86400)
-    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
 
     rc = reaper.run(args, sleep=lambda _s: None)
     assert rc == reaper.EXIT_ACTIONABLE, rc
@@ -2001,7 +2032,8 @@ def test_an_unknown_comm_that_will_not_parse_is_not_reported(mounts, policy):
     emitting one would put every unrelated process in the trail."""
     proc = _FullProc(["rsync", "-a", "/scratch/", "/backup/"], "/var/tmp")
     findings = _with_broken_parser(
-        lambda: reaper.classify({proc.pid: proc}, mounts, policy=policy))
+        lambda: reaper.classify({proc.pid: proc}, mounts, policy=policy,
+                                d_streak={proc.key: reaper.OPAQUE_D_POLLS}))
     assert [f.verdict for f in findings] == ["opaque_traversal"], findings
     assert "root_error" not in findings[0].detail
 
@@ -2210,7 +2242,9 @@ def test_a_kernel_thread_is_not_an_opaque_traversal(procfs, mounts_path):
                ["rsync", "-a", "/scratch/x", "/tmp/y"],
                uid=UID_B, ppid=800, state="D", cpu_s=99.0, age_s=6 * 3600)
 
-    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    procs = scan(procfs)
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
 
     assert [(f.verdict, f.proc.pid) for f in findings] == [
         ("opaque_traversal", 3130)], [
@@ -2292,7 +2326,9 @@ def test_a_tail_follower_is_not_an_opaque_traversal(procfs, mounts_path):
                ["rsync", "-a", "/scratch/x", "/tmp/y"],
                uid=UID_B, ppid=800, state="D", cpu_s=99.0, age_s=6 * 3600)
 
-    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    procs = scan(procfs)
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
 
     assert [(f.verdict, f.proc.pid) for f in findings] == [
         ("opaque_traversal", 3130)], [
@@ -2314,7 +2350,9 @@ def test_the_stream_filter_exclusion_reads_argv_and_not_comm(procfs,
                ["tail", "-F", "/home/someone/run.log"],
                uid=UID_B, ppid=800, state="D", cpu_s=99.0, age_s=6 * 3600)
 
-    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    procs = scan(procfs)
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
 
     assert [(f.verdict, f.proc.pid) for f in findings] == [
         ("opaque_traversal", 5001)], [
@@ -2345,7 +2383,9 @@ def test_the_stream_filter_set_is_the_compiled_constant(procfs, mounts_path):
     saved = reaper.STREAM_FILTERS
     try:
         reaper.STREAM_FILTERS = ()
-        findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+        procs = scan(procfs)
+        findings = reaper.classify(procs, read_mounts(mounts_path),
+                                   d_streak=persisted(procs))
     finally:
         reaper.STREAM_FILTERS = saved
     assert [(f.verdict, f.proc.pid) for f in findings] == [("opaque_traversal", 6003)]
@@ -2370,7 +2410,9 @@ def test_stream_followers_leave_no_record_beside_one_runaway(
                ["rsync", "-a", "/scratch/dataset/", "/home/someone/copy/"],
                uid=UID_B, ppid=1, state="D", cpu_s=8376.0, age_s=379674.0)
 
-    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    procs = scan(procfs)
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
 
     assert [(f.verdict, f.proc.pid) for f in findings] == [
         ("opaque_traversal", 1900)], [
@@ -2686,3 +2728,98 @@ def test_a_skip_sends_no_signal_and_never_exits_kill_failed(
     assert signalled == []
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
     assert "skipped_kill_cap" in {e["action"] for e in entries}, entries
+
+
+# --------------------------------------------------------------------------
+# the opaque arm needs two consecutive polls in D (ADR-0020)
+# --------------------------------------------------------------------------
+
+def _unknown_tool_in_d(procfs, pid=4200, state="D", uptime=1000000.0):
+    write_proc(procfs, pid, "python3", ["python3", "sync_tree.py", "/scratch/a"],
+               uid=UID_B, ppid=900, state=state, cpu_s=800.0,
+               age_s=4 * 86400, uptime=uptime)
+
+
+def test_one_poll_in_d_is_a_snapshot_not_a_finding(tmp_path, procfs, mounts_path):
+    """A weeks-old interpreter caught blocked in stat() at the instant of
+    one poll satisfies every other term of the arm -- unknown tool, has a
+    command line, not a stream filter, in D, past budget -- and is not a
+    walk. One observation leaves no record (ADR-0020)."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    _unknown_tool_in_d(procfs)
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_QUIET
+    assert not (tmp_path / "audit.jsonl").exists() or \
+        _read_audit(str(tmp_path / "audit.jsonl")) == []
+    state = json.loads((tmp_path / "spool" / "reaper-state.json").read_text())
+    assert state["d_streak"] == {"4200:%d" % scan(procfs)[4200].starttime: 1}, state
+
+
+def test_two_consecutive_polls_in_d_are_a_finding_that_says_how_long(
+        tmp_path, procfs, mounts_path):
+    cg = tmp_path / "cg"
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    for io_total in (60.0, 120.0):
+        write_slice(cg, UID_B, io_full_total=io_total * 1e6)
+        _unknown_tool_in_d(procfs)
+        reaper.run(args, sleep=lambda _s: None)
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert [(e["verdict"], e["pid"], e["d_polls"]) for e in entries] == [
+        ("opaque_traversal", 4200, 2)], entries
+
+
+def test_a_poll_out_of_d_resets_the_streak(tmp_path, procfs, mounts_path):
+    """D, S, D is two snapshots, not persistence: a blocked stat() that
+    cleared and blocked again. A streak, not a total, so no record."""
+    cg = tmp_path / "cg"
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    for io_total, state in ((60.0, "D"), (120.0, "S"), (180.0, "D")):
+        write_slice(cg, UID_B, io_full_total=io_total * 1e6)
+        _unknown_tool_in_d(procfs, state=state)
+        reaper.run(args, sleep=lambda _s: None)
+    assert not (tmp_path / "audit.jsonl").exists() or \
+        _read_audit(str(tmp_path / "audit.jsonl")) == []
+    state = json.loads((tmp_path / "spool" / "reaper-state.json").read_text())
+    assert list(state["d_streak"].values()) == [1], state
+
+
+def test_the_streak_is_dropped_when_the_process_is_gone(tmp_path, procfs, mounts_path):
+    """The state file must not grow a key per process that ever blocked."""
+    cg = tmp_path / "cg"
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    _unknown_tool_in_d(procfs)
+    reaper.run(args, sleep=lambda _s: None)
+    shutil.rmtree(str(procfs / "4200"))
+    # Something else has to be alive, or the poll is blind and saves no streak.
+    write_proc(procfs, 4300, "bash", ["bash", "run.sh"], uid=UID_B, ppid=900,
+               state="S", cpu_s=1.0, age_s=100)
+    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
+    reaper.run(args, sleep=lambda _s: None)
+    state = json.loads((tmp_path / "spool" / "reaper-state.json").read_text())
+    assert state["d_streak"] == {}, state
+
+
+def test_the_known_tool_arms_do_not_wait_for_a_streak(tmp_path, procfs, mounts_path):
+    """A `find` on an expensive root past budget is a walk however it is
+    caught: the persistence requirement is the opaque arm's alone."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, 4106, "find",
+               ["find", "/scratch/e", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=500, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_ACTIONABLE
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert [e["verdict"] for e in entries] == ["runaway_traversal"], entries
+    assert "d_polls" not in entries[0], entries
+
+
+def test_classify_alone_names_no_opaque_traversal_without_a_streak(procfs, mounts_path):
+    """The default is the honest one: a caller that classifies one snapshot
+    and passes no streak gets no opaque_traversal finding, rather than one
+    that pretends the snapshot was persistence."""
+    _unknown_tool_in_d(procfs)
+    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    assert findings == [], [(f.verdict, f.proc.pid) for f in findings]
