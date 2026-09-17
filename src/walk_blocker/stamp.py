@@ -174,16 +174,13 @@ class SiteValues(object):
         self.site = site
         self.version = version
 
-    def _derived(self, name):
-        return _derived_value(self.site, name)
-
     def __getitem__(self, key):
         if key == "VERSION":
             return self.version
         if key.startswith(SITE_PREFIX):
             dotted = key[len(SITE_PREFIX):]
             if dotted.startswith("derived."):
-                return self._derived(dotted[len("derived."):])
+                return _derived_value(self.site, dotted[len("derived."):])
             try:
                 return self.site.lookup(dotted)
             except (KeyError, IndexError, TypeError):
