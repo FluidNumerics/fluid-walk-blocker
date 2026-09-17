@@ -377,6 +377,56 @@ def test_the_refusal_advises_the_ceiling_that_actually_applies(shim_env, policy)
         assert b"RAN" in run_shim(shim_env, advised).stdout, advised
 
 
+# Both wordings the message has ever used, so the oracle reads the SEMANTICS
+# of the advice and not one phrasing of it: "at least N" advertises N as the
+# first allowed depth, "deeper than N" advertises N + 1.
+_ADVERTISED = re.compile(
+    r"start (at least|deeper than) (\d+) components below (\S+?)\.")
+
+
+def _advertised_minimum(stderr):
+    """The shallowest root the refusal claims would be allowed."""
+    m = _ADVERTISED.search(stderr)
+    assert m is not None, "no depth advice in the refusal:\n" + stderr
+    n = int(m.group(2))
+    return n if m.group(1) == "at least" else n + 1
+
+
+def test_the_refusal_advertises_the_depth_the_guard_actually_allows(
+        shim_env, policy):
+    """The guard refuses a root FEWER than `unscoped_depth` components below
+    an expensive mount, so a root at exactly that depth is allowed. Three
+    arms of the refusal name that boundary, and a message naming `N + 1`
+    sends a user one level deeper than they had to go -- safe to follow, but
+    not the rule, and it contradicts the rendered page, which states the
+    boundary exactly.
+
+    Reading the advertised minimum rather than asserting a phrase is what
+    makes this an oracle: restoring either wrong wording moves the number
+    this computes, and the same value is then RUN, so the message and the
+    verdict are pinned to one boundary instead of two."""
+    for argv, rebuild in (
+        # the depth arm, the output-only-depth arm, the no-depth-flag arm
+        (["find", "/scratch", "-name", "x"],
+         lambda r: ["find", r, "-name", "x"]),
+        (["du", "-sh", "/scratch"], lambda r: ["du", "-sh", r]),
+        (["grep", "-r", "pat", "/scratch"], lambda r: ["grep", "-r", "pat", r]),
+    ):
+        advertised = _advertised_minimum(run_shim(shim_env, argv).stderr.decode())
+        assert advertised == policy.unscoped_depth, argv
+
+        # Follow the advice literally. An advisory layer whose own advice is
+        # refused teaches people to route around it.
+        deep = "/scratch/" + "/".join("d%d" % i for i in range(advertised))
+        assert b"RAN" in run_shim(shim_env, rebuild(deep)).stdout, deep
+
+        # And one component shallower is refused, so the number names an
+        # edge rather than a point somewhere inside the allowed region.
+        shallow = "/scratch/" + "/".join("d%d" % i for i in range(advertised - 1))
+        assert run_shim(shim_env, rebuild(shallow)).returncode == R.EXIT_REFUSED, \
+            shallow
+
+
 def test_du_is_refused_with_advice_that_fits_a_size_question(shim_env):
     for argv in (["du", "-sh", "/scratch"], ["du", "-d", "2", "/scratch"]):
         stderr = run_shim(shim_env, argv).stderr.decode()

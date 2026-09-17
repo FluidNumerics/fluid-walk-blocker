@@ -32,7 +32,7 @@
     "docs/what-to-run-instead.md": "fbef93235075ffc8ac9421f0181bff7cb099e4e75bffe42535d6b499ee33b3d3",
     "reaper.py": "a0b9c1084fd19bf99fd35471cedabb59dccc3374cb5ed82140017fc8c63a0c25",
     "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",
-    "shim/guard.sh": "00495dbe16528d198880944b07683e92eacc28c625603575edfa4524c5982791",
+    "shim/guard.sh": "9ac27ca3f05e17843b50e7b81875affc5450411732291dfafa0ed01fd511e415",
     "shim/install.sh": "b317d0842ff15bc83d9d5de76594373092b016a1a38c64eb56d89462006761d6",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "9907c4b3931eac71c4ff67b5a27b12596c33fe7febf0af8998a3192051f993f2",

@@ -2454,7 +2454,7 @@ fi
         # refuses, and advice that returns zero results for the path the user
         # was just refused teaches them to stop reading the message
         # (ADR-0007).
-        printf 'Or start deeper than %s components below %s.\n' \
+        printf 'Or start at least %s components below %s.\n' \
             "$SG_UNSCOPED_DEPTH" "$sg_hit_mount"
     else
         if [ -n "$sg_outdepth" ]; then
@@ -2468,13 +2468,13 @@ fi
                 "$sg_tool" "$sg_outdepth"
             printf 'prune the OUTPUT, not the walk: a total cannot be known without\n'
             printf 'reading everything below it. There is no shallower form of this\n'
-            printf 'question -- start deeper than %s components below %s.\n' \
+            printf 'question -- start at least %s components below %s.\n' \
                 "$SG_UNSCOPED_DEPTH" "$sg_hit_mount"
         else
             printf '\n%s has no depth flag, so this walk cannot be bounded. Either:\n' "$sg_tool"
             printf '    rg --max-depth %s PATTERN PATH\n' "$SG_MAXDEPTH"
             printf '    find PATH -maxdepth %s -type f -exec %s ... {} +\n' "$SG_MAXDEPTH" "$sg_tool"
-            printf 'or start deeper than %s components below %s.\n' "$SG_UNSCOPED_DEPTH" "$sg_hit_mount"
+            printf 'or start at least %s components below %s.\n' "$SG_UNSCOPED_DEPTH" "$sg_hit_mount"
         fi
     fi
     # The general alternative, offered for every refusal, because it is the
