@@ -19,11 +19,12 @@ journal; the records are read back through the `WALK_BLOCKER_AUDIT` file sink.
 
 import json
 import os
+import subprocess
 
 import pytest
 
 from walk_blocker import search_rules as R
-from conftest import run_shim
+from conftest import SHIM_SEAMS, SHIM_SH, run_shim
 
 
 @pytest.fixture(autouse=True)
@@ -435,3 +436,33 @@ def test_a_refusal_survives_having_no_sink_at_all(shim_env):
     assert result.returncode == R.EXIT_REFUSED
     assert result.stderr.startswith(b"REFUSED")
     assert b"logger" not in result.stderr.lower().replace(b"walk-blocker", b"")
+
+
+def test_the_record_is_written_before_the_message(shim_env, tmp_path):
+    """The record comes first, so a terminal closed mid-message cannot lose
+    it. Pinned by a sink that measures how much of the message has reached
+    stderr at the moment it is called: nothing, if the order is right."""
+    stderr_file = tmp_path / "stderr.txt"
+    seen = tmp_path / "stderr-bytes-at-record.txt"
+    bin_dir = tmp_path / "ordering-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "logger"
+    stub.write_text("#!/bin/sh\nwc -c < '%s' >> '%s'\nexit 0\n" % (stderr_file, seen))
+    stub.chmod(0o755)
+    env = dict(os.environ)
+    for seam in SHIM_SEAMS:
+        env.pop(seam, None)
+    env.pop("PWD", None)
+    env.update({
+        "PATH": "%s:%s:%s" % (shim_env["shim_dir"], bin_dir, shim_env["bin_dir"]),
+        "WALK_BLOCKER_SHIM_DIR": shim_env["shim_dir"],
+        "HOME": "/home/someone",
+    })
+    with open(str(stderr_file), "wb") as err:
+        result = subprocess.run(
+            [SHIM_SH, os.path.join(shim_env["shim_dir"], "find"), "/scratch", "-name", "x"],
+            stdout=subprocess.PIPE, stderr=err, env=env, cwd="/")
+    assert result.returncode == R.EXIT_REFUSED
+    assert stderr_file.read_bytes().startswith(b"REFUSED")
+    sizes = seen.read_text().split()
+    assert sizes == ["0"], "the sink was called once, after %s bytes of message" % sizes
