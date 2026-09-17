@@ -1,7 +1,7 @@
 {
   "files": {
     "README.md": "ef344c61fe8141ad4727f4c48a23b2a240bf737c0da1550a5d277eb9aaa592da",
-    "deploy.py": "96813801ea63b61010d6d349881d087574214d321275ce8a5cf2b6a8846aa374",
+    "deploy.py": "83b06c305d4d4b7f0e35bbac635b2df8804536b2deb8274d435feb377bf29ab7",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -21,7 +21,7 @@
     "docs/adr/0017-timer-slot-is-site-config.md": "afdba4dbf39b63d8a7fb9dd841dfa75770e8e0bfcc1c16c8cd181ea81ee04f2d",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "3e53d67c8db0590001e547fa77219c0dee232385f1d0c08f5cdac4d36844b5df",
-    "docs/operating.md": "059ce101595184d17f2cd336c144d31e89490372007c7d45dbc46c3cfa661cb3",
+    "docs/operating.md": "2cdcf98feabdc05618fef9c5e768dd86306ae18d7fb1b5a7f8493afee5b6e135",
     "docs/plan.md": "873a03b23196088900444e21751eeae4559790037c297963cd82ce553fbb9f9b",
     "docs/site-config.md": "2fa7175a3d1a365d73a8a26086e4e30e9bbca6114db134d3645542b8763730d1",
     "reaper.py": "aa90b9559c5b4a743bd8ad7975ea03b2d8569ec4a7f56d7f2f2b0e301d9c7d06",

@@ -221,13 +221,19 @@ preview accepted:
   each hook file is a plain, root-owned, not-group-writable regular file —
   not a symlink under a dotfile manager;
 - `[install].spool_dir` is usable: it is not something other than a
-  directory (a file, a fifo, a symlink to either, or a dangling symlink
-  that `install -d` would follow), its ancestors can be traversed by an
-  ordinary user, and nothing in it is writable beyond root;
+  directory (a file, a fifo, a symlink to either, or a dangling symlink,
+  which the install's `install -d` fails on outright), its ancestors can be
+  traversed by an ordinary user, and nothing in it is writable beyond root;
 - `[install].prefix` can be reached by the ordinary users Layer 1 exists
   for — a root-only ancestor passes every ownership check and still leaves
   every monitored account with an unreachable directory on `PATH`;
-- `[install].prefix` is not already somebody else's populated directory.
+- `[install].prefix` is not already somebody else's populated directory;
+- `[install].staging_parent` exists, is a directory, and sits in a trust
+  chain that is root-owned end to end — the install snapshots the payload
+  there, as a root-only `0700` directory, between the last of the checks
+  above and its first `systemctl`, so a parent someone else can write is a
+  refusal and a parent that is not there at all is one too. A `--dry-run`
+  install snapshots nothing, so this is the one check it does not make.
 
 Where one of those refuses, the preview prints the whole plan, says which
 check refused and why, and **advertises no command** — because the approved

@@ -2953,9 +2953,11 @@ def _spool_as_fifo(path):
 
 
 # label, planter, the fragment the refusal has to name. A dangling symlink is
-# on this list deliberately: `install -d` follows a link, so it would create
-# the TARGET -- a directory nothing in this installer ever judged, and not
-# where the units say the trail is.
+# on this list deliberately, though not for the reason first written here:
+# measured, GNU coreutils 8.32, `install -d` on a dangling link does NOT
+# create the target -- it exits 1 with "cannot change permissions of ..." and
+# creates nothing. That is worse, not better: unblocked, the install would
+# fail there, after the timer had already been disabled and stopped.
 _NON_DIRECTORY_SPOOLS = (
     ("a regular file", _spool_as_regular_file, "is a regular file"),
     ("a symlink to a file", _spool_as_symlink_to_file, "which is not a directory"),
@@ -3095,9 +3097,92 @@ def test_the_preview_refuses_a_populated_prefix_that_is_not_its_own(
     assert calls == [], calls
 
 
+def _stage_under(monkeypatch, parent):
+    """Point STAGING_PARENT somewhere this test controls, past the autouse
+    fixture. Returns the path, as a string, the way the compiled literal is."""
+    monkeypatch.setattr(deploy, "STAGING_PARENT", str(parent))
+    return str(parent)
+
+
+def _only_the_staging_parent_is_untrusted(monkeypatch):
+    """Make the chain check answer by SUBJECT rather than for everything.
+
+    `pass_prefix_checks()` stubs `untrusted_prefix_chain` globally, which is
+    what lets the six root-write locations pass under tmp. So this REPLACES
+    that stub rather than adding a second one: same signature, answering for
+    the staging parent alone and clean for every other path -- the shape the
+    prefix-traversal parity case already uses.
+    """
+    def by_subject(prefix, trusted_uids=(0,)):
+        if deploy.canonical_prefix(prefix) == deploy.canonical_prefix(
+                deploy.STAGING_PARENT):
+            return [(deploy.STAGING_PARENT,
+                     "is group-writable, so the snapshot's parent is not "
+                     "root's alone")]
+        return []
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain", by_subject)
+
+
+def test_the_preview_refuses_an_untrusted_staging_parent(tmp_path, monkeypatch):
+    """The refusal `stage_payload()` makes between preflight() returning and
+    the first `systemctl`. The preview never reached it, so a node whose
+    staging parent anyone can write previewed clean and then refused with
+    the install already under way."""
+    pass_prefix_checks(monkeypatch)
+    _only_the_staging_parent_is_untrusted(monkeypatch)
+    args = _args(tmp_path)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_the_preview_refuses_a_staging_parent_that_is_not_there(
+        tmp_path, monkeypatch):
+    """`tempfile.mkdtemp(dir=...)` raises ENOENT uncaught, after every check
+    has passed. ENOENT is an ANSWER here, so it is a blocker rather than an
+    unknown -- and one the preview can give before anyone runs anything."""
+    pass_prefix_checks(monkeypatch)
+    missing = _stage_under(monkeypatch, tmp_path / "run-that-is-not-there")
+    assert not os.path.exists(missing)
+    args = _args(tmp_path)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_a_dry_run_still_plans_over_a_staging_parent_it_never_uses(
+        tmp_path, monkeypatch, capsys):
+    """The one check a dry run does not make, because `stage_payload()` does
+    not make it either: it returns before the check, having created nothing.
+    A dry run that refused here would refuse to PLAN an install over a
+    condition it never touches."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    _only_the_staging_parent_is_untrusted(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(_args(tmp_path, dry_run=True)) == 0
+    assert calls, "a dry run prints a plan; it does not refuse"
+    assert "refusing to stage" not in capsys.readouterr().err
+
+
 _PARITY_CASES = ("a spool that is not a directory",
                  "a prefix the users cannot reach",
-                 "a hook file that is a symlink")
+                 "a hook file that is a symlink",
+                 "a staging parent that is not trusted")
 
 
 @pytest.mark.parametrize("case", _PARITY_CASES)
@@ -3116,6 +3201,8 @@ def test_the_preview_and_the_install_refuse_with_the_same_head_line(
             lambda prefix: [(os.path.dirname(prefix), "mode 0700 has no o+x, "
                              "so no ordinary user can traverse it")]
             if prefix == deploy.canonical_prefix(args.prefix) else [])
+    elif case == "a staging parent that is not trusted":
+        _only_the_staging_parent_is_untrusted(monkeypatch)
     else:
         target = tmp_path / "real-bashrc"
         target.write_text("# under a dotfile manager\n")

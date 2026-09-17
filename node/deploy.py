@@ -56,12 +56,15 @@ considered and rejected (ADR-0006).
 same `preflight()`: the arguments are the compiled literals, the six
 root-write locations sit in a trusted chain (and the hook files are plain
 root-owned regular files), the audit directory is usable and not writable
-beyond root, the prefix is reachable by the users Layer 1 exists for, and
-the prefix is not somebody else's populated directory. The contract is that
-reading the preview is enough -- the approved command must not refuse what
-the preview accepted. Where the preview runs unprivileged and may not make
-one of those stats it says "could not be checked as this user" rather than
-reporting it clean; run as root, that same answer is a refusal.
+beyond root, the prefix is reachable by the users Layer 1 exists for, the
+prefix is not somebody else's populated directory, and the parent the
+payload snapshot is staged under is a directory in a trusted chain. The
+contract is that reading the preview is enough -- the approved command must
+not refuse what the preview accepted. Where the preview runs unprivileged
+and may not make one of those stats it says "could not be checked as this
+user" rather than reporting it clean; run as root, that same answer is a
+refusal. A dry run stages nothing, so the staging parent is the one check
+it does not make -- in the preview and in the install alike.
 """
 
 import argparse
@@ -543,9 +546,11 @@ def system_preview(args, env=None):
     # Every check the install runs, from the same function -- so a preview
     # cannot advertise a command that is going to refuse. install.sh's own
     # refusal is already handled above on exactly this reasoning, and this
-    # is the same reasoning applied to deploy.py's own checks: three of them
+    # is the same reasoning applied to deploy.py's own checks: four of them
     # lived only in the install, and each let a misconfigured node preview
-    # clean and then fail the install after the timer had been stopped.
+    # clean and then fail the install after the timer had been stopped --
+    # the staging parent latest of all, between preflight() and the first
+    # systemctl.
     #
     # `privileged` is asked, not assumed: this command is documented to be
     # run as root first, and is also perfectly runnable by the operator as
@@ -856,8 +861,13 @@ def _not_a_directory_reason(path):
     if stat.S_ISLNK(info.st_mode):
         target = os.path.realpath(path)
         if not os.path.exists(path):
-            return ("is a dangling symlink -> %s, and `install -d` follows a "
-                    "link, so it would create the target instead" % target)
+            # Not "it would create the target": measured, GNU coreutils
+            # 8.32, `install -d` on a dangling link exits 1 with "cannot
+            # change permissions of ..." and creates nothing. The blocker is
+            # the same; what it costs is the install, mid-run.
+            return ("is a dangling symlink -> %s, and the install's "
+                    "`install -d` fails on it, which would abort the "
+                    "install after the timer had been stopped" % target)
         return "is a symlink -> %s, which is not a directory" % target
     for predicate, name in _FILE_KINDS:
         if predicate(info.st_mode):
@@ -1196,6 +1206,34 @@ def write_foreign_prefix_refusal(prefix, out=None):
         % (prefix, PAYLOAD_MARKER))
 
 
+def write_untrusted_staging_refusal(parent, chain, out=None):
+    """Said once, so `stage_payload()` and the preflight say it the same
+    way. The install still makes this check itself, right where it creates
+    the directory; this is how the PREVIEW reaches the same sentence."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing to stage the payload under %s: the path is "
+        "not trusted\n  end to end, and a snapshot under a parent someone "
+        "else can write is not a\n  snapshot.\n" % parent)
+    for path, reason in chain:
+        out.write("  %s: %s\n" % (path, reason))
+
+
+def write_unusable_staging_refusal(parent, reason, out=None):
+    """Nowhere to put the snapshot. `tempfile.mkdtemp(dir=...)` needs the
+    parent to exist already and raises uncaught if it does not -- after
+    every check has passed, which is the shape of refusal this preflight
+    exists to move earlier. Refused rather than created: the parent's safety
+    comes from something else having made it, and creating it here would be
+    this script choosing the ownership and mode of the directory that is
+    supposed to protect bytes nothing has verified yet."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing to stage the payload under %s: it %s, so the "
+        "root-only\n  snapshot the install makes before its first "
+        "`systemctl` has nowhere to go.\n" % (parent, reason))
+
+
 def write_unknown_refusal(unknowns, out=None):
     """A check root itself could not make. Returns 6, to be returned on.
 
@@ -1225,9 +1263,12 @@ def preflight(args, privileged, repair=None, out=None):
     generalises to all of them: a check that lives in only one of the
     preview and the install re-creates the preview describing a command the
     install then refuses, and two checks that agree today are not a
-    guarantee -- one function both call is. Three of these lived in only one
+    guarantee -- one function both call is. Four of these lived in only one
     caller, and each was its own report of the same symptom: an install that
-    refuses after the timer has been disabled and stopped.
+    refuses after the timer has been disabled and stopped. The last of them,
+    the staging parent, is also the only one a dry run does not make, because
+    `stage_payload()` does not make it either -- a dry run creates no
+    snapshot, so it has no parent to judge.
 
     `privileged` is a fact about the CALLER, not a mode. The install runs as
     root and can inspect everything; the preview runs as whoever reads it. A
@@ -1341,6 +1382,44 @@ def preflight(args, privileged, repair=None, out=None):
         checks.append(Check("prefix_contents", prefix, CHECK_BLOCKED))
         return 6, checks
     checks.append(Check("prefix_contents", prefix, CHECK_OK))
+
+    # 5. The staging parent, LAST because that is where the install makes
+    #    it: `stage_payload()` refuses on this chain between this function
+    #    returning and the first `systemctl`, and it was the one
+    #    pre-command refusal the preview could not reach. It keeps its own
+    #    call, through the same writer -- belt and braces, the same order
+    #    the spool repair argues for.
+    #
+    #    Skipped for a dry run, which is not a softening: `stage_payload()`
+    #    returns before this check having created nothing, so a dry run
+    #    refusing here would refuse to PLAN over a condition it never
+    #    touches, and the plan it prints is the same either way.
+    if not args.dry_run:
+        blind = unstattable_as_me(STAGING_PARENT)
+        if blind is not None:
+            checks.append(Check("staging", STAGING_PARENT, CHECK_UNKNOWN,
+                                "%s: %s" % blind))
+            if privileged:
+                return write_unknown_refusal(unknown_so_far(), out=out), checks
+            return 0, checks
+        # Missing is a BLOCKER, not an unknown: ENOENT is an answer
+        # (`unstattable_as_me()` says so), and it is the errno
+        # `tempfile.mkdtemp(dir=...)` would raise uncaught. Writability is
+        # deliberately not asked -- root's cannot be tested without writing,
+        # and the preview's own would be a blocker manufactured out of the
+        # reader's uid, which is what the third state exists to avoid.
+        if not os.path.isdir(STAGING_PARENT):
+            why = ("is not a directory" if os.path.lexists(STAGING_PARENT)
+                   else "does not exist")
+            write_unusable_staging_refusal(STAGING_PARENT, why, out=out)
+            checks.append(Check("staging", STAGING_PARENT, CHECK_BLOCKED, why))
+            return 6, checks
+        chain = untrusted_prefix_chain(STAGING_PARENT)
+        if chain:
+            write_untrusted_staging_refusal(STAGING_PARENT, chain, out=out)
+            checks.append(Check("staging", STAGING_PARENT, CHECK_BLOCKED))
+            return 6, checks
+        checks.append(Check("staging", STAGING_PARENT, CHECK_OK))
     return 0, checks
 
 
@@ -1378,14 +1457,14 @@ def stage_payload(env=None, dry_run=False):
         # issue, so it reports the snapshot against REPO and the caller reads
         # from REPO too -- the plan is identical either way.
         return REPO
+    # preflight() has already refused on this, through this same writer, so
+    # in the install's own sequence this is the second look. Kept: the check
+    # belongs where the root-only directory is created, and a guard held
+    # only somewhere else is a guard that moves the next time the call order
+    # does.
     chain = untrusted_prefix_chain(STAGING_PARENT)
     if chain:
-        sys.stderr.write(
-            "deploy.py: refusing to stage the payload under %s: the path is "
-            "not trusted\n  end to end, and a snapshot under a parent someone "
-            "else can write is not a\n  snapshot.\n" % STAGING_PARENT)
-        for bad_path, reason in chain:
-            sys.stderr.write("  %s: %s\n" % (bad_path, reason))
+        write_untrusted_staging_refusal(STAGING_PARENT, chain)
         raise SystemExit(6)
     staging = tempfile.mkdtemp(prefix="walk-blocker-stage.", dir=STAGING_PARENT)
     os.chmod(staging, 0o700)
