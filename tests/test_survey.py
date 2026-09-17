@@ -226,3 +226,18 @@ def test_cli_survey_without_site_needs_no_schema(mount_table, capsys):
     out = capsys.readouterr().out
     assert "[[filesystems.mounts]]" in out
     assert "override" not in out.splitlines()[0]
+
+
+def test_a_filesystem_that_reports_more_free_inodes_than_it_has_reads_as_zero():
+    """`inodes_used` is a subtraction of two numbers the filesystem reports
+    independently, and a network filesystem that answers a synthetic total
+    can report more free than total. The page would otherwise show a
+    negative count, which the schema refuses; clamped at the source, where
+    the arithmetic is."""
+    row = survey.measure("/x", timeout=5, statvfs_command=[
+        sys.executable, "-c",
+        "import json; print(json.dumps({'capacity_bytes': 1, 'free_bytes': 1,"
+        " 'inodes': 10, 'inodes_free': 25}))"])
+    assert row["measured"] is True
+    assert row["inodes"] == 10 and row["inodes_free"] == 25
+    assert row["inodes_used"] == 0

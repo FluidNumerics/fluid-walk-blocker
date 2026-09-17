@@ -194,7 +194,7 @@ class SiteValues(object):
 
 
 # The keys of a `[[filesystems.mounts]]` row that a judgement reads. The
-# measured keys (`inodes`, `capacity_bytes`, `surveyed`) are for the users'
+# measured keys (`inodes_used`, `capacity_bytes`, `surveyed`) are for the users'
 # page and are projected out here, so nothing stamped onto the node carries
 # a figure it does not read -- and so the reaper's literal cannot grow a
 # site's capacity in bytes, which is the kind of number the IP gate hunts.
