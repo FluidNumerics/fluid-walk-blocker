@@ -2043,14 +2043,45 @@ def system_uninstall(args, env=None):
     return 0
 
 
+# The maze on the README, printed by --help and --version so the payload
+# on a node introduces itself the way the repository does.
+BANNER = """\
+  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗
+  ◆·║  ·······║  ···║     ║   ║        ·····║       ║
+  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║
+  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║
+  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║
+  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║
+  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║
+  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║
+  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║
+  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║
+  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║
+  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║
+  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║
+  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║
+  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣
+  ║ ║·······║···║·······║           ║·║ ║···║       ║
+  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║
+  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║
+  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║
+  ║ ║     ║  ·····║        ···║    ·····║···········◆
+  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■
+"""
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=BANNER + "\n\n" + __doc__.splitlines()[0])
     # Outside the required mode group on purpose: argparse's version action
     # exits during parsing, before the group is enforced, so `--version`
     # answers on its own. Not a path argument and not a mode -- ADR-0005 is
     # about where this installer can be POINTED, and this points nowhere.
     parser.add_argument("--version", action="version",
-                        version="walk-blocker %s" % __version__)
+                        version="%s\nwalk-blocker %s" % (BANNER, __version__))
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--system", action="store_true",
                       help="system-wide install (root-owned)")

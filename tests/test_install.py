@@ -605,13 +605,13 @@ def test_version_prints_the_stamped_version_and_needs_no_payload(tmp_path):
     result = subprocess.run([SH, str(layout.script), "--version"],
                             capture_output=True, text=True, env={"PATH": ""})
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "walk-blocker %s\n" % __version__
+    assert result.stdout.endswith("\nwalk-blocker %s\n" % __version__), result.stdout
 
 
 def test_version_reflects_a_different_stamped_value(tmp_path):
     layout = stamped_install(tmp_path, VERSION="9.8.7")
     result = subprocess.run([SH, str(layout.script), "--version"], capture_output=True, text=True)
-    assert result.stdout == "walk-blocker 9.8.7\n"
+    assert result.stdout.endswith("\nwalk-blocker 9.8.7\n"), result.stdout
 
 
 def test_an_unknown_argument_and_a_missing_mode_are_usage_errors(tmp_path):

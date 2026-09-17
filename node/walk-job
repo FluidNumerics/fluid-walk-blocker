@@ -95,7 +95,36 @@ wj_under() {
     if [ -n "$WJ_ACCOUNT" ]; then printf ', account %s' "$WJ_ACCOUNT"; fi
 }
 
+wj_banner() {
+    # The maze on the README. printf is a builtin, so this answers where
+    # PATH is empty; no line carries a quote, a backslash or a percent.
+    printf '%s\n' \
+        '  ■═╦═════════╦═════╦═════╦═══╦═════════════╦═══════╗' \
+        '  ◆·║  ·······║  ···║     ║   ║        ·····║       ║' \
+        '  ║·║ ║·╔════·║ ║·║·║ ║ ══╝ ║ ║ ╔═╦═══╗·╔═╗·╚═══╗ ║ ║' \
+        '  ║·║ ║·║·····║ ║·║·║ ║     ║   ║ ║···║·║ ║·····║ ║ ║' \
+        '  ║·╚═╣·║·══╦═╝ ║·║·║ ╚═════╩═══╝ ║·║·║·║ ╚════·║ ║ ║' \
+        '  ║···║·║···║   ║·║·║             ║·║···║·······║ ║ ║' \
+        '  ╠══·║·╚═╗·╚═╦═╝·║·╠═════════════╣·╠═══╣·══╦═══╩═╝ ║' \
+        '  ║···║···║···║···║·║FluidNumerics║·║   ║···║       ║' \
+        '  ║·══╣ ║·╚═╗·║·╔═╝·║             ║·║ ══╬══·║ ║ ╔══ ║' \
+        '  ║···║ ║···║···║···║ 𝐰𝐚𝐥𝐤𝐛𝐥𝐨𝐜𝐤𝐞𝐫 ║·║   ║···║ ║ ║   ║' \
+        '  ╠══·╠═╩══·╠═══╣·══╣             ║·║ ║ ║·══╣ ║ ╚═╗ ║' \
+        '  ║···║·····║   ║···║ stops slow  ║·║ ║ ║···║ ║   ║ ║' \
+        '  ║·══╣·════╣ ══╩══·║ filesystem  ║·╚═╣ ╚═╗·╠═╩══ ║ ║' \
+        '  ║···║·····║·······║ traversals  ║···║   ║·║     ║ ║' \
+        '  ╠═╗·╚════·║·══╦═══╩═══╦═════════╝ ║·║ ║ ║·║ ════╩═╣' \
+        '  ║ ║·······║···║·······║           ║·║ ║···║       ║' \
+        '  ║ ╚═══╦═══╬══·║·╔═══╗·╚═══╦═══════╣·╚═╣·╔═╝ ════╗ ║' \
+        '  ║     ║   ║···║·║   ║·····║·······║···║·║       ║ ║' \
+        '  ║ ║ ══╝ ║ ║·══╝·║ ══╩════·║·╔════·╚══·║·╚═══════╝ ║' \
+        '  ║ ║     ║  ·····║        ···║    ·····║···········◆' \
+        '  ╚═╩═════╩═══════╩═══════════╩═════════╩═══════════■' \
+        ''
+}
+
 wj_usage() {
+    wj_banner
     cat <<USAGE
 usage: $WJ_SELF [-t TIME] [-o OUTFILE] [-p PARTITION] [-q QOS] [-m MEM] [-n] -- COMMAND [ARG...]
 
@@ -135,7 +164,7 @@ while [ $# -gt 0 ]; do
         -m) [ $# -ge 2 ] || wj_die "-m needs a value"; WJ_MEM=$2; shift 2 ;;
         -n) WJ_DRYRUN=1; shift ;;
         -h|--help) wj_usage; exit 0 ;;
-        --version) printf 'walk-blocker %s\n' "$WJ_VERSION"; exit 0 ;;
+        --version) wj_banner; printf 'walk-blocker %s\n' "$WJ_VERSION"; exit 0 ;;
         --) shift; break ;;
         -*) wj_die "unknown option $1 (put the command after --)" ;;
         # A bare command with no -- is accepted, because a refusal the user is

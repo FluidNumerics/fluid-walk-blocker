@@ -304,7 +304,7 @@ def test_version_flag_names_the_product(capsys):
     with pytest.raises(SystemExit) as exc:
         reaper.build_parser().parse_args(["--version"])
     assert exc.value.code == 0
-    assert capsys.readouterr().out.strip() == "walk-blocker %s" % walk_blocker.__version__
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "walk-blocker %s" % walk_blocker.__version__
 
 
 def test_the_spool_default_is_local_and_named_for_the_product(monkeypatch):
