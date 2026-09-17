@@ -187,8 +187,9 @@ INSTALLED_ENTRIES = ("reaper.py", "search_rules.py", "survey.py", "walk-job",
 #   shim/           guard.sh, install.sh, wrapped_names.sh -- the unit runs
 #                   install.sh as root on every poll
 #   docs/, README.md   the hook blocks point every user at $PREFIX/README.md
-#                   to explain why their PATH changed, and the README's
-#                   reading order is a list of files under docs/
+#                   to explain why their PATH changed, the README's reading
+#                   order is a list of files under docs/, and every refusal
+#                   names $PREFIX/docs/what-to-run-instead.md
 #   site.toml, site.lock.json   the record of what was built, never an
 #                   input (ADR-0013): `cat` them to learn what is deployed
 PAYLOAD_SOURCES = (

@@ -264,6 +264,8 @@ def substitutions(policy, site, version):
         "@@DATE@@": sh_quoted(trusted["date"], "trusted_binaries.date"),
         "@@BIN_DIR@@": sh_quoted(os.path.join(site["install"]["prefix"], "bin"),
                                  "install.prefix"),
+        "@@GUIDE_PATH@@": sh_quoted(os.path.join(site["install"]["prefix"], GUIDE_REL),
+                                    "install.prefix"),
         "@@ESCAPE@@": R.ESCAPE_HATCH,
         "@@EXIT@@": str(R.EXIT_REFUSED),
         "@@VERSION@@": sh_quoted(version, "VERSION"),

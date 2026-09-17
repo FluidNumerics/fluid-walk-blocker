@@ -2742,6 +2742,13 @@ fi
     printf '    journalctl -t walk-blocker -o json\n'
     printf 'where _UID is stamped by journald from the socket, not taken from\n'
     printf 'the environment being audited.\n'
+    # The page every user on the node can read, rendered from this site's
+    # own configuration at build and installed beside the code: the mounts,
+    # what each allows, and this site's walk-job. Always printed, because it
+    # needs no URL a site has yet to publish; the two optional lines below
+    # follow it. An inline literal, not an SG_* assignment above the
+    # decision, so the fast path and the audit-path count are untouched.
+    printf '\nGuide: %s\n' '/usr/local/lib/walk-blocker/docs/what-to-run-instead.md'
     printf '%s: %s\n' 'Documentation' 'https://docs.example.org/hpc/walk-blocker'
     printf '%s: %s\n' 'Contact' 'hpc-help@example.org'
     # Last line on purpose: it is for the person answering the report, not the

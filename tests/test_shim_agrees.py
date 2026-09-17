@@ -310,11 +310,17 @@ def test_refusal_ends_with_the_version_and_the_optional_site_lines(shim_env, mak
     assert stderr.rstrip().endswith("walk-blocker %s" % __version__)
     assert "Documentation: https://docs.example.org/hpc/walk-blocker" in stderr
     assert "Contact: hpc-help@example.org" in stderr
+    # The installed page is named on every refusal, before the optional
+    # lines, at the path the build emits it to under the site's prefix.
+    guide = "Guide: /usr/local/lib/walk-blocker/" + render.GUIDE_REL
+    assert guide in stderr, stderr
+    assert stderr.index(guide) < stderr.index("Documentation:") < stderr.index("Contact:")
     bare_site = conftest.make_site("/proc/mounts")
     del bare_site["site"]["docs_url"]
     del bare_site["site"]["contact"]
     text = render.render_shim(make_policy(), bare_site, __version__)
     assert "Documentation:" not in text and "Contact:" not in text
+    assert "'/usr/local/lib/walk-blocker/%s'" % render.GUIDE_REL in text  # Guide: stays
     assert "walk-blocker %s" % __version__ not in text  # the version travels in SG_VERSION
     assert "SG_VERSION='%s'" % __version__ in text
 
@@ -1070,7 +1076,7 @@ def test_the_templates_use_no_placeholder_outside_the_documented_set(rendered_sh
         "@@CASES@@", "@@FSTYPES@@", "@@REMOTE_FSTYPES_RE@@", "@@REMOTE_PROXY@@",
         "@@MOUNT_OVERRIDES@@", "@@MAXDEPTH@@", "@@UNSCOPED_DEPTH@@",
         "@@DEPTH_ALLOWANCE_MAX@@", "@@MOUNTS_DEFAULT@@", "@@LOGGER@@", "@@AWK@@",
-        "@@ID@@", "@@DATE@@", "@@ESCAPE@@", "@@EXIT@@", "@@BIN_DIR@@",
+        "@@ID@@", "@@DATE@@", "@@ESCAPE@@", "@@EXIT@@", "@@BIN_DIR@@", "@@GUIDE_PATH@@",
         "@@DISPLAY_NAME@@", "@@DOCS_LINE@@", "@@CONTACT_LINE@@", "@@MIN_JOB_AGE@@",
         "@@EXTRA_JOB_TOOLS@@", "@@VERSION@@", "@@FIND_PREFIX@@",
         "@@FIND_VALUE_LEAD@@", "@@FIND_GLUED@@", "@@WRAPPED_NAMES@@",
