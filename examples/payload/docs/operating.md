@@ -400,6 +400,15 @@ It carries three kinds of record:
   actor; `audit_dir` when the spool's mode had to be created or corrected;
   `coverage_change` when the set of wrapped names changed; `relink_refused`
   when the relink stopped at one of its own checks;
+- one **`refused`** record per refusal, from the shim itself, carrying the
+  tool, the root it was asked to walk, the mount and type that judged it,
+  the reason class and the caller's uid. This is the count that answers
+  "did Layer 1 do anything", and the denominator for the escape-hatch
+  count when the time comes to read real findings against real traffic.
+  Two properties of journald apply: an ordinary user sees their own
+  records and the `adm` group and root see everyone's; and a session that
+  produces refusals faster than journald's per-unit rate limit loses the
+  excess, which journald marks with its own "suppressed N messages" line;
 - one **`uncovered_mount`** record per poll, at notice priority, for every
   mount in the live table that is expensive by its compiled default and
   covered by no `[[filesystems.mounts]]` override (ADR-0016). This is the
@@ -408,7 +417,8 @@ It carries three kinds of record:
   `site.toml` as the record that the default was chosen. Filter them out
   with `-p warning` when you want only the other two kinds.
 
-**What an empty journal means.** Healthy is silent: no override was used,
+**What an empty journal means.** Quiet is healthy: nothing was refused, no
+override was used,
 every hook block is present and fires, the audit directory has the right
 mode, and no expensive mount is running uncovered. **What it does not
 mean** is that no unbounded walk ran. Every Layer 1 bypass — an absolute

@@ -81,8 +81,14 @@ limit the scheduler enforces. It moves load off the login node, not off the
 filesystem: the same metadata operations reach the same storage from a
 different client. `walk-job -h` on the node has the options.
 
+**Refusals are recorded.** Every refusal writes one `refused` record to the
+journal under the `walk-blocker` tag, with the tool, the mount judgement and
+the caller's uid, before the message is printed. An empty journal on a
+node with the shim installed means nothing was refused, not that nothing was
+looked at.
+
 **The escape hatch.** `WALK_BLOCKER_UNSCOPED=1` turns a refusal into an
-allow. Every use is recorded in the journal under the `walk-blocker` tag,
+allow. Every use is recorded in the journal under the same tag,
 with the tool, the mount judgement and a uid stamped by journald rather
 than taken from the environment being audited:
 

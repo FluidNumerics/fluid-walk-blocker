@@ -1,6 +1,6 @@
 {
   "files": {
-    "README.md": "0dd4a8a92d68b9b4038b36f324f429047df9772ace9b6febb59fc597dcbdc105",
+    "README.md": "ef344c61fe8141ad4727f4c48a23b2a240bf737c0da1550a5d277eb9aaa592da",
     "deploy.py": "f60fa739355142bb1081596192207ca50dedc7101b6d53651d0a63d3b9744dc3",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
@@ -21,12 +21,12 @@
     "docs/adr/0017-timer-slot-is-site-config.md": "afdba4dbf39b63d8a7fb9dd841dfa75770e8e0bfcc1c16c8cd181ea81ee04f2d",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "3e53d67c8db0590001e547fa77219c0dee232385f1d0c08f5cdac4d36844b5df",
-    "docs/operating.md": "3be174445840da4c6c6befe9cd2936b6e8f8bc2ae6a83a4773ad4701ddbf5fb3",
-    "docs/plan.md": "42e91866b27578a5570b6496d7d00f3c3b501eae4d7b045c8125b7a045a74da6",
+    "docs/operating.md": "bbeabcc25360cebf0b988fd98baff6fe63b0bb86616ff44eb75f506a8a69ffbd",
+    "docs/plan.md": "873a03b23196088900444e21751eeae4559790037c297963cd82ce553fbb9f9b",
     "docs/site-config.md": "2fa7175a3d1a365d73a8a26086e4e30e9bbca6114db134d3645542b8763730d1",
     "reaper.py": "aa90b9559c5b4a743bd8ad7975ea03b2d8569ec4a7f56d7f2f2b0e301d9c7d06",
     "search_rules.py": "f637acf7f352920beec731ccf099924c907e3749f2a6d1a4840d5b99048f67f5",
-    "shim/guard.sh": "7ad156fba8f3bbf32a6f46af06fe0641dc25310cf0b0f528a51887359683cd4b",
+    "shim/guard.sh": "71c1ff859ecaa69da3f575bf310f9d3978e03f299bc30bc13bdadf8ed3455142",
     "shim/install.sh": "3bd5629f1ce8a1eb967a1dfc04d4ebd7fb2f1e205903b776ffde08920294e711",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "9907c4b3931eac71c4ff67b5a27b12596c33fe7febf0af8998a3192051f993f2",

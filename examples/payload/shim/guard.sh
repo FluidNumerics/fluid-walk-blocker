@@ -2623,6 +2623,20 @@ if [ -n "$WALK_BLOCKER_UNSCOPED" ]; then
     sg_exec_real "$@"
 fi
 
+# The refusal is RECORDED before it is printed. A refusal that leaves no
+# record is invisible to the two readers the record exists for: the person
+# deciding whether Layer 2 may be promoted to --kill, who needs to know what
+# Layer 1 turned away and how often; and the person asking "did the guard do
+# anything today", whose empty journal otherwise reads as "no" when the
+# answer was "every time". Same sink, same shape and same escaping as the
+# escape-hatch record above, action `refused`; the reader tells them apart by
+# one field. Off the fast path by construction: every allowed call has
+# already exec'd, so the forks this costs are paid only by a call that was
+# about to print a screenful and exit 2 anyway. Before the printf, so an
+# interrupted terminal cannot lose the record.
+sg_audit_emit refused '' "$sg_hit_root" "$sg_hit_mount" "$sg_hit_fs" \
+    "$sg_reason" '' ''
+
 if [ "$sg_reason" = descends_into ]; then
     sg_why="starts above $sg_hit_mount and descends into it"
 else
@@ -2724,7 +2738,7 @@ fi
     printf '    walk-job -- %s ...          # see walk-job -h\n' "$sg_tool"
 
     printf '\nThis guard is advisory: /usr/bin/%s bypasses it. Set WALK_BLOCKER_UNSCOPED=1 to\n' "$sg_tool"
-    printf 'override this refusal; overrides are recorded in the journal:\n'
+    printf 'override this refusal; refusals and overrides are recorded in the journal:\n'
     printf '    journalctl -t walk-blocker -o json\n'
     printf 'where _UID is stamped by journald from the socket, not taken from\n'
     printf 'the environment being audited.\n'
