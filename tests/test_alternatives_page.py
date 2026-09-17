@@ -57,6 +57,7 @@ def test_every_mount_has_a_row_with_its_depth_and_measurement(page, example):
 def test_the_page_carries_the_sites_own_values(page):
     for expected in ("Example HPC login node", "`datamover`", "1:00:00", "8G",
                      "`/usr/local/lib/walk-blocker`", "`/usr/local/lib/walk-blocker/bin`",
+                     "`/usr/local/lib/walk-blocker/docs/alternatives.md`",
                      "<https://docs.example.org/hpc/walk-blocker>", "Contact: hpc-help@example.org",
                      "WALK_BLOCKER_UNSCOPED=1", "walk-job", "`lustre`", "`wekafs`",
                      "    job-report <jobid>", "for 300 seconds",
@@ -83,6 +84,7 @@ def test_the_template_uses_exactly_the_placeholders_the_renderer_fills(example):
         "@@DISPLAY_NAME@@", "@@MOUNT_TABLE@@", "@@MAXDEPTH@@", "@@UNSCOPED_DEPTH@@",
         "@@REMOTE_FSTYPES@@", "@@PARTITION@@", "@@DEFAULT_TIME@@", "@@DEFAULT_MEM@@",
         "@@MIN_JOB_AGE@@", "@@EXTRA_JOB_TOOLS_LINES@@", "@@PREFIX@@", "@@BIN_DIR@@",
+        "@@ALTERNATIVES_PATH@@",
         "@@DOCS_LINE@@", "@@CONTACT_LINE@@", "@@ESCAPE@@", "@@VERSION@@",
     }
 

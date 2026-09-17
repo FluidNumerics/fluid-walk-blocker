@@ -5,7 +5,7 @@ expensive filesystems with no bound. This page is the short answer for this
 node, filled in from its own configuration. The longer one — the reasoning,
 and the walk patterns seen at other sites and what replaced them — is
 `alternatives.md` in this directory, installed at
-@@PREFIX@@/docs/alternatives.md.
+@@ALTERNATIVES_PATH@@.
 
 The rule is about the shape of the walk, not the tool: a walk bounded within
 the mount's depth allowance, or one whose root sits at least
