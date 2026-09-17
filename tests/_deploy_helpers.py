@@ -15,20 +15,15 @@ seam (ADR-0005). Tests that `monkeypatch.undo()` to read the compiled
 literals therefore see the fictional site's, which is what the shape
 assertions are about. Nothing here is a site's value (ADR-0014).
 """
-import atexit
-import copy
-import importlib.util
 import os
-import shutil
-import sys
-import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+import _node_helpers as _node
+from _node_helpers import example_site
+from walk_blocker import __version__, paths, stamp
 
-from walk_blocker import __version__, config, paths, stamp  # noqa: E402
-
-EXAMPLE_SITE = os.path.join(ROOT, "examples", "site.example.toml")
+# Re-exported: test_deploy imports both from here.
+ROOT = _node.ROOT
+EXAMPLE_SITE = _node.EXAMPLE_SITE
 DEPLOY_SOURCE = os.path.join(paths.node_dir(), "deploy.py")
 
 # Every source `deploy.py` must carry a marker for: the
@@ -61,11 +56,6 @@ REQUIRED_SOURCES = (
 )
 
 
-def example_site():
-    """The example site's data, default-complete, as a fresh copy."""
-    return copy.deepcopy(config.load_site(EXAMPLE_SITE).data)
-
-
 def site_values(**overrides):
     """The `values` mapping for `stamp_text`: VERSION plus every key of the
     fictional site that `deploy.py` reads. `overrides` are keyed the way the
@@ -86,20 +76,13 @@ def site_values(**overrides):
 
 
 def source_text():
-    with open(DEPLOY_SOURCE, "r", encoding="utf-8") as fh:
-        return fh.read()
+    return _node.read_source(DEPLOY_SOURCE)
 
 
 def stamped_text(values):
     """`node/deploy.py` with `values` stamped in, checked current and
     complete before it is handed back."""
-    text = stamp.stamp_text(source_text(), values, "py")
-    findings = stamp.check_text(text, values, "py", REQUIRED_SOURCES)
-    assert findings == [], findings
-    return text
-
-
-_loaded = [0]
+    return _node.stamped_text(DEPLOY_SOURCE, values, REQUIRED_SOURCES)
 
 
 def write_stamped_deploy(values, directory):
@@ -118,12 +101,6 @@ def load_stamped_deploy(values, directory=None):
     by default, removed at exit) and import it from there under a unique
     module name, so `REPO` is that directory."""
     if directory is None:
-        directory = tempfile.mkdtemp(prefix="walk-blocker-deploy-")
-        atexit.register(shutil.rmtree, directory, True)
-    path = write_stamped_deploy(values, directory)
-    _loaded[0] += 1
-    spec = importlib.util.spec_from_file_location(
-        "deploy_under_test_%d" % _loaded[0], path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+        directory = _node.scratch_dir("walk-blocker-deploy-")
+    return _node.load_module(write_stamped_deploy(values, directory),
+                             "deploy_under_test")

@@ -268,6 +268,13 @@ def shim_variant(tmp_path, rendered_shim, node_fs):
     return build
 
 
+def recording_logger_stub(log):
+    """The body of a `logger` stand-in that appends its arguments to `log`,
+    one call per line. The shim suite installs it as `logger` and the
+    installer suite under the renamed fallback; both read the same file."""
+    return "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n".format(log=log)
+
+
 @pytest.fixture
 def logger_stub(tmp_path):
     """A `logger` on PATH that records how it was called.
@@ -279,8 +286,7 @@ def logger_stub(tmp_path):
     bin_dir.mkdir()
     log = tmp_path / "logger-calls.txt"
     stub = bin_dir / "logger"
-    stub.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n".format(log=log))
+    stub.write_text(recording_logger_stub(log))
     stub.chmod(0o755)
     log.write_text("")
     return {"bin": str(bin_dir), "log": log}

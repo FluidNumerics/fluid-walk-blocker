@@ -3374,3 +3374,13 @@ def test_a_check_root_could_not_make_is_a_refusal_not_a_pass(
     assert rc == 6
     assert any(check.state == deploy.CHECK_UNKNOWN for check in checks), checks
     assert "could not be made even as root" in capsys.readouterr().err
+
+
+def test_the_offender_listing_is_capped_at_ten_distinct_lines(capsys):
+    """Twelve distinct offenders and three duplicates: ten lines, sorted,
+    duplicates collapsed first. The cap that keeps a refusal readable is now
+    the helper's rather than each caller's, so it is pinned here once."""
+    offenders = [("/p/%02d" % i, "code", "why %d" % i) for i in range(12)]
+    deploy._write_offenders(offenders + offenders[:3])
+    lines = capsys.readouterr().err.splitlines()
+    assert lines == ["  /p/%02d: why %d" % (i, i) for i in range(10)], lines
