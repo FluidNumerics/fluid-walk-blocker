@@ -105,13 +105,13 @@ def _generated(rel, text):
     raise BuildError("%s: rendered text still contains '@@' (an unfilled placeholder)" % rel)
 
 
-def _verbatim(rel, source, consumers):
+def _verbatim(rel, source):
     """A file copied byte for byte. It may carry a stamp marker only if
-    `CONSUMERS` lists it -- otherwise the marker would never be stamped and
-    never be checked, and the literal on the node would be whatever the
-    source last said."""
+    `stamp.CONSUMERS` lists it -- otherwise the marker would never be
+    stamped and never be checked, and the literal on the node would be
+    whatever the source last said."""
     data = _read(source)
-    if rel not in consumers:
+    if rel not in stamp.CONSUMERS:
         try:
             markers = stamp.find_markers(data.decode("utf-8"))
         except UnicodeDecodeError:
@@ -128,33 +128,33 @@ def render_payload(site, site_bytes, version):
     included."""
     files = {}
 
-    def put(rel, data, mode=MODE_FILE):
+    def put(rel, data):
+        # The mode follows EXECUTABLE membership and nothing else, so a path
+        # cannot be listed there and land 0644, or land 0755 unlisted.
         if rel in files:
             raise BuildError("%s: emitted twice" % rel)
-        files[rel] = (data, mode)
+        files[rel] = (data, MODE_EXEC if rel in EXECUTABLE else MODE_FILE)
 
+    node = paths.node_dir()
     put("site.toml", site_bytes)
     put("README.md", _read(paths.readme_file()))
     docs = paths.docs_dir()
     for rel in _tree_files(docs):
         put("docs/" + rel, _read(os.path.join(docs, rel)))
-    put("search_rules.py", _verbatim("search_rules.py", paths.rules_file(), stamp.CONSUMERS))
-    put("survey.py", _verbatim("survey.py", os.path.join(paths.node_dir(), "survey.py"),
-                               stamp.CONSUMERS))
-    # The benchmark and the flag probe are tools an operator runs beside the
-    # shim; they carry no site value, so they ship verbatim.
-    put("shim/measure.sh",
-        _verbatim("shim/measure.sh", os.path.join(paths.node_dir(), "shim", "measure.sh"),
-                  stamp.CONSUMERS), MODE_EXEC if "shim/measure.sh" in EXECUTABLE else MODE_FILE)
-    put("shim/measure-flags.sh",
-        _verbatim("shim/measure-flags.sh",
-                  os.path.join(paths.node_dir(), "shim", "measure-flags.sh"), stamp.CONSUMERS))
+    # Verbatim copies. The benchmark and the flag probe are tools an operator
+    # runs beside the shim; they carry no site value, so they ship as-is too.
+    for rel, source in (
+            ("search_rules.py", paths.rules_file()),
+            ("survey.py", os.path.join(node, "survey.py")),
+            ("shim/measure.sh", os.path.join(node, "shim", "measure.sh")),
+            ("shim/measure-flags.sh", os.path.join(node, "shim", "measure-flags.sh"))):
+        put(rel, _verbatim(rel, source))
 
     # Stamped consumers: the source is the same relative path under node/.
     values = stamp.SiteValues(site, version)
     for rel, required in sorted(stamp.CONSUMERS.items()):
         kind = "py" if rel.endswith(".py") else "sh"
-        text = _read(os.path.join(paths.node_dir(), rel)).decode("utf-8")
+        text = _read(os.path.join(node, rel)).decode("utf-8")
         try:
             text = stamp.stamp_text(text, values, kind)
             findings = stamp.check_text(text, values, kind, required)
@@ -162,13 +162,12 @@ def render_payload(site, site_bytes, version):
             raise BuildError("%s: %s" % (rel, exc))
         if findings:
             raise BuildError("%s: %s" % (rel, "; ".join(findings)))
-        put(rel, _generated(rel, text), MODE_EXEC if rel in EXECUTABLE else MODE_FILE)
+        put(rel, _generated(rel, text))
 
     policy = site.policy()
-    put("shim/guard.sh", _generated("shim/guard.sh",
-                                    render_shim(policy, site, version)), MODE_EXEC)
-    put("shim/wrapped_names.sh", _generated("shim/wrapped_names.sh",
-                                            render_wrapped_names(policy, site, version)))
+    put("shim/guard.sh", _generated("shim/guard.sh", render_shim(policy, site, version)))
+    put("shim/wrapped_names.sh",
+        _generated("shim/wrapped_names.sh", render_wrapped_names(policy, site, version)))
 
     hashed = {rel: data for rel, (data, _mode) in files.items()}
     lock = manifest.render_manifest(site_bytes, version, site.lookup("schema_version"),
