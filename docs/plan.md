@@ -39,8 +39,8 @@ decides, it forks nothing and opens one file; no `statfs`, no network, no
 configuration read, so it cannot hang when the filesystem does (ADR-0015).
 It is advisory: an absolute path, a private `PATH`, a container, a batch
 script, a second-level shell or a shell function all go around it, and the
-docstrings say so. `WALK_BLOCKER_UNSCOPED=1` is its documented, journaled
-escape hatch, because a block with no override gets routed around and then
+docstrings say so. Every refusal is journaled, and `WALK_BLOCKER_UNSCOPED=1`
+is its documented, journaled escape hatch, because a block with no override gets routed around and then
 nothing is measurable.
 
 **Layer 2** is the reaper, a root-run systemd timer (ADR-0001, ADR-0002). It

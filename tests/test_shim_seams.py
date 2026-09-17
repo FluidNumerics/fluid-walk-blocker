@@ -74,7 +74,8 @@ def test_mounts_seam_stays_quiet_on_a_refusal(shim_env, tmp_path):
     result = run_shim(shim_env, ["find", "/scratch", "-name", "x"],
                       env={"WALK_BLOCKER_MOUNTS": shim_env["mounts"], "WALK_BLOCKER_AUDIT": str(audit)})
     assert result.returncode == R.EXIT_REFUSED
-    assert not audit.exists()
+    entry = _record(audit)
+    assert entry["action"] == "refused", "the refusal's own record, and no seam record"
 
 
 def test_an_empty_mounts_seam_is_the_compiled_table(shim_env):
@@ -122,12 +123,14 @@ def test_fstypes_seam_stays_quiet_when_the_override_matches_the_default(shim_env
 def test_fstypes_seam_cannot_hide_a_mount_that_is_remote_by_proxy(shim_env, tmp_path):
     """Narrowing the type list to nothing that matches still leaves tier
     three: `/archive` has a `host:` source, so it stays expensive and the
-    seam changes nothing -- no allow, no record."""
+    seam changes nothing -- no allow, no seam record; only the refusal's own."""
     audit = tmp_path / "audit.jsonl"
     result = run_shim(shim_env, ["find", "/archive", "-name", "x"],
                       env={"WALK_BLOCKER_FSTYPES": "wekafs", "WALK_BLOCKER_AUDIT": str(audit)})
     assert result.returncode == R.EXIT_REFUSED
-    assert not audit.exists()
+    entry = _record(audit)
+    assert entry["action"] == "refused"
+    assert entry["mount"] == "/archive"
 
 
 def test_fstypes_seam_and_table_agree(shim_env, node_fs, policy, monkeypatch):
@@ -341,3 +344,94 @@ def test_escape_hatch_and_a_seam_together_record_the_hatch(shim_env, tmp_path):
     entry = _record(audit)
     assert entry["action"] == "unaudited_seam"
     assert entry["seam"] == "WALK_BLOCKER_MOUNTS"
+
+
+# --------------------------------------------------------------------------
+# refusals are recorded, not only printed
+# --------------------------------------------------------------------------
+
+def test_a_refusal_is_recorded_with_the_judgement_that_refused_it(shim_env, tmp_path):
+    """The record carries what the message says: tool, root, the mount and
+    type that judged it, the reason class, and who asked."""
+    audit = tmp_path / "audit.jsonl"
+    result = run_shim(shim_env, ["find", "/scratch", "-name", "x"],
+                      env={"WALK_BLOCKER_AUDIT": str(audit)})
+    assert result.returncode == R.EXIT_REFUSED
+    assert b"REFUSED" in result.stderr
+    entry = _record(audit)
+    assert entry["action"] == "refused"
+    assert entry["layer"] == "shim"
+    assert entry["seam"] == ""
+    assert entry["tool"] == "find"
+    assert entry["root"] == "/scratch"
+    assert entry["mount"] == "/scratch"
+    assert entry["fs"] == "wekafs"
+    assert entry["reason"] == "at_or_near_root"
+    assert isinstance(entry["uid"], int) and entry["uid"] >= 0
+
+
+def test_a_descending_refusal_records_descends_into(shim_env, tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    result = run_shim(shim_env, ["find", "/", "-name", "x"],
+                      env={"WALK_BLOCKER_AUDIT": str(audit)})
+    assert result.returncode == R.EXIT_REFUSED
+    entry = _record(audit)
+    assert entry["action"] == "refused"
+    assert entry["reason"] == "descends_into"
+    assert entry["root"] == "/"
+    assert entry["fs"] == "wekafs"
+
+
+def test_a_refusal_record_reaches_the_journal_sink(shim_env, logger_stub):
+    """Through the documented fallback, since the fixture site's trusted
+    logger does not exist; the trusted-path test lives beside the escape
+    hatch's."""
+    result = run_shim(
+        shim_env, ["find", "/scratch", "-name", "x"],
+        env={"PATH": "%s:%s:%s" % (shim_env["shim_dir"], logger_stub["bin"], shim_env["bin_dir"])})
+    assert result.returncode == R.EXIT_REFUSED
+    calls = [line for line in logger_stub["log"].read_text().splitlines() if line.strip()]
+    assert len(calls) == 1, calls
+    assert "-t walk-blocker" in calls[0]
+    assert '"action":"refused"' in calls[0]
+    assert '"mount":"/scratch"' in calls[0]
+
+
+def test_an_allowed_call_records_nothing(shim_env, tmp_path, logger_stub):
+    """The fast path stays silent as well as fork-free: a record per allowed
+    grep would be a journal nobody reads."""
+    audit = tmp_path / "audit.jsonl"
+    result = run_shim(
+        shim_env, ["find", "/home/me", "-maxdepth", "4"],
+        env={"WALK_BLOCKER_AUDIT": str(audit),
+             "PATH": "%s:%s:%s" % (shim_env["shim_dir"], logger_stub["bin"], shim_env["bin_dir"])})
+    assert result.returncode == 0
+    assert not audit.exists()
+    assert logger_stub["log"].read_text().strip() == ""
+
+
+def test_the_refusal_record_has_the_shape_of_the_escape_hatch_record(shim_env, tmp_path):
+    """One record shape for every action, so a reader tells them apart by one
+    field. The same argv under the hatch produces exactly one record, the
+    hatch's -- the refusal record is written only when the refusal stands."""
+    refused = tmp_path / "refused.jsonl"
+    hatched = tmp_path / "hatched.jsonl"
+    run_shim(shim_env, ["find", "/scratch", "-name", "x"],
+             env={"WALK_BLOCKER_AUDIT": str(refused)})
+    result = run_shim(shim_env, ["find", "/scratch", "-name", "x"],
+                      env={"WALK_BLOCKER_AUDIT": str(hatched), R.ESCAPE_HATCH: "1"})
+    assert result.returncode == 0
+    a, b = _record(refused), _record(hatched)
+    assert b["action"] == "escape_hatch"
+    assert set(a) == set(b)
+    for key in ("tool", "root", "mount", "fs", "reason", "uid"):
+        assert a[key] == b[key], key
+
+
+def test_a_refusal_survives_having_no_sink_at_all(shim_env):
+    """No audit file, no trusted logger, no logger on PATH: the refusal still
+    refuses, still explains itself, and says nothing about the sink."""
+    result = run_shim(shim_env, ["find", "/scratch", "-name", "x"])
+    assert result.returncode == R.EXIT_REFUSED
+    assert result.stderr.startswith(b"REFUSED")
+    assert b"logger" not in result.stderr.lower().replace(b"walk-blocker", b"")
