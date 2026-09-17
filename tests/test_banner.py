@@ -39,14 +39,51 @@ def readme_banner():
 def test_the_readme_banner_is_a_maze_with_an_attribution():
     banner = readme_banner()
     lines = banner.split("\n")
-    assert len(lines) >= 20 and len({len(l) for l in lines}) <= 2, "not the maze"
-    # The wordmarks, through a compatibility fold: the art sets them in
-    # mathematical italics, and which styling the artwork uses is the
-    # artist's business, not this test's.
-    folded = unicodedata.normalize("NFKC", banner)
-    assert "FluidNumerics" in folded
-    assert "walkblocker" in folded
+    assert len(lines) >= 20, "not the maze"
+    folded = unicodedata.normalize("NFKC", banner).upper()
+    assert "FLUIDNUMERICS" in folded
+    assert "WALKBLOCKER" in folded
     assert "asciiart.eu" in _read("README.md")
+
+
+# The repertoire the artwork draws from, and the whole of it. ASCII and the
+# box-drawing block are in every monospace font; the two walkers are not, and
+# are here because the artist kept them deliberately after the rest was
+# redrawn -- one cell each, in the outermost column, where a substituted
+# advance width shifts a wall by one rather than by thirteen.
+WALKERS = "\U0001fbc7\U0001fbc8"
+
+
+def _out_of_repertoire(text):
+    return sorted({c for c in text
+                   if not (c.isascii() or "\u2500" <= c <= "\u257f" or c in WALKERS)})
+
+
+def test_the_banner_uses_only_glyphs_a_monospace_font_will_have():
+    """The defect this pins: the wordmarks were once set in Mathematical
+    Alphanumeric Symbols, which GitHub's monospace stack does not cover, so a
+    browser substituted a proportional font and the two rows carrying them
+    claimed sixty-odd cells against every other row's fifty-three. The walls
+    bent. Nothing caught it, because every row was the same number of CODE
+    POINTS and `east_asian_width` calls those characters neutral -- neither
+    property models font fallback.
+
+    So this constrains the repertoire rather than the width. A future
+    revision that reaches for a styled letter, an emoji or a symbol outside
+    the block fails here, at CI, rather than on someone's screen."""
+    stray = _out_of_repertoire(readme_banner())
+    assert not stray, (
+        "the banner uses %r, outside ASCII, the box-drawing block and the two "
+        "walkers -- a monospace stack may not carry it, and a substituted "
+        "glyph's advance width is what bent the walls last time"
+        % ["U+%04X %s" % (ord(c), unicodedata.name(c, "?")) for c in stray])
+
+
+def test_every_row_is_the_same_number_of_code_points_and_none_needs_escaping():
+    """Necessary and, on its own, not sufficient -- see the test above, which
+    exists because this one passed while the walls were visibly bent."""
+    banner = readme_banner()
+    assert len({len(line) for line in banner.split("\n")}) == 1
     # Nothing a shell single-quoted printf argument or a Python triple-quoted
     # literal would have to escape: that is what lets the copies be literal.
     assert not any(c in banner for c in "%$`\\'\""), banner
