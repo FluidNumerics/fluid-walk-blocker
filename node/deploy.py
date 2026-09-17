@@ -1690,6 +1690,22 @@ def _units_are_down(env):
     return 0
 
 
+def _remove_installed_entries(args, env):
+    """Take back what this run copied: every INSTALLED_ENTRIES path under
+    the prefix, and nothing else -- the same bound the recursive mutations
+    keep. `check=False`, because an entry the failed step never reached is
+    not a reason to stop a refusal half-way."""
+    for entry in INSTALLED_ENTRIES:
+        run(["rm", "-rf", os.path.join(args.prefix, entry)],
+            check=False, dry_run=args.dry_run, env=env)
+
+
+def _write_offenders(offenders):
+    """The first ten `unowned_by()` offenders, one per line, on stderr."""
+    for path, _code, why in sorted(set(offenders))[:10]:
+        sys.stderr.write("  %s: %s\n" % (path, why))
+
+
 def system_execute(args, env=None):
     if not _is_root():
         sys.stderr.write(
@@ -1795,9 +1811,7 @@ def system_execute(args, env=None):
             for entry in linked:
                 sys.stderr.write("  %s -> %s\n" % (
                     entry, os.path.realpath(os.path.join(args.prefix, entry))))
-            for entry in INSTALLED_ENTRIES:
-                run(["rm", "-rf", os.path.join(args.prefix, entry)],
-                    check=False, dry_run=args.dry_run, env=env)
+            _remove_installed_entries(args, env)
             return 5
 
     # Reassert root, then prove it before anything is wired up. Scoped to
@@ -1817,14 +1831,11 @@ def system_execute(args, env=None):
             sys.stderr.write(
                 "deploy.py: %s is not root-owned after install; refusing to "
                 "wire it up.\n" % args.prefix)
-            for path, _code, why in sorted(set(offenders))[:10]:
-                sys.stderr.write("  %s: %s\n" % (path, why))
+            _write_offenders(offenders)
             # Remove what this run wrote, rather than leaving a rejected
             # payload on disk for someone to widen later. Bounded to the
             # entries this install creates.
-            for entry in INSTALLED_ENTRIES:
-                run(["rm", "-rf", os.path.join(args.prefix, entry)],
-                    check=False, dry_run=args.dry_run, env=env)
+            _remove_installed_entries(args, env)
             sys.stderr.write(
                 "  Nothing was enabled, the units are left stopped AND\n"
                 "  disabled, the payload this run wrote has been removed, and\n"
@@ -1862,8 +1873,7 @@ def system_execute(args, env=None):
             sys.stderr.write(
                 "deploy.py: %s failed the ownership check AFTER install.sh "
                 "ran.\n" % args.prefix)
-            for path, _code, why in sorted(set(offenders))[:10]:
-                sys.stderr.write("  %s: %s\n" % (path, why))
+            _write_offenders(offenders)
             sys.stderr.write(
                 "  No systemd unit was written and no timer enabled, but the\n"
                 "  hook blocks (%s) and the shim farm ARE in place. Run\n"
