@@ -2862,3 +2862,24 @@ def test_a_blind_poll_neither_extends_nor_resets_the_streak(
     entries = [e for e in _read_audit(str(tmp_path / "audit.jsonl"))
                if e["action"] != "blind"]
     assert [(e["verdict"], e["d_polls"]) for e in entries] == [("opaque_traversal", 2)], entries
+
+
+def test_a_state_file_from_before_the_streak_is_read_as_no_streak(
+        tmp_path, procfs, mounts_path):
+    """An upgrade in place: the previous build's state file has no
+    `d_streak` key. The first poll counts from one, as after a reset
+    (ADR-0020), and the second names the process."""
+    cg = tmp_path / "cg"
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    state_path = tmp_path / "spool" / "reaper-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"latched": [], "logged_actions": {}}))
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    _unknown_tool_in_d(procfs)
+    assert reaper.run(args, sleep=lambda _s: None) == reaper.EXIT_QUIET
+    assert not (tmp_path / "audit.jsonl").exists() or \
+        _read_audit(str(tmp_path / "audit.jsonl")) == []
+    write_slice(cg, UID_B, io_full_total=120.0 * 1e6)
+    reaper.run(args, sleep=lambda _s: None)
+    entries = _read_audit(str(tmp_path / "audit.jsonl"))
+    assert [(e["verdict"], e["d_polls"]) for e in entries] == [("opaque_traversal", 2)], entries
