@@ -1,6 +1,7 @@
 """node/survey.py: the tier-three mount survey (ADR-0016), driven against a
 fake mount table and a fake statvfs child. Nothing here touches a real mount
 or writes outside tmp_path."""
+import datetime
 import importlib.util
 import json
 import os
@@ -155,6 +156,20 @@ def test_proposed_block_parses_and_validates(mount_table):
     proposed = tomllib.loads(block)["filesystems"]["mounts"]
     assert sorted(m["path"] for m in proposed) == ["/home", "/mnt/box", "/mnt/x", "/scratch"]
     assert all(m["class"] == "expensive" for m in proposed)
+    # A measured mount carries its figures and the date they were read; an
+    # unmeasured one proposes none, so nothing invented reaches site.toml.
+    by_path = {m["path"]: m for m in proposed}
+    measured = [r for r in rows if r["measured"] and r["mountpoint"] in by_path]
+    assert measured, "the fixture measures nothing"
+    for r in measured:
+        m = by_path[r["mountpoint"]]
+        assert (m["inodes"], m["capacity_bytes"]) == (r["inodes"], r["capacity_bytes"])
+        assert m["surveyed"] == datetime.date.today().isoformat()
+    for r in rows:
+        if not r["measured"] and r["mountpoint"] in by_path:
+            assert "inodes" not in by_path[r["mountpoint"]]
+    dated = tomllib.loads(survey.render_toml(rows, today="2026-02-03"))["filesystems"]["mounts"]
+    assert {m.get("surveyed") for m in dated if "inodes" in m} == {"2026-02-03"}
 
     # Spliced into the example site in place of its own overrides.
     with open(os.path.join(ROOT, "examples", "site.example.toml"), "rb") as fh:

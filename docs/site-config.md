@@ -81,7 +81,8 @@ person whose process is in it (ADR-0012).
 ## Survey the mounts and decide per mount
 
 Keys: `[filesystems].remote_fstypes`, `remote_proxy`,
-`[[filesystems.mounts]]`. Decision record: ADR-0016.
+`[[filesystems.mounts]]` with `path`, `class`, `maxdepth`, and the measured
+`inodes`, `capacity_bytes`, `surveyed`. Decision record: ADR-0016.
 
 A mount's class defaults from `/proc/mounts` fields alone: a type on the
 remote list, a `host:` source, or a `_netdev`/`addr=` option makes it
@@ -108,6 +109,14 @@ the fix for one small export.
    the survey output beside `site.toml`: it is the record that the default
    was seen and chosen, not overlooked. The reconcile logs a line per mount
    that no override covers, so the choice stays visible on the node too.
+5. **Keep the figures with the entry.** The survey proposes `inodes`,
+   `capacity_bytes` and `surveyed` on every measured mount; paste them with
+   the entry. Nothing on the node reads them — they are shown on the
+   payload's `docs/what-to-run-instead.md`, the page every refusal names,
+   so a refused user sees what a full walk of that mount would visit and
+   when that was last measured. A figure without `surveyed` fails
+   `validate`: a measurement carries its date. Re-survey and update them
+   when the reconcile or a user disputes what the page says.
 
 Re-run the survey when the reconcile reports a mount you did not decide
 on, when a filesystem is added or replaced, and when a site disputes a

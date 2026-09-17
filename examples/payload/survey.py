@@ -12,6 +12,7 @@ Stdlib-only Python 3.9 (ADR-0015): this file is shipped in the payload and
 runs on an interpreter this tree does not choose.
 """
 import argparse
+import datetime
 import fnmatch
 import json
 import re
@@ -200,10 +201,18 @@ def render_table(rows):
                      for row in table)
 
 
-def render_toml(rows):
+def render_toml(rows, today=None):
     """The proposed override block: one entry per remote mount, on its
     default. Deleting an entry keeps the default; changing it is a decision
-    that belongs in a diff with a reason (ADR-0016)."""
+    that belongs in a diff with a reason (ADR-0016).
+
+    A measured mount's figures are proposed as `inodes`, `capacity_bytes`
+    and `surveyed`, so the record flows survey -> diff -> the users' page
+    (`docs/what-to-run-instead.md`) without anyone retyping a number.
+    `today` is the survey date; a test passes one, the node uses the clock.
+    """
+    if today is None:
+        today = datetime.date.today().isoformat()
     out = ["# Proposed by walk-blocker survey. Review, then paste into site.toml.",
            "# A mount left on its default should be left there on purpose."]
     for r in rows:
@@ -221,6 +230,10 @@ def render_toml(rows):
         out.append("path = %s" % json.dumps(r["mountpoint"]))
         out.append('class = "expensive"  # default; delete this entry to keep the '
                    'default, or set class = "cheap" with a reason')
+        if r["measured"]:
+            out.append("inodes = %d" % r["inodes"])
+            out.append("capacity_bytes = %d" % r["capacity_bytes"])
+            out.append('surveyed = "%s"' % today)
     return "\n".join(out) + "\n"
 
 

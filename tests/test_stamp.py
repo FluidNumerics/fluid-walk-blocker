@@ -13,6 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from walk_blocker import config, stamp  # noqa: E402
+from conftest import EXAMPLE_SITE  # noqa: E402
 
 V = {
     "VERSION": "1.2.3",
@@ -279,3 +280,17 @@ def test_consumers_rows_are_well_formed():
         for source in sources:
             line = "X = 0  # GENERATED from %s\n" % source
             assert stamp.find_markers(line), (rel, source)
+
+
+def test_the_mounts_value_carries_only_what_a_judgement_reads():
+    """The example site records `inodes`, `capacity_bytes` and `surveyed`
+    on `/home`; the reaper's stamped rows must not: nothing on the node
+    carries a figure it does not read, and a capacity in bytes is exactly
+    the kind of literal the IP gate hunts."""
+    site = config.load_site(EXAMPLE_SITE)
+    assert any("inodes" in m for m in site.lookup("filesystems.mounts")), \
+        "the example no longer exercises the projection"
+    rows = stamp.SiteValues(site, "0.0.0")["site.toml:filesystems.mounts"]
+    assert rows and all(set(r) <= set(stamp.JUDGEMENT_MOUNT_KEYS) for r in rows), rows
+    assert {r["path"] for r in rows} == {m["path"] for m in site.lookup("filesystems.mounts")}
+    assert stamp.SiteValues(site, "0.0.0")["site.toml:filesystems.mounts[0].path"] == "/home"
