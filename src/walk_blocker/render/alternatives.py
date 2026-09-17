@@ -146,7 +146,6 @@ def substitutions(policy, site, version):
         "@@DEFAULT_MEM@@": md_cell(slurm["default_mem"], "slurm.default_mem"),
         "@@MIN_JOB_AGE@@": str(int(slurm["min_job_age_s"])),
         "@@EXTRA_JOB_TOOLS_LINES@@": _extra_job_tools_lines(site),
-        "@@PREFIX@@": md_code(prefix, "install.prefix"),
         # The grimoire beside this page: one code span over the whole
         # path, so the rendered line is not half-quoted.
         "@@ALTERNATIVES_PATH@@": md_code(os.path.join(prefix, "docs", "alternatives.md"),
