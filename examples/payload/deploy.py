@@ -51,10 +51,25 @@ The payload is read ONCE, into a root-only snapshot, before anything that
 can block; the copies read the snapshot. The source directory itself stays
 owned by whoever unpacked it -- that is the workflow, and refusing it was
 considered and rejected (ADR-0006).
+
+`--system` and `--system --i-have-approval` make the SAME checks, from the
+same `preflight()`: the arguments are the compiled literals, the six
+root-write locations sit in a trusted chain (and the hook files are plain
+root-owned regular files), the audit directory is usable and not writable
+beyond root, the prefix is reachable by the users Layer 1 exists for, the
+prefix is not somebody else's populated directory, and the parent the
+payload snapshot is staged under is a directory in a trusted chain. The
+contract is that reading the preview is enough -- the approved command must
+not refuse what the preview accepted. Where the preview runs unprivileged
+and may not make one of those stats it says "could not be checked as this
+user" rather than reporting it clean; run as root, that same answer is a
+refusal. A dry run stages nothing, so the staging parent is the one check
+it does not make -- in the preview and in the install alike.
 """
 
 import argparse
 import atexit
+import errno
 import os
 import re
 import shlex
@@ -448,7 +463,11 @@ def run(cmd, check=True, capture=True, dry_run=False, env=None):
 
 
 def system_preview(args, env=None):
-    args.prefix = canonical_prefix(args.prefix)
+    # A LOCAL canonical spelling, not a rewrite of `args`: preflight() runs
+    # not_a_default() on the values as given, exactly as the install does,
+    # and a preview that canonicalized them first would report a value the
+    # caller never passed.
+    prefix = canonical_prefix(args.prefix)
     # No per-value notes here: the preview used to warn about arguments an
     # operator could pass. The preview and the install now read the same
     # literals, which is a stronger guarantee than agreeing about a value
@@ -489,9 +508,9 @@ def system_preview(args, env=None):
             continue
         print(line)
     spool = canonical_prefix(args.spool_dir)
-    print("# The payload is copied to %s, then reasserted as root-owned --" % args.prefix)
+    print("# The payload is copied to %s, then reasserted as root-owned --" % prefix)
     print("# per installed entry, never recursively over the prefix itself:")
-    for cmd in ownership_commands(args.prefix):
+    for cmd in ownership_commands(prefix):
         print("#   %s" % " ".join(shlex.quote(c) for c in cmd))
     print("# The copies pass --no-preserve=ownership, so every destination inode")
     print("# is root-owned from creation rather than inheriting this directory's")
@@ -519,21 +538,44 @@ def system_preview(args, env=None):
         print()
     print("# And the root-run reaper, as a system timer under %s. The two" % args.unit_dir)
     print("# units below are rendered from the same constants the install writes:")
-    service, timer = render_units(args.prefix, spool)
+    service, timer = render_units(prefix, spool)
     for name, text in ((SERVICE_UNIT, service), (TIMER_UNIT, timer)):
         print("# --- %s ---" % os.path.join(args.unit_dir, name))
         print(text.rstrip("\n"))
     print()
-    # The same check the install runs, from the same function -- so a
-    # preview cannot advertise a command that is going to refuse. install.sh's
-    # own refusal is already handled above on exactly this reasoning.
-    bad_spool = audit_dir_blockers(spool)
-    if bad_spool:
-        write_audit_dir_refusal(spool, bad_spool)
+    # Every check the install runs, from the same function -- so a preview
+    # cannot advertise a command that is going to refuse. install.sh's own
+    # refusal is already handled above on exactly this reasoning, and this
+    # is the same reasoning applied to deploy.py's own checks: four of them
+    # lived only in the install, and each let a misconfigured node preview
+    # clean and then fail the install after the timer had been stopped --
+    # the staging parent latest of all, between preflight() and the first
+    # systemctl.
+    #
+    # `privileged` is asked, not assumed: this command is documented to be
+    # run as root first, and is also perfectly runnable by the operator as
+    # themselves. A root preview can see everything the install will, so for
+    # it "could not check" is the refusal it is for the install.
+    rc, checks = preflight(args, privileged=_is_root())
+    if rc != 0:
         sys.stderr.write(
             "deploy.py: --i-have-approval would refuse too, so no command is "
             "advertised here.\n")
-        return 6
+        return rc
+
+    # Never silently: a check nobody could make is not a check that passed,
+    # and the whole contract of this preview is that reading it is enough.
+    unknown = [check for check in checks if check.state == CHECK_UNKNOWN]
+    if unknown:
+        print()
+        print("# NOT CHECKED. This preview is running as a user who may not")
+        print("# inspect these paths, so the following were not made -- which")
+        print("# is not the same as made and passed. Re-run the preview as")
+        print("# root to make them before approving:")
+        for check in unknown:
+            print("#   %s (%s): could not be checked as this user -- %s"
+                  % (check.subject, check.name, check.reason))
+        print()
 
     print("# Run as root with --i-have-approval to actually install:")
     # No path flags to forward, and that is the fix rather than a
@@ -797,6 +839,42 @@ def spool_mode_repairs(spool):
     return repairs
 
 
+# `stat`'s type predicates, in the order a spool is plausibly wrong: named
+# so the refusal says what the thing IS rather than only what it is not.
+_FILE_KINDS = (
+    (stat.S_ISREG, "a regular file"),
+    (stat.S_ISFIFO, "a fifo"),
+    (stat.S_ISSOCK, "a socket"),
+    (stat.S_ISCHR, "a character device"),
+    (stat.S_ISBLK, "a block device"),
+)
+
+
+def _not_a_directory_reason(path):
+    """Why `path` cannot serve as the audit directory, given that it exists
+    and is not one. lstat, so a symlink is described as the link it is
+    rather than as whatever it happens to resolve to."""
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        return "could not be inspected: %s" % exc.strerror
+    if stat.S_ISLNK(info.st_mode):
+        target = os.path.realpath(path)
+        if not os.path.exists(path):
+            # Not "it would create the target": measured, GNU coreutils
+            # 8.32, `install -d` on a dangling link exits 1 with "cannot
+            # change permissions of ..." and creates nothing. The blocker is
+            # the same; what it costs is the install, mid-run.
+            return ("is a dangling symlink -> %s, and the install's "
+                    "`install -d` fails on it, which would abort the "
+                    "install after the timer had been stopped" % target)
+        return "is a symlink -> %s, which is not a directory" % target
+    for predicate, name in _FILE_KINDS:
+        if predicate(info.st_mode):
+            return "is %s, not a directory" % name
+    return "is not a directory (mode %06o)" % info.st_mode
+
+
 def audit_dir_blockers(spool):
     """Filesystem state that would make the audit trail unusable, or unsafe.
 
@@ -840,6 +918,24 @@ def audit_dir_blockers(spool):
     bad = [("traversal", path, reason)
            for path, reason in untraversable_for_users(spool)
            if path != spool_canon]
+    # THE SPOOL'S OWN TYPE, before either arm below is asked what is in it.
+    # Both arms look straight past a spool that exists as a non-directory:
+    # the traversal arm drops the leaf on purpose (its mode is this
+    # installer's to assert) and the ownership arm never runs unless the
+    # leaf is a directory. So a spool that is a regular file, a fifo, or a
+    # link to either previewed CLEAN, and `install -d` in install.sh's
+    # assert_audit_dir then failed mid-install -- after the timer had
+    # already been disabled and stopped.
+    #
+    # A dangling symlink is in this class deliberately rather than treated
+    # as absent: `install -d` follows it, so it would create the TARGET,
+    # somewhere this installer never judged and the reaper's trail is not
+    # where the units say it is. A symlink to a real DIRECTORY is not here,
+    # because `unowned_by()` below already reports it as the `symlink`
+    # class, with its own head and its own reason.
+    if os.path.lexists(spool_canon) and not os.path.isdir(spool_canon):
+        bad.append(("not-a-directory", spool_canon,
+                    _not_a_directory_reason(spool_canon)))
     if os.path.isdir(spool):
         # A file this installer is about to chmod is not a reason to refuse
         # to run the installer. `permissive` only: every other class
@@ -859,6 +955,10 @@ def audit_dir_blockers(spool):
 # plausible-looking one anyway runs clean and fixes nothing.
 _REFUSAL_HEADS = {
     "degenerate": "%r is not a usable spool for the reaper's state files",
+    "not-a-directory": "it already exists and is not a directory, so "
+                       "`install -d` would fail and abort the install "
+                       "mid-way -- after the timer has already been "
+                       "disabled and stopped",
     "traversal": "an ancestor of it cannot be traversed by an ordinary user, "
                  "so the audit trail would be unreadable by the account "
                  "that has to decide --kill",
@@ -920,7 +1020,10 @@ def write_audit_dir_refusal(spool, bad, out=sys.stderr):
         # `traversal` the offender is an ancestor this installer does not own
         # and which one to widen is the operator's call; for `symlink`,
         # `unreadable` and `unclassified` there is no command that would be
-        # right.
+        # right. `not-a-directory` is the sharpest case: the only command
+        # that would "fix" it is `rm`, aimed by this script at a path
+        # somebody put a file at on purpose, and an installer that
+        # fabricates that line has advertised deleting a stranger's data.
 
 
 # Which of the six paths is a directory and which is a file. Only that
@@ -1002,6 +1105,324 @@ def validate_root_write_paths(args, attrs=None):
     return 0
 
 
+# --------------------------------------------------------------------------
+# preflight: every filesystem-state check, made once, by both callers
+# --------------------------------------------------------------------------
+
+# A check's three answers. The third is what earns this a vocabulary rather
+# than a bool. The PREVIEW runs as whoever reads it, and a stat that user is
+# not permitted to make is not evidence that the path is fine: reported as
+# `ok` it is exactly the defect ADR-0005's contract forbids -- read the
+# preview, then run the approved command, and the approved command must not
+# refuse what the preview accepted -- and reported as `blocked` it is a
+# refusal invented out of the reader's own uid. It is neither, and the only
+# honest thing to print is that nobody looked.
+CHECK_OK = "ok"
+CHECK_BLOCKED = "blocked"
+CHECK_UNKNOWN = "unknown"
+
+
+class Check(object):
+    """One preflight check's answer, and the path it is about."""
+
+    __slots__ = ("name", "subject", "state", "reason")
+
+    def __init__(self, name, subject, state, reason=None):
+        self.name = name
+        self.subject = subject
+        self.state = state
+        self.reason = reason
+
+    def __repr__(self):
+        return "Check(%r, %r, %r, %r)" % (self.name, self.subject,
+                                          self.state, self.reason)
+
+
+def unstattable_as_me(path):
+    """(component, reason) for the first component of `path` this process is
+    not PERMITTED to inspect, or None.
+
+    Not "does it exist" and not "is it fit": whether the answer is available
+    to THIS uid at all. ENOENT is an answer -- every check below already
+    models a component that does not exist yet -- and a real I/O error is a
+    fault that must stay a blocker rather than be excused as unchecked. Only
+    EACCES and EPERM mean "ask someone with more privilege".
+
+    Component by component from `/`, because a directory without `x` hides
+    its children from `stat` while remaining perfectly stattable itself: the
+    deepest component this user can reach is where the answer runs out.
+    lstat, so a symlink is not followed out of the chain being judged.
+    """
+    walked = os.sep
+    for part in canonical_prefix(path).split(os.sep):
+        if part:
+            walked = os.path.join(walked, part)
+        try:
+            os.lstat(walked)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                return (walked, exc.strerror)
+            return None
+    return None
+
+
+def prefix_is_foreign(prefix):
+    """Whether `prefix` is a populated directory this install did not create.
+
+    Raises OSError when it cannot be read, which the caller turns into
+    `unknown` or a refusal: `os.listdir` needs `r` where `stat` needs
+    nothing, so this is the one check whose permission answer only arrives
+    when it is attempted.
+    """
+    if not os.path.isdir(prefix) or os.path.exists(
+            os.path.join(prefix, PAYLOAD_MARKER)):
+        return False
+    return bool(os.listdir(prefix))
+
+
+def write_unreachable_prefix_refusal(prefix, blocked, out=None):
+    """Trusted is not reachable, said once so both callers say it the same
+    way -- the whole point of the preflight being one function."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing prefix=%s: the users Layer 1 is for cannot "
+        "reach it.\n" % prefix)
+    for path, reason in blocked:
+        out.write("  %s: %s\n" % (path, reason))
+    out.write(
+        "  install.sh's hook verifies would still pass, because they run\n"
+        "  as root -- so this would install cleanly and leave Layer 1\n"
+        "  absent for every monitored account.\n")
+
+
+def write_foreign_prefix_refusal(prefix, out=None):
+    """Somebody else's directory, said once, for the same reason."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing prefix=%s: it already has contents and no %s "
+        "marker,\n  so it is not a directory this install created. "
+        "Installing would `rm -rf` and chown paths that\n  belong to "
+        "something else. Use a dedicated directory.\n"
+        % (prefix, PAYLOAD_MARKER))
+
+
+def write_untrusted_staging_refusal(parent, chain, out=None):
+    """Said once, so `stage_payload()` and the preflight say it the same
+    way. The install still makes this check itself, right where it creates
+    the directory; this is how the PREVIEW reaches the same sentence."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing to stage the payload under %s: the path is "
+        "not trusted\n  end to end, and a snapshot under a parent someone "
+        "else can write is not a\n  snapshot.\n" % parent)
+    for path, reason in chain:
+        out.write("  %s: %s\n" % (path, reason))
+
+
+def write_unusable_staging_refusal(parent, reason, out=None):
+    """Nowhere to put the snapshot. `tempfile.mkdtemp(dir=...)` needs the
+    parent to exist already and raises uncaught if it does not -- after
+    every check has passed, which is the shape of refusal this preflight
+    exists to move earlier. Refused rather than created: the parent's safety
+    comes from something else having made it, and creating it here would be
+    this script choosing the ownership and mode of the directory that is
+    supposed to protect bytes nothing has verified yet."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing to stage the payload under %s: it %s, so the "
+        "root-only\n  snapshot the install makes before its first "
+        "`systemctl` has nowhere to go.\n" % (parent, reason))
+
+
+def write_unknown_refusal(unknowns, out=None):
+    """A check root itself could not make. Returns 6, to be returned on.
+
+    Unreachable in practice -- root is not subject to the permission bits
+    `unstattable_as_me()` reads -- which is why it is written down rather
+    than assumed away. The preview's honest "could not check as this user"
+    has no counterpart with privilege: a check that could not be made is not
+    a check that passed, and proceeding here would install over exactly the
+    state nobody verified.
+    """
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing to install: a check could not be made even as "
+        "root, and a\n  check that could not be made is not a check that "
+        "passed:\n")
+    for check in unknowns:
+        out.write("  %s (%s): %s\n" % (check.subject, check.name,
+                                       check.reason))
+    return 6
+
+
+def preflight(args, privileged, repair=None, out=None):
+    """Every check `system_execute()` makes before its first `systemctl`, in
+    the order it makes them -- run from ONE place, by both callers.
+
+    `audit_dir_blockers()` makes the argument for one of these checks and it
+    generalises to all of them: a check that lives in only one of the
+    preview and the install re-creates the preview describing a command the
+    install then refuses, and two checks that agree today are not a
+    guarantee -- one function both call is. Four of these lived in only one
+    caller, and each was its own report of the same symptom: an install that
+    refuses after the timer has been disabled and stopped. The last of them,
+    the staging parent, is also the only one a dry run does not make, because
+    `stage_payload()` does not make it either -- a dry run creates no
+    snapshot, so it has no parent to judge.
+
+    `privileged` is a fact about the CALLER, not a mode. The install runs as
+    root and can inspect everything; the preview runs as whoever reads it. A
+    check whose stat this process may not make comes back `unknown`, which
+    the preview REPORTS -- never as clean, and never as a blocker
+    manufactured out of the reader's uid -- and which the install refuses.
+
+    `repair` is the install's one asymmetry, named here rather than
+    duplicated: it chmods its own spool files before judging them, because
+    their mode is the state this code exists to correct, where the preview
+    advertises the identical list from the identical function. It runs after
+    the paths are judged and before the audit directory is, exactly where
+    the install used to do it inline.
+
+    Returns `(rc, checks)`: rc 0 to proceed, 6 to refuse, with any refusal
+    already written to `out` by the same writer the other caller uses --
+    which is what keeps the two head lines identical rather than similar.
+    """
+    # Resolved at CALL time, never frozen into a default: a default argument
+    # captures the `sys.stderr` that existed at import, so a caller that
+    # replaces the stream -- the suite does, and so does anything that wraps
+    # this -- would have its refusals written somewhere it cannot see them.
+    out = sys.stderr if out is None else out
+    checks = []
+
+    def unknown_so_far():
+        return [check for check in checks if check.state == CHECK_UNKNOWN]
+
+    # 0. The arguments, before anything reads a filesystem and before
+    #    anything canonicalizes them, so a value is judged as given. Not a
+    #    filesystem check -- it is ADR-0005's second guarantee, that the code
+    #    will not write elsewhere even when a caller inside the module asks
+    #    -- but it is a thing the install refuses on before its first
+    #    command, so the preview refuses on it too.
+    why = not_a_default(args)
+    if why:
+        out.write(why)
+        checks.append(Check("arguments", None, CHECK_BLOCKED, why))
+        return 6, checks
+    checks.append(Check("arguments", None, CHECK_OK))
+
+    # 1. The six root-write locations: a trusted chain end to end, and for
+    #    the three hook FILES the leaf's type and ownership as well. Scoped
+    #    to the paths this process can actually inspect, so an unprivileged
+    #    preview still checks the five it can see rather than giving up on
+    #    all six.
+    inspectable = []
+    for attr, _kind in PATH_KINDS:
+        blind = unstattable_as_me(getattr(args, attr))
+        if blind is None:
+            inspectable.append(attr)
+        else:
+            checks.append(Check("paths", getattr(args, attr), CHECK_UNKNOWN,
+                                "%s: %s" % blind))
+    if privileged and unknown_so_far():
+        return write_unknown_refusal(unknown_so_far(), out=out), checks
+    if validate_root_write_paths(args, attrs=inspectable) != 0:
+        checks.append(Check("paths", None, CHECK_BLOCKED))
+        return 6, checks
+    checks.append(Check("paths", None, CHECK_OK))
+
+    # Canonical from here: validate_root_write_paths() rewrites each
+    # attribute it was given, and canonical_prefix() is idempotent for the
+    # rest, so this spelling is the one every check and message below uses.
+    spool = canonical_prefix(args.spool_dir)
+    prefix = canonical_prefix(args.prefix)
+
+    # 2. The audit directory -- after the install has repaired the files
+    #    whose mode is its own to assert.
+    if repair is not None:
+        repair(spool)
+    blind = unstattable_as_me(spool)
+    if blind is not None:
+        checks.append(Check("spool", spool, CHECK_UNKNOWN, "%s: %s" % blind))
+        if privileged:
+            return write_unknown_refusal(unknown_so_far(), out=out), checks
+    else:
+        bad_spool = audit_dir_blockers(spool)
+        if bad_spool:
+            write_audit_dir_refusal(spool, bad_spool, out=out)
+            checks.append(Check("spool", spool, CHECK_BLOCKED))
+            return 6, checks
+        checks.append(Check("spool", spool, CHECK_OK))
+
+    # 3. The prefix: reachable by the ordinary users Layer 1 exists for...
+    blind = unstattable_as_me(prefix)
+    if blind is not None:
+        for name in ("prefix_reach", "prefix_contents"):
+            checks.append(Check(name, prefix, CHECK_UNKNOWN, "%s: %s" % blind))
+        if privileged:
+            return write_unknown_refusal(unknown_so_far(), out=out), checks
+        return 0, checks
+    blocked = untraversable_for_users(prefix)
+    if blocked:
+        write_unreachable_prefix_refusal(prefix, blocked, out=out)
+        checks.append(Check("prefix_reach", prefix, CHECK_BLOCKED))
+        return 6, checks
+    checks.append(Check("prefix_reach", prefix, CHECK_OK))
+
+    # 4. ...and not already somebody else's populated directory.
+    try:
+        foreign = prefix_is_foreign(prefix)
+    except OSError as exc:
+        checks.append(Check("prefix_contents", prefix, CHECK_UNKNOWN,
+                            "%s: %s" % (prefix, exc.strerror)))
+        if privileged:
+            return write_unknown_refusal(unknown_so_far(), out=out), checks
+        return 0, checks
+    if foreign:
+        write_foreign_prefix_refusal(prefix, out=out)
+        checks.append(Check("prefix_contents", prefix, CHECK_BLOCKED))
+        return 6, checks
+    checks.append(Check("prefix_contents", prefix, CHECK_OK))
+
+    # 5. The staging parent, LAST because that is where the install makes
+    #    it: `stage_payload()` refuses on this chain between this function
+    #    returning and the first `systemctl`, and it was the one
+    #    pre-command refusal the preview could not reach. It keeps its own
+    #    call, through the same writer -- belt and braces, the same order
+    #    the spool repair argues for.
+    #
+    #    Skipped for a dry run, which is not a softening: `stage_payload()`
+    #    returns before this check having created nothing, so a dry run
+    #    refusing here would refuse to PLAN over a condition it never
+    #    touches, and the plan it prints is the same either way.
+    if not args.dry_run:
+        blind = unstattable_as_me(STAGING_PARENT)
+        if blind is not None:
+            checks.append(Check("staging", STAGING_PARENT, CHECK_UNKNOWN,
+                                "%s: %s" % blind))
+            if privileged:
+                return write_unknown_refusal(unknown_so_far(), out=out), checks
+            return 0, checks
+        # Missing is a BLOCKER, not an unknown: ENOENT is an answer
+        # (`unstattable_as_me()` says so), and it is the errno
+        # `tempfile.mkdtemp(dir=...)` would raise uncaught. Writability is
+        # deliberately not asked -- root's cannot be tested without writing,
+        # and the preview's own would be a blocker manufactured out of the
+        # reader's uid, which is what the third state exists to avoid.
+        if not os.path.isdir(STAGING_PARENT):
+            why = ("is not a directory" if os.path.lexists(STAGING_PARENT)
+                   else "does not exist")
+            write_unusable_staging_refusal(STAGING_PARENT, why, out=out)
+            checks.append(Check("staging", STAGING_PARENT, CHECK_BLOCKED, why))
+            return 6, checks
+        chain = untrusted_prefix_chain(STAGING_PARENT)
+        if chain:
+            write_untrusted_staging_refusal(STAGING_PARENT, chain, out=out)
+            checks.append(Check("staging", STAGING_PARENT, CHECK_BLOCKED))
+            return 6, checks
+        checks.append(Check("staging", STAGING_PARENT, CHECK_OK))
+    return 0, checks
+
+
 def stage_payload(env=None, dry_run=False):
     """Snapshot the payload into a root-only directory and return its path.
 
@@ -1036,14 +1457,14 @@ def stage_payload(env=None, dry_run=False):
         # issue, so it reports the snapshot against REPO and the caller reads
         # from REPO too -- the plan is identical either way.
         return REPO
+    # preflight() has already refused on this, through this same writer, so
+    # in the install's own sequence this is the second look. Kept: the check
+    # belongs where the root-only directory is created, and a guard held
+    # only somewhere else is a guard that moves the next time the call order
+    # does.
     chain = untrusted_prefix_chain(STAGING_PARENT)
     if chain:
-        sys.stderr.write(
-            "deploy.py: refusing to stage the payload under %s: the path is "
-            "not trusted\n  end to end, and a snapshot under a parent someone "
-            "else can write is not a\n  snapshot.\n" % STAGING_PARENT)
-        for bad_path, reason in chain:
-            sys.stderr.write("  %s: %s\n" % (bad_path, reason))
+        write_untrusted_staging_refusal(STAGING_PARENT, chain)
         raise SystemExit(6)
     staging = tempfile.mkdtemp(prefix="walk-blocker-stage.", dir=STAGING_PARENT)
     os.chmod(staging, 0o700)
@@ -1218,52 +1639,25 @@ def system_execute(args, env=None):
             "deploy.py: --system --i-have-approval must run as root\n")
         return 3
 
-    # Before canonicalizing, so a value is judged as given rather than as
-    # abspath() rewrote it.
-    why = not_a_default(args)
-    if why:
-        sys.stderr.write(why)
-        return 6
+    def repair(spool):
+        # Repair before judging. These are this installer's own files and
+        # their mode is its to assert; the preview advertises the identical
+        # list from the identical function. audit_dir_blockers() already
+        # declines to refuse over them, so the order is belt and braces --
+        # but doing it first means the check runs against the state the
+        # operator will actually be left in.
+        for path, _mode in spool_mode_repairs(spool):
+            run(["chmod", "go-w", path], dry_run=args.dry_run, env=env)
 
-    if validate_root_write_paths(args) != 0:
-        return 6
+    # Every check, from the function the preview calls: an install that
+    # refuses something the preview accepted is a guardrail that fails
+    # exactly when it is being installed, half-applied, on a shared node.
+    rc, _checks = preflight(args, privileged=True, repair=repair)
+    if rc != 0:
+        return rc
 
     spool = args.spool_dir
-    # Repair before judging. These are this installer's own files and their
-    # mode is its to assert; the preview advertises the identical list from
-    # the identical function. audit_dir_blockers() already declines to refuse
-    # over them, so the order is belt and braces -- but doing it first means
-    # the check runs against the state the operator will actually be left in.
-    for path, _mode in spool_mode_repairs(spool):
-        run(["chmod", "go-w", path], dry_run=args.dry_run, env=env)
-    bad_spool = audit_dir_blockers(spool)
-    if bad_spool:
-        write_audit_dir_refusal(spool, bad_spool)
-        return 6
-
-    blocked = untraversable_for_users(args.prefix)
-    if blocked:
-        sys.stderr.write(
-            "deploy.py: refusing prefix=%s: the users Layer 1 is for cannot "
-            "reach it.\n" % args.prefix)
-        for path, reason in blocked:
-            sys.stderr.write("  %s: %s\n" % (path, reason))
-        sys.stderr.write(
-            "  install.sh's hook verifies would still pass, because they run\n"
-            "  as root -- so this would install cleanly and leave Layer 1\n"
-            "  absent for every monitored account.\n")
-        return 6
-
     marker = os.path.join(args.prefix, PAYLOAD_MARKER)
-    if os.path.isdir(args.prefix) and not os.path.exists(marker):
-        if os.listdir(args.prefix):
-            sys.stderr.write(
-                "deploy.py: refusing prefix=%s: it already has contents and "
-                "no %s marker,\n  so it is not a directory this install "
-                "created. Installing would `rm -rf` and chown paths that\n"
-                "  belong to something else. Use a dedicated directory.\n"
-                % (args.prefix, PAYLOAD_MARKER))
-            return 6
 
     # Snapshot the payload HERE: after the checks, which are pure Python and
     # cannot block, and before the first `systemctl`, which can (ADR-0006).

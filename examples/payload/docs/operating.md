@@ -210,11 +210,41 @@ python3 walk-blocker-payload/deploy.py --system
 `--system` alone prints what an approved install would do and exits without
 writing. It names the prefix, the spool directory, each hook file it will
 write a block to, the unit files, and the command that will actually
-install. Where a check would refuse — a hook file that is a symlink, a
-user-owned or group-writable hook file, an untrusted ancestor of the prefix,
-a prefix that already holds files this install did not create — the preview
-says so, as a note, so that the approved command does not fail the instant
-approval is supplied.
+install.
+
+**It makes every check the approved command makes**, from the same
+`preflight()` function, so that the approved command cannot refuse what the
+preview accepted:
+
+- the six root-write locations are the literals compiled from `site.toml`;
+- each of them sits in a trust chain that is root-owned end to end, and
+  each hook file is a plain, root-owned, not-group-writable regular file —
+  not a symlink under a dotfile manager;
+- `[install].spool_dir` is usable: it is not something other than a
+  directory (a file, a fifo, a symlink to either, or a dangling symlink,
+  which the install's `install -d` fails on outright), its ancestors can be
+  traversed by an ordinary user, and nothing in it is writable beyond root;
+- `[install].prefix` can be reached by the ordinary users Layer 1 exists
+  for — a root-only ancestor passes every ownership check and still leaves
+  every monitored account with an unreachable directory on `PATH`;
+- `[install].prefix` is not already somebody else's populated directory;
+- `[install].staging_parent` exists, is a directory, and sits in a trust
+  chain that is root-owned end to end — the install snapshots the payload
+  there, as a root-only `0700` directory, between the last of the checks
+  above and its first `systemctl`, so a parent someone else can write is a
+  refusal and a parent that is not there at all is one too. A `--dry-run`
+  install snapshots nothing, so this is the one check it does not make.
+
+Where one of those refuses, the preview prints the whole plan, says which
+check refused and why, and **advertises no command** — because the approved
+command would refuse too, and it would do so after the timer had already
+been disabled and stopped.
+
+Where the preview is run by an account that may not make one of those
+stats — an ancestor with no `o+x`, a root-only file — it says
+`could not be checked as this user` and names the path. That is neither
+"clean" nor a refusal: the check was not made, which is not the same as
+made and passed. Re-run the preview as root to make it before approving.
 
 There are no path flags: `argparse` rejects `--prefix` and its siblings
 outright. Every location the deployer writes as root is a literal compiled

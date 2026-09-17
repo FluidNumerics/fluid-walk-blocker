@@ -455,9 +455,19 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
         traversable_root):
     """The preview path, end to end, as this unprivileged user: a stamped
     deployer beside a stamped installer, both for a fictional site laid out
-    under a traversable root. It prints the plan, names the approved
-    command, prints the rendered units, and leaves the tree exactly as it
-    found it. No stub anywhere: this is the run an operator does first."""
+    under a traversable root. It prints the whole plan, prints the rendered
+    units, leaves the tree exactly as it found it -- and REFUSES, because a
+    tree this account owns is not a chain root can be asked to install into
+    and the install would refuse it. No stub anywhere: this is the run an
+    operator does first, and what it must never do is advertise a command
+    that is going to fail after the timer has been stopped.
+
+    A passing end-to-end preview cannot be built without privilege: every
+    ancestor an unprivileged test can create is owned by the test user, and
+    that is precisely what `untrusted_prefix_chain()` exists to refuse. The
+    advertised command's own shape is pinned by
+    `test_the_previewed_command_is_the_command_that_installs`.
+    """
     payload = os.path.join(traversable_root, "payload")
     layout = Layout(traversable_root,
                     prefix=os.path.join(traversable_root, "prefix"),
@@ -490,29 +500,30 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
     before = snapshot()
     proc = subprocess.run([NODE_PYTHON, script, "--system"],
                           capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode == 6, proc.stdout + proc.stderr
     assert snapshot() == before, "a preview must leave the tree untouched"
     assert not os.path.exists(str(layout.prefix))
     assert not os.path.exists(str(layout.spool))
 
     out = proc.stdout
-    assert "%s %s --system --i-have-approval" % (deploy.TRUSTED_PYTHON3, script) in out
-    for flag in PATH_FLAGS:
-        assert flag not in _previewed_line(out, script)
-    # install.sh's own preview was relayed, and its standalone command was not.
+    # The whole plan is still printed: a refusal at the end is a refusal
+    # with the reader told what was going to happen, not a bare exit.
     assert "System-wide install of walk-blocker Layer 1" in out
     assert not [l for l in out.splitlines()
                 if l.lstrip("# ").strip().startswith("sh ")
                 and "install.sh" in l and "--i-have-approval" in l]
-    # The units, rendered with this site's values.
     assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in out
     assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
         deploy.TRUSTED_PYTHON3, layout.prefix, layout.spool) in out
+    # ...and no command is advertised under it.
+    assert _previewed_lines(out, script) == [], out
+    assert "the path is not trusted end to end" in proc.stderr, proc.stderr
+    assert "would refuse too" in proc.stderr, proc.stderr
 
 
-def _previewed_line(out, script):
-    return next(l for l in out.splitlines()
-                if "--i-have-approval" in l and script in l)
+def _previewed_lines(out, script):
+    return [l for l in out.splitlines()
+            if "--i-have-approval" in l and script in l]
 
 
 # --------------------------------------------------------------------------
@@ -2565,6 +2576,11 @@ def test_the_preview_advertises_the_chmod_the_install_will_run(
         tmp_path, monkeypatch):
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    # The preview validates the root-write paths now, exactly as the install
+    # does, and a tmp tree's ancestors are this user's -- the same stub the
+    # install-side sibling of this test has carried all along.
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,): [])
     monkeypatch.setattr(deploy, "run", recording_run([]))
 
     out = io.StringIO()
@@ -2904,3 +2920,398 @@ def test_the_preview_still_refuses_a_really_untraversable_ancestor(
         assert deploy.system_preview(_args(traversable_root)) == 6
     finally:
         os.chmod(middle, 0o755)
+
+
+# --------------------------------------------------------------------------
+# the preflight both callers run
+#
+# Three defects of one shape: a check that lived only in `system_execute()`,
+# so a node in that state previewed clean and the install refused -- after
+# the timer had already been disabled and stopped. The fix is one function
+# both callers use, so the tests below are all of the form "and the OTHER
+# caller says the same thing".
+# --------------------------------------------------------------------------
+
+def _spool_as_regular_file(path):
+    with open(path, "w") as fh:
+        fh.write("not a directory\n")
+
+
+def _spool_as_symlink_to_file(path):
+    target = path + ".target"
+    with open(target, "w") as fh:
+        fh.write("not a directory\n")
+    os.symlink(target, path)
+
+
+def _spool_as_dangling_symlink(path):
+    os.symlink(path + ".never-created", path)
+
+
+def _spool_as_fifo(path):
+    os.mkfifo(path)
+
+
+# label, planter, the fragment the refusal has to name. A dangling symlink is
+# on this list deliberately, though not for the reason first written here:
+# measured, GNU coreutils 8.32, `install -d` on a dangling link does NOT
+# create the target -- it exits 1 with "cannot change permissions of ..." and
+# creates nothing. That is worse, not better: unblocked, the install would
+# fail there, after the timer had already been disabled and stopped.
+_NON_DIRECTORY_SPOOLS = (
+    ("a regular file", _spool_as_regular_file, "is a regular file"),
+    ("a symlink to a file", _spool_as_symlink_to_file, "which is not a directory"),
+    ("a dangling symlink", _spool_as_dangling_symlink, "dangling symlink"),
+    ("a fifo", _spool_as_fifo, "is a fifo"),
+)
+
+
+@pytest.mark.parametrize("label,plant,fragment", _NON_DIRECTORY_SPOOLS)
+def test_a_spool_that_exists_and_is_not_a_directory_is_a_blocker(
+        label, plant, fragment, tmp_path):
+    """Both arms of `audit_dir_blockers()` looked straight past this: the
+    traversal arm drops the leaf on purpose and the ownership arm is gated
+    on `isdir`. So the spool's own TYPE is checked in its own right."""
+    spool = str(tmp_path / "var-log")
+    plant(spool)
+
+    bad = deploy.audit_dir_blockers(spool)
+    named = [(cls, path) for cls, path, _r in bad if cls == "not-a-directory"]
+    assert named == [("not-a-directory", deploy.canonical_prefix(spool))], (label, bad)
+    reason = [r for cls, _p, r in bad if cls == "not-a-directory"][0]
+    assert fragment in reason, (label, reason)
+
+
+@pytest.mark.parametrize("label,plant,_fragment", _NON_DIRECTORY_SPOOLS)
+def test_both_callers_refuse_a_spool_that_is_not_a_directory(
+        label, plant, _fragment, tmp_path, monkeypatch):
+    """The preview used to print the approved command over this, and
+    `install.sh`'s `assert_audit_dir` then failed on `install -d` -- after
+    the timer had been stopped."""
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    plant(args.spool_dir)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6, label
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6, label
+    assert calls == [], calls
+
+
+def test_a_non_directory_spool_is_offered_no_fabricated_remedy(tmp_path):
+    """The only command that would "fix" this is an `rm` aimed by the
+    installer at a path somebody put a file at on purpose."""
+    spool = str(tmp_path / "var-log")
+    buf = io.StringIO()
+    deploy.write_audit_dir_refusal(
+        spool, [("not-a-directory", spool, "is a regular file, not a directory")],
+        out=buf)
+    text = buf.getvalue()
+    assert "is a regular file, not a directory" in text, text
+    assert "fix with:" not in text, text
+    assert "rm " not in text, text
+
+
+def test_a_spool_that_is_a_symlink_to_a_directory_stays_the_symlink_class(
+        tmp_path, monkeypatch):
+    """Not double-reported: `unowned_by()` already names this one, with its
+    own head and the reason that chown and chmod do not reach through it."""
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    spool = str(tmp_path / "var-log")
+    os.symlink(str(real), spool)
+    original = deploy.unowned_by
+    monkeypatch.setattr(deploy, "unowned_by",
+                        lambda root, uid=0: original(root, uid=os.getuid()))
+
+    classes = [cls for cls, _p, _r in deploy.audit_dir_blockers(spool)]
+    assert "symlink" in classes, classes
+    assert "not-a-directory" not in classes, classes
+
+
+def test_the_preview_refuses_a_prefix_the_users_cannot_reach(
+        traversable_root, monkeypatch):
+    """`untraversable_for_users(prefix)` ran only in the install, so a
+    prefix under an ancestor with no `o+x` previewed clean and every
+    monitored account would have got an unreachable directory on PATH."""
+    pass_ownership_checks(monkeypatch)
+    closed = os.path.join(traversable_root, "closed")
+    prefix = os.path.join(closed, "prefix")
+    os.makedirs(prefix)
+    os.chmod(closed, 0o750)                 # the ANCESTOR, not the prefix
+    try:
+        _move_constants(monkeypatch, traversable_root)
+        monkeypatch.setattr(deploy, "DEFAULT_PREFIX", prefix)
+        monkeypatch.setattr(deploy, "run", recording_run([]))
+        assert deploy.system_preview(_args(traversable_root)) == 6
+
+        monkeypatch.setattr(deploy, "_is_root", lambda: True)
+        calls = []
+        monkeypatch.setattr(deploy, "run", recording_run(calls))
+        assert deploy.system_execute(_args(traversable_root)) == 6
+        assert calls == [], calls
+    finally:
+        os.chmod(closed, 0o755)
+
+
+def test_the_preview_refuses_a_symlinked_hook_file(tmp_path, monkeypatch):
+    """`validate_root_write_paths()` ran only in the install and the
+    uninstall. A system rc under a dotfile manager is a symlink in the
+    ORDINARY case, so this previewed clean on a perfectly normal node."""
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    target = tmp_path / "real-bashrc"
+    target.write_text("# a hook file under a dotfile manager\n")
+    os.symlink(str(target), args.bashrc_file)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_the_preview_refuses_a_populated_prefix_that_is_not_its_own(
+        tmp_path, monkeypatch):
+    """The last of the install's pre-`systemctl` checks, reachable from the
+    preview for the same reason as the other three."""
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    os.makedirs(args.prefix)
+    open(os.path.join(args.prefix, "somebody-elses-file"), "w").close()
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def _stage_under(monkeypatch, parent):
+    """Point STAGING_PARENT somewhere this test controls, past the autouse
+    fixture. Returns the path, as a string, the way the compiled literal is."""
+    monkeypatch.setattr(deploy, "STAGING_PARENT", str(parent))
+    return str(parent)
+
+
+def _only_the_staging_parent_is_untrusted(monkeypatch):
+    """Make the chain check answer by SUBJECT rather than for everything.
+
+    `pass_prefix_checks()` stubs `untrusted_prefix_chain` globally, which is
+    what lets the six root-write locations pass under tmp. So this REPLACES
+    that stub rather than adding a second one: same signature, answering for
+    the staging parent alone and clean for every other path -- the shape the
+    prefix-traversal parity case already uses.
+    """
+    def by_subject(prefix, trusted_uids=(0,)):
+        if deploy.canonical_prefix(prefix) == deploy.canonical_prefix(
+                deploy.STAGING_PARENT):
+            return [(deploy.STAGING_PARENT,
+                     "is group-writable, so the snapshot's parent is not "
+                     "root's alone")]
+        return []
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain", by_subject)
+
+
+def test_the_preview_refuses_an_untrusted_staging_parent(tmp_path, monkeypatch):
+    """The refusal `stage_payload()` makes between preflight() returning and
+    the first `systemctl`. The preview never reached it, so a node whose
+    staging parent anyone can write previewed clean and then refused with
+    the install already under way."""
+    pass_prefix_checks(monkeypatch)
+    _only_the_staging_parent_is_untrusted(monkeypatch)
+    args = _args(tmp_path)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_the_preview_refuses_a_staging_parent_that_is_not_there(
+        tmp_path, monkeypatch):
+    """`tempfile.mkdtemp(dir=...)` raises ENOENT uncaught, after every check
+    has passed. ENOENT is an ANSWER here, so it is a blocker rather than an
+    unknown -- and one the preview can give before anyone runs anything."""
+    pass_prefix_checks(monkeypatch)
+    missing = _stage_under(monkeypatch, tmp_path / "run-that-is-not-there")
+    assert not os.path.exists(missing)
+    args = _args(tmp_path)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+
+
+def test_a_dry_run_still_plans_over_a_staging_parent_it_never_uses(
+        tmp_path, monkeypatch, capsys):
+    """The one check a dry run does not make, because `stage_payload()` does
+    not make it either: it returns before the check, having created nothing.
+    A dry run that refused here would refuse to PLAN an install over a
+    condition it never touches."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    _only_the_staging_parent_is_untrusted(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(_args(tmp_path, dry_run=True)) == 0
+    assert calls, "a dry run prints a plan; it does not refuse"
+    assert "refusing to stage" not in capsys.readouterr().err
+
+
+_PARITY_CASES = ("a spool that is not a directory",
+                 "a prefix the users cannot reach",
+                 "a hook file that is a symlink",
+                 "a staging parent that is not trusted")
+
+
+@pytest.mark.parametrize("case", _PARITY_CASES)
+def test_the_preview_and_the_install_refuse_with_the_same_head_line(
+        case, tmp_path, monkeypatch, capsys):
+    """Not "both return 6" -- the same SENTENCE, because both callers reach
+    the same writer through the same function. Two writers that agree today
+    are what this whole change exists to stop relying on."""
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    if case == "a spool that is not a directory":
+        _spool_as_regular_file(args.spool_dir)
+    elif case == "a prefix the users cannot reach":
+        monkeypatch.setattr(
+            deploy, "untraversable_for_users",
+            lambda prefix: [(os.path.dirname(prefix), "mode 0700 has no o+x, "
+                             "so no ordinary user can traverse it")]
+            if prefix == deploy.canonical_prefix(args.prefix) else [])
+    elif case == "a staging parent that is not trusted":
+        _only_the_staging_parent_is_untrusted(monkeypatch)
+    else:
+        target = tmp_path / "real-bashrc"
+        target.write_text("# under a dotfile manager\n")
+        os.symlink(str(target), args.bashrc_file)
+
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    assert deploy.system_preview(args) == 6, case
+    previewed = capsys.readouterr().err.splitlines()
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    assert deploy.system_execute(args) == 6, case
+    executed = capsys.readouterr().err.splitlines()
+
+    assert previewed, case
+    assert previewed[0] == executed[0], (case, previewed[0], executed[0])
+    assert "deploy.py: refusing" in previewed[0], previewed[0]
+
+
+# --------------------------------------------------------------------------
+# the third state: what an unprivileged preview could not look at
+# --------------------------------------------------------------------------
+
+def _blinded(tmp_path, monkeypatch):
+    """A prefix under an ancestor this user may not traverse OR stat into,
+    which is what a preview run by someone other than root can meet on a
+    real node. Returns the blind ancestor, for the caller to restore."""
+    blind = tmp_path / "blind"
+    (blind / "prefix").mkdir(parents=True)
+    monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(blind / "prefix"))
+    blind.chmod(0o000)
+    return blind
+
+
+def test_unstattable_as_me_separates_not_allowed_from_not_there(tmp_path):
+    """ENOENT is an ANSWER -- every check models a path that does not exist
+    yet -- and only EACCES/EPERM mean the answer is unavailable to this uid."""
+    assert deploy.unstattable_as_me(str(tmp_path / "never-created")) is None
+    assert deploy.unstattable_as_me(str(tmp_path)) is None
+
+    if os.geteuid() == 0:
+        pytest.skip("root is not subject to the bits this reads")
+    blind = tmp_path / "blind"
+    (blind / "prefix").mkdir(parents=True)
+    blind.chmod(0o000)
+    try:
+        found = deploy.unstattable_as_me(str(blind / "prefix"))
+        assert found is not None
+        assert found[0] == str(blind / "prefix"), found
+    finally:
+        blind.chmod(0o755)
+
+
+def test_the_preview_says_it_could_not_check_rather_than_clean(
+        tmp_path, monkeypatch, capsys):
+    """Neither of the two easy answers. Reporting it clean is the defect
+    this whole change is about; reporting it blocked would be a refusal
+    manufactured out of the reader's own uid."""
+    if os.geteuid() == 0:
+        pytest.skip("root can stat anything, which is the point")
+    pass_prefix_checks(monkeypatch)
+    blind = _blinded(tmp_path, monkeypatch)
+    try:
+        monkeypatch.setattr(deploy, "run", recording_run([]))
+        args = _args(tmp_path)
+        assert deploy.system_preview(args) == 0
+        out = capsys.readouterr().out
+    finally:
+        blind.chmod(0o755)
+
+    assert "NOT CHECKED" in out, out
+    assert "could not be checked as this user" in out, out
+    assert args.prefix in out, out
+    # Still advertised: "I could not look" is not "I found something".
+    assert _previewed_command(out)
+
+
+def test_an_unprivileged_preview_invents_no_blocker_from_its_own_blindness(
+        tmp_path, monkeypatch):
+    if os.geteuid() == 0:
+        pytest.skip("root can stat anything, which is the point")
+    pass_prefix_checks(monkeypatch)
+    blind = _blinded(tmp_path, monkeypatch)
+    try:
+        rc, checks = deploy.preflight(_args(tmp_path), privileged=False)
+    finally:
+        blind.chmod(0o755)
+
+    assert rc == 0
+    states = dict((check.name, check.state) for check in checks)
+    assert deploy.CHECK_BLOCKED not in states.values(), checks
+    assert states["prefix_reach"] == deploy.CHECK_UNKNOWN, checks
+    assert states["prefix_contents"] == deploy.CHECK_UNKNOWN, checks
+    assert states["spool"] == deploy.CHECK_OK, checks
+
+
+def test_a_check_root_could_not_make_is_a_refusal_not_a_pass(
+        tmp_path, monkeypatch, capsys):
+    """`unknown` is an answer about the READER's privileges, and root has
+    none of that excuse. Unreachable as real root, which is why it is
+    asserted rather than assumed away."""
+    if os.geteuid() == 0:
+        pytest.skip("root can stat anything, which is the point")
+    pass_prefix_checks(monkeypatch)
+    blind = _blinded(tmp_path, monkeypatch)
+    try:
+        rc, checks = deploy.preflight(_args(tmp_path), privileged=True)
+    finally:
+        blind.chmod(0o755)
+
+    assert rc == 6
+    assert any(check.state == deploy.CHECK_UNKNOWN for check in checks), checks
+    assert "could not be made even as root" in capsys.readouterr().err
