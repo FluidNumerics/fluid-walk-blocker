@@ -1128,6 +1128,81 @@ def test_the_blind_records_carry_the_build_through_the_real_path(
     assert entries[0]["layer"] == "reaper"
 
 
+def _latch_keys(spool):
+    state = reaper.load_state(os.path.join(str(spool), "reaper-state.json"))
+    return sorted(state.get("logged_actions", {}))
+
+
+def test_the_state_file_holds_only_the_two_known_latch_key_shapes(
+        tmp_path, procfs, mounts_path):
+    """The enumeration. `logged_actions` is keyed by a blind sentinel or by
+    `verdict:pid:starttime`, and by nothing else -- driven through all three
+    of the places a key is built, against a state file each poll actually
+    wrote. A third shape would pass every other test in this file and break
+    the end-of-poll prune, which splits a key on `:` and asks whether the
+    tail is a live process."""
+    spool = tmp_path / "spool"
+    audit = tmp_path / "audit.jsonl"
+    empty_proc = tmp_path / "empty-proc"
+    empty_proc.mkdir()
+    (empty_proc / "uptime").write_text("1000000.0 1000000.0\n")
+    cg = tmp_path / "cg"
+
+    def _args(cgroup_root, proc_root):
+        return reaper.build_parser().parse_args([
+            "--spool", str(spool), "--audit", str(audit),
+            "--cgroup-root", str(cgroup_root), "--proc-root", str(proc_root),
+            "--mounts", mounts_path, "--min-interval", "0",
+        ])
+
+    seen = set()
+
+    # 1. no user slice at all -> the LATCH_BLIND_SLICES sentinel
+    assert reaper.run(_args(tmp_path / "no-such-cgroup-root", procfs),
+                      sleep=lambda _s: None) == reaper.EXIT_BLIND
+    seen.update(_latch_keys(spool))
+    assert reaper.LATCH_BLIND_SLICES in seen, seen
+
+    # 2. slices visible, /proc empty -> the LATCH_BLIND_PROCS sentinel
+    write_slice(cg, UID_B, io_full_total=0.0)
+    assert reaper.run(_args(cg, empty_proc), sleep=lambda _s: None) == \
+        reaper.EXIT_BLIND
+    seen.update(_latch_keys(spool))
+    assert reaper.LATCH_BLIND_PROCS in seen, seen
+
+    # 3. an ordinary standing finding -> a _finding_key()
+    write_proc(procfs, 4211, "find",
+               ["find", "/scratch/e", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    reaper.run(_args(cg, procfs), sleep=lambda _s: None)
+    finding_keys = [k for k in _latch_keys(spool)
+                    if k not in reaper.LATCH_SENTINELS]
+    assert finding_keys, _latch_keys(spool)
+    seen.update(_latch_keys(spool))
+
+    for key in seen:
+        if key in reaper.LATCH_SENTINELS:
+            continue
+        verdict, pid, starttime = key.split(":")
+        assert verdict and pid.isdigit() and starttime.isdigit(), key
+    assert set(reaper.LATCH_SENTINELS) == {reaper.LATCH_BLIND_SLICES,
+                                           reaper.LATCH_BLIND_PROCS}
+
+
+def test_a_latch_key_of_an_unknown_shape_is_refused_at_construction():
+    """Construction-time, because the symptom otherwise arrives weeks later
+    as audit rows that repeat or go missing."""
+    for key in ("", "blinded", "reported", "runaway_traversal:4211",
+                "runaway_traversal:notapid:99", "a:b:c:d"):
+        with pytest.raises(AssertionError):
+            reaper._latch_key(key)
+    assert reaper._latch_key("runaway_traversal:4211:99") == \
+        "runaway_traversal:4211:99"
+    for sentinel in reaper.LATCH_SENTINELS:
+        assert reaper._latch_key(sentinel) == sentinel
+
+
 def test_a_version_change_alone_does_not_defeat_the_dedup(
         tmp_path, procfs, mounts_path, monkeypatch):
     """The FIXED-STRING latch shape. `logged_actions["blind"]` stores a
