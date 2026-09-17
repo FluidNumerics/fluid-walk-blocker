@@ -13,7 +13,10 @@ argumentless `deploy.py`. Every fact about a particular site lives in
 the node artifacts by `walk-blocker build`. The node never reads
 configuration.
 
-Copyright Fluid Numerics LLC. All rights reserved. This tree is private.
+Copyright (c) 2026 Trevor Keller, PhD, under the BSD 3-Clause License. The
+licence travels in the payload, so a node holds the terms beside the code.
+What stays out of this tree is a customer's operational facts, not the code
+itself -- see "IP hygiene" below, which is unchanged by the licence.
 
 Read `README.md` first, then `docs/adr/0001` through `0020` in order, then
 `docs/site-config.md` for what a site measures before it can be
