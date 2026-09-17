@@ -947,10 +947,11 @@ def _programs_run(lines):
     """The programs that actually started, in order, after the shell itself.
 
     A failed execve is not a program: dash searches PATH by attempting
-    execve in each directory, so `logger` reached through the fallback
-    leaves ENOENT lines for every earlier PATH entry under dash and none
-    under bash, which stats first. Counting those would make the answer
-    shell-dependent for a reason that is not a fork.
+    execve in each directory and leaves an ENOENT line per miss, where bash
+    stats first. The refusal test arranges its PATH so no miss occurs, and
+    this filter is the second line of defence for a whole line; a miss
+    strace splits across `<unfinished ...>` and `<... resumed>` would not be
+    caught here, which is why the arrangement comes first.
     """
     started = [line for name, line in lines
                if name == "execve" and "= -1" not in line]
@@ -1197,7 +1198,14 @@ def test_a_refusal_runs_exactly_the_programs_the_audit_path_documents(
     stub on `logger_stub["bin"]` -- and its path is what the trace shows.
     """
     argv = ["grep", "-r", "needle", "/scratch"]
-    env = {"PATH": "%s:%s:%s" % (shim_env["shim_dir"], logger_stub["bin"],
+    # The logger stub's directory FIRST. The shim is invoked by path and
+    # resolves the real tool through the closed bin_dir, so nothing else
+    # reads PATH; putting the stub first means the fallback's `logger` is
+    # found at the first directory tried, and dash -- which searches PATH
+    # by attempting execve in each entry -- leaves no failed attempt in the
+    # trace. A failed attempt that strace split across an `<unfinished ...>`
+    # and a `<... resumed>` line would otherwise read as a started program.
+    env = {"PATH": "%s:%s:%s" % (logger_stub["bin"], shim_env["shim_dir"],
                                  shim_env["bin_dir"])}
     lines, stdout = _trace_shim(
         tmp_path, _shell_as_sh(tmp_path, shell), shim_env, argv,
