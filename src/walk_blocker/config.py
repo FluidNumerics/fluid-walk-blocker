@@ -53,6 +53,25 @@ class ConfigError(ValueError):
         super().__init__("%s: %s" % (path, message))
 
 
+# Everything `load_site()` can raise: a semantic fault, a shape fault, an
+# unreadable file, a TOML syntax error (tomllib raises a ValueError subclass).
+LOAD_ERRORS = (ConfigError, jsonschema.ValidationError, OSError, ValueError)
+
+
+def describe_load_error(path, exc):
+    """One line naming what stopped `load_site(path)`, for whichever of
+    `LOAD_ERRORS` it was: the dotted key for a semantic fault, the JSON
+    pointer for a shape fault, the OS or parser message otherwise. Both
+    `validate` and `build` word a refusal this way, from here, so the two
+    commands cannot describe the same site differently."""
+    if isinstance(exc, ConfigError):
+        return "%s: %s: %s" % (path, exc.path, exc.message)
+    if isinstance(exc, jsonschema.ValidationError):
+        pointer = "/" + "/".join(str(p) for p in exc.absolute_path)
+        return "%s: %s: %s" % (path, pointer, exc.message)
+    return "%s: %s" % (path, exc)
+
+
 def schema_path():
     return paths.schema_file()
 

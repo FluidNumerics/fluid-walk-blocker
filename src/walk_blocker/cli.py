@@ -12,8 +12,6 @@ import json
 import os
 import sys
 
-import jsonschema
-
 from . import __version__, build, config, paths
 
 
@@ -28,16 +26,11 @@ def _load_survey_module():
 
 
 def _load_site_or_exit(path):
-    err = sys.stderr  # looked up per call, so a redirected stderr is honoured
     try:
         return config.load_site(path)
-    except config.ConfigError as exc:
-        err.write("%s: %s: %s\n" % (path, exc.path, exc.message))
-    except jsonschema.ValidationError as exc:
-        pointer = "/" + "/".join(str(p) for p in exc.absolute_path)
-        err.write("%s: %s: %s\n" % (path, pointer, exc.message))
-    except (OSError, ValueError) as exc:  # unreadable file, TOML syntax
-        err.write("%s: %s\n" % (path, exc))
+    except config.LOAD_ERRORS as exc:
+        # sys.stderr looked up per call, so a redirected stream is honoured.
+        sys.stderr.write(config.describe_load_error(path, exc) + "\n")
     return None
 
 

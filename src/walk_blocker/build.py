@@ -37,8 +37,6 @@ import stat
 import sys
 import tempfile
 
-import jsonschema
-
 from . import __version__, config, paths, stamp
 from .render import manifest
 from .render.shim import render_shim, render_wrapped_names
@@ -68,18 +66,13 @@ def _read(path):
 
 
 def _load_site(site_path):
-    """`config.load_site`, with each failure class worded as `validate`
-    words it. Kept here rather than imported from `cli` so this module has
-    no dependency on the command-line layer."""
+    """`config.load_site`, with a failure worded as `validate` words it --
+    from `config`, so this module has no dependency on the command-line
+    layer."""
     try:
         return config.load_site(site_path)
-    except config.ConfigError as exc:
-        raise BuildError("%s: %s: %s" % (site_path, exc.path, exc.message))
-    except jsonschema.ValidationError as exc:
-        pointer = "/" + "/".join(str(p) for p in exc.absolute_path)
-        raise BuildError("%s: %s: %s" % (site_path, pointer, exc.message))
-    except (OSError, ValueError) as exc:  # unreadable file, TOML syntax
-        raise BuildError("%s: %s" % (site_path, exc))
+    except config.LOAD_ERRORS as exc:
+        raise BuildError(config.describe_load_error(site_path, exc))
 
 
 def _tree_files(root):
