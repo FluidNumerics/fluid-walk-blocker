@@ -286,6 +286,11 @@ def test_the_submission_carries_the_guardrail_options(tmp_path, walk_job):
     # The escape hatch travels with the job, deliberately -- see walk-job's
     # comment for where that override is journaled.
     assert _value_of(argv, "--export") == "ALL,WALK_BLOCKER_UNSCOPED=1"
+    # A preempted walk must not be put back on the queue to walk again: under
+    # PreemptMode=REQUEUE that turns one traversal into as many as the
+    # scheduler decides, each paying the full metadata cost unwatched.
+    assert "--no-requeue" in argv
+    assert "--requeue" not in argv
 
 
 def test_qos_is_omitted_when_the_site_stamps_none(tmp_path):
@@ -581,6 +586,10 @@ def test_help_exits_zero_and_names_the_cost_it_does_not_remove(tmp_path, walk_jo
     # The stamped defaults are what the help advertises.
     assert "(walkers, qos low)" in r.stdout
     assert "default ./walk-job-%j.out" in r.stdout
+    # And the one thing that happens to a preempted job, since the help is
+    # where a refused user arrives and the behaviour has no flag to discover.
+    assert "--no-requeue" in r.stdout
+    assert "start the walk\nagain" in r.stdout or "start the walk again" in r.stdout
 
 
 # --- what it must NOT do ---------------------------------------------------
@@ -725,3 +734,21 @@ def test_a_host_without_the_package_falls_back_to_bare_bfs_at_runtime(tmp_path):
         cwd=str(tmp_path), timeout=30)
     assert played.returncode == 0, played.stderr
     assert played.stdout == "[1]=/scratch/x\n[2]=-name\n[3]=y\n", played.stdout
+
+
+def test_the_submission_is_never_requeued_even_with_every_override_set(
+        tmp_path, walk_job):
+    """The one option a caller cannot turn off. Overrides exist for time,
+    memory, partition, QoS and output; none of them reaches --no-requeue,
+    because a requeued walk is a second walk nobody asked for."""
+    argvfile = tmp_path / "argv.txt"
+    bin_dir = _bin(tmp_path, sbatch=SBATCH_RECORD_ARGV)
+    r = run_wj(walk_job, tmp_path,
+               ["-t", "8:00:00", "-m", "16G", "-p", "other", "-q", "urgent",
+                "-o", "/tmp/out-%j.txt", "--", "true"],
+               bin_dir, {"ARGVFILE": str(argvfile)})
+    assert r.returncode == 0, r.stderr
+    argv = _argv_of(argvfile)
+    assert "--no-requeue" in argv
+    assert _value_of(argv, "--partition") == "other"
+    assert _value_of(argv, "--qos") == "urgent"
