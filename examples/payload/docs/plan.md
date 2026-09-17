@@ -72,7 +72,8 @@ bound falls through to the per-mount judgement (ADR-0007).
 
 Every fact about a site lives in `site.toml`, validated against
 `schema/site.schema.json`, and is compiled into the node artifacts by
-`walk-blocker build` (ADR-0013). Whole-file templates carry the shim;
+`walk-blocker build` (ADR-0013). Whole-file templates carry the shim and
+the users' page (`docs/what-to-run-instead.md`);
 marker lines — `# GENERATED from site.toml:<key>` or `# GENERATED from
 VERSION` — carry stamped constants in `reaper.py`, `deploy.py`,
 `shim/install.sh` and `walk-job`. No code that runs on the node opens a

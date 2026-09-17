@@ -139,6 +139,7 @@ after which nothing is measurable.
 | `node/shim/install.sh` | the shell installer and the per-poll reconcile |
 | `node/shim/measure.sh`, `measure-flags.sh` | the shim's performance gate; the flag-clustering probe for the rule table |
 | `node/survey.py` | the mount survey, tier three of the mount policy |
+| `node/docs/what-to-run-instead.md.in` | the users' page, rendered per site into the payload's `docs/` |
 | `node/walk-job` | the sanctioned alternative |
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |

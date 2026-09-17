@@ -65,7 +65,8 @@ def test_the_payload_has_the_documented_layout(payload):
     have = set(_walk(payload))
     for rel in ("site.toml", "site.lock.json", "README.md", "search_rules.py",
                 "survey.py", "docs/evidence.md", "docs/site-config.md",
-                "docs/operating.md", "shim/measure.sh", "shim/measure-flags.sh",
+                "docs/operating.md", "docs/what-to-run-instead.md",
+                "shim/measure.sh", "shim/measure-flags.sh",
                 "docs/adr/0013-site-config-compiled-at-build.md", build.BUILD_MARKER):
         assert rel in have, rel
     assert not any(rel.startswith(".") and rel != build.BUILD_MARKER for rel in have)
@@ -91,13 +92,25 @@ def test_everything_else_is_0644_and_directories_0755(payload):
 
 
 def test_no_unfilled_placeholder_in_any_output_file(payload):
-    """Excluding the verbatim prose: ADR-0013 describes the `@@KEY@@`
-    template convention by name, which is not an unfilled placeholder."""
+    """Excluding the VERBATIM prose only: ADR-0013 describes the `@@KEY@@`
+    template convention by name, which is not an unfilled placeholder. The
+    rendered page under docs/ is not verbatim and is checked like the shim."""
+    verbatim = {"docs/" + rel for rel in build._tree_files(paths.docs_dir())} | {"README.md"}
+    checked = []
     for rel in _walk(payload):
-        if rel.startswith("docs/") or rel == "README.md":
+        if rel in verbatim:
             continue
+        checked.append(rel)
         with open(str(payload / rel), "rb") as fh:
             assert b"@@" not in fh.read(), rel
+    assert "docs/what-to-run-instead.md" in checked
+
+
+def test_the_users_page_is_rendered_not_copied():
+    """A verbatim docs/what-to-run-instead.md in the repo would collide with
+    the rendered one (put() refuses a second emission); this pins that the
+    repo never grows one, so the page is always the site's."""
+    assert not os.path.exists(os.path.join(paths.docs_dir(), "what-to-run-instead.md"))
 
 
 def test_verbatim_copies_are_byte_identical_to_their_sources(payload):
@@ -332,6 +345,25 @@ def test_an_unfilled_placeholder_fails_the_build(monkeypatch, tmp_path):
     code, _o, err = _build(EXAMPLE, tmp_path / "out")
     assert code == 2 and "@@" in err and "shim/guard.sh" in err
     assert not (tmp_path / "out").exists()
+
+
+def test_an_unfilled_placeholder_in_the_users_page_fails_the_build(monkeypatch, tmp_path):
+    from walk_blocker.render import alternatives
+    real = alternatives.render_page
+    monkeypatch.setattr(build.alternatives, "render_page", lambda *a: real(*a) + "@@LEFT@@\n")
+    code, _o, err = _build(EXAMPLE, tmp_path / "out")
+    assert code == 2 and "@@" in err and "docs/what-to-run-instead.md" in err
+    assert not (tmp_path / "out").exists()
+
+
+def test_check_flags_the_users_page_when_a_measurement_changes(scratch_payload, tmp_path):
+    """The page carries the survey date; re-surveying a mount changes the
+    page and --check says so by name."""
+    edited = tmp_path / "site.toml"
+    edited.write_text(open(EXAMPLE).read().replace('surveyed = "2026-01-15"', 'surveyed = "2026-02-15"'))
+    code, out, _e = _build(edited, scratch_payload, check=True)
+    assert code == 1
+    assert "differs: docs/what-to-run-instead.md" in out.splitlines(), out
 
 
 def test_a_verbatim_file_with_a_marker_outside_consumers_fails(monkeypatch, tmp_path):

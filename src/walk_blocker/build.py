@@ -14,6 +14,7 @@ Payload layout:
                             [trusted_binaries] and [site]; runs FROM this directory (0755)
     README.md               the repo README, verbatim
     docs/...                the docs tree, verbatim
+    docs/what-to-run-instead.md  the users' page, rendered from node/docs/ and site.toml
     search_rules.py         the rule table, verbatim (the reaper imports it)
     survey.py               node/survey.py, verbatim
     walk-job                node/walk-job, stamped from [slurm] and the bfs pin
@@ -38,8 +39,8 @@ import sys
 import tempfile
 
 from . import __version__, config, paths, stamp
-from .render import manifest
-from .render.shim import render_shim, render_wrapped_names
+from .render import alternatives, manifest
+from .render.shim import RenderError, render_shim, render_wrapped_names
 
 BUILD_MARKER = ".walk-blocker-build"
 
@@ -158,9 +159,17 @@ def render_payload(site, site_bytes, version):
         put(rel, _generated(rel, text))
 
     policy = site.policy()
-    put("shim/guard.sh", _generated("shim/guard.sh", render_shim(policy, site, version)))
-    put("shim/wrapped_names.sh",
-        _generated("shim/wrapped_names.sh", render_wrapped_names(policy, site, version)))
+    try:
+        put("shim/guard.sh", _generated("shim/guard.sh", render_shim(policy, site, version)))
+        put("shim/wrapped_names.sh",
+            _generated("shim/wrapped_names.sh", render_wrapped_names(policy, site, version)))
+        # The users' page, rendered from the same site the shim was compiled
+        # from, so the depth it quotes is the depth the shim applies.
+        put(alternatives.PAYLOAD_PATH,
+            _generated(alternatives.PAYLOAD_PATH,
+                       alternatives.render_page(policy, site, version)))
+    except RenderError as exc:
+        raise BuildError(str(exc))
 
     hashed = {rel: data for rel, (data, _mode) in files.items()}
     lock = manifest.render_manifest(site_bytes, version, site.lookup("schema_version"),

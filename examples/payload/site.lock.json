@@ -1,6 +1,6 @@
 {
   "files": {
-    "README.md": "f23fd1ae5687e8c3f772cb0af40153ea807f83a9dde1a27eb09c834e236336b5",
+    "README.md": "a1a0bd2cb24f516817de02b612a18ac82c9b8eacce922291071a24fa7cb772a4",
     "deploy.py": "9f4fda4de636e0b042549f09a6833cfbcba96204d3b16c6359ebb146bb75b010",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
@@ -24,9 +24,10 @@
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/evidence.md": "145521a85d3f3909d1ea20100ebc9c58d7fe8ff4a0fd35e96c7ba3a3fbfb2a68",
-    "docs/operating.md": "97ff4aa915674df8fb44a554960bc4dd6ac092e2c60afb667fef5ed304bf1781",
-    "docs/plan.md": "9ecf23d09eb61bc6dabe11877114513ee14c996e79edec14fcb3844c9041afe6",
+    "docs/operating.md": "1bee2118e5b12788de5ffa508b60d68a283dafa1ef21ac1bf602e60ad49a382f",
+    "docs/plan.md": "ed7c398d241d1a2d58525aa1bcc9f409f766dab96be66e50659c8090e7878f53",
     "docs/site-config.md": "6f98c8c441a02da9f8cf1c18f1b049881a6a0fe76c45eb940931afe9c9a6bc27",
+    "docs/what-to-run-instead.md": "547e7d8c33bc107a719ff5659674ad3088d5fd03a44a5b32daddedb97e444c30",
     "reaper.py": "ca8099097e9c5d5812a6a37bb8f42dc521f47e671d66839ec4d0fa5163e9a77f",
     "search_rules.py": "3617115aca0aa5d199f61f7c9dc23fdc45cb1333af0cd60fee25157f3388b250",
     "shim/guard.sh": "71c1ff859ecaa69da3f575bf310f9d3978e03f299bc30bc13bdadf8ed3455142",
