@@ -37,6 +37,11 @@ mount_table = "/proc/mounts"
 path = "/home"
 class = "expensive"
 maxdepth = 4
+# As `walk-blocker survey` proposed them, so the users' page can say what a
+# full walk would visit. Fictional, like everything else in this file.
+inodes_used = 24_400_000
+capacity_bytes = 90_000_000_000_000
+surveyed = "2026-01-15"
 
 # A small NFS export of installed software. Cheap to walk in full; the
 # survey output that justified this sits beside this file.

@@ -31,6 +31,11 @@ from .. import search_rules as R
 GUARD_TEMPLATE = "guard.sh.in"
 NAMES_TEMPLATE = "wrapped_names.sh.in"
 
+# Where the users' page lands in the payload, and so under `[install].prefix`
+# on the node. One constant: the refusal footer names this path and the page
+# renderer emits to it, and the two cannot drift.
+GUIDE_REL = "docs/what-to-run-instead.md"
+
 _PLACEHOLDER = re.compile(r"@@[A-Z_]+@@")
 
 # Characters no value may carry into a single-quoted `sh` literal.
@@ -259,6 +264,8 @@ def substitutions(policy, site, version):
         "@@DATE@@": sh_quoted(trusted["date"], "trusted_binaries.date"),
         "@@BIN_DIR@@": sh_quoted(os.path.join(site["install"]["prefix"], "bin"),
                                  "install.prefix"),
+        "@@GUIDE_PATH@@": sh_quoted(os.path.join(site["install"]["prefix"], GUIDE_REL),
+                                    "install.prefix"),
         "@@ESCAPE@@": R.ESCAPE_HATCH,
         "@@EXIT@@": str(R.EXIT_REFUSED),
         "@@VERSION@@": sh_quoted(version, "VERSION"),

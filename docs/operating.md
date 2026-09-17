@@ -50,7 +50,8 @@ The tables, in the order the schema lists them:
 
 - `[site]` — how the node names itself in refusal text and unit
   descriptions, where a refused user is sent for the site's own
-  explanation, and whom they contact.
+  explanation, and whom they contact. Every refusal also names the
+  installed `docs/what-to-run-instead.md`, which needs no URL.
 - `[filesystems]` — the mount policy in three tiers (ADR-0016): the
   remote-type list and remoteness proxy that decide the compiled default,
   the global depth ceiling and unscoped depth, and `[[filesystems.mounts]]`,
@@ -155,6 +156,7 @@ What the payload contains:
 | `shim/install.sh` | the shell installer, stamped from `[install]`, `[hooks.*]` and the mount policy |
 | `shim/measure.sh`, `shim/measure-flags.sh` | the shim's performance gate, and the flag-clustering probe for the rule table |
 | `docs/` | this documentation tree, verbatim |
+| `docs/what-to-run-instead.md` | the users' page, rendered from `node/docs/what-to-run-instead.md.in` and `site.toml`: the mounts, their allowances and measurements, and this site's `walk-job` |
 | `README.md` | the repository README, verbatim |
 | `site.toml` | the input, byte for byte, as a record |
 | `site.lock.json` | schema, tool and payload versions, and a hash per file |

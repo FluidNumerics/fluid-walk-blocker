@@ -182,12 +182,27 @@ class SiteValues(object):
             if dotted.startswith("derived."):
                 return _derived_value(self.site, dotted[len("derived."):])
             try:
-                return self.site.lookup(dotted)
+                value = self.site.lookup(dotted)
             except (KeyError, IndexError, TypeError):
                 if dotted in OPTIONAL_EMPTY:
                     return ""
                 raise KeyError(key)
+            if dotted == "filesystems.mounts":
+                return _judgement_rows(value)
+            return value
         raise KeyError(key)
+
+
+# The keys of a `[[filesystems.mounts]]` row that a judgement reads. The
+# measured keys (`inodes_used`, `capacity_bytes`, `surveyed`) are for the users'
+# page and are projected out here, so nothing stamped onto the node carries
+# a figure it does not read -- and so the reaper's literal cannot grow a
+# site's capacity in bytes, which is the kind of number the IP gate hunts.
+JUDGEMENT_MOUNT_KEYS = ("path", "class", "maxdepth")
+
+
+def _judgement_rows(rows):
+    return [{k: row[k] for k in JUDGEMENT_MOUNT_KEYS if k in row} for row in rows]
 
 
 def _derived_value(site, name):

@@ -108,7 +108,8 @@ jobs:
     # `examples/payload/` is a build product (ADR-0013): `--check` is the
     # oracle for staleness, and two builds into fresh directories must be
     # byte-identical or the oracle is not one. The placeholder grep skips
-    # the verbatim prose, where ADR-0013 names the `@@KEY@@` convention.
+    # the verbatim prose, where ADR-0013 names the `@@KEY@@` convention, and
+    # checks the one rendered page under docs/ by name.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,6 +129,7 @@ jobs:
       - name: No unfilled placeholder in any generated file
         run: |
           ! grep -r '@@' examples/payload --exclude-dir=docs --exclude=README.md
+          ! grep '@@' examples/payload/docs/what-to-run-instead.md
 
   # Report-only, on purpose. A GitHub runner is a machine class nobody has
   # characterised: the budgets a site records are calibrated against its own

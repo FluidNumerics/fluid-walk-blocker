@@ -12,6 +12,7 @@ Stdlib-only Python 3.9 (ADR-0015): this file is shipped in the payload and
 runs on an interpreter this tree does not choose.
 """
 import argparse
+import datetime
 import fnmatch
 import json
 import re
@@ -94,7 +95,7 @@ def measure(mountpoint, timeout, statvfs_command=None):
     command = list(default_statvfs_command() if statvfs_command is None
                    else statvfs_command) + [mountpoint]
     result = {"measured": False, "capacity_bytes": None, "free_bytes": None,
-              "inodes": None, "inodes_free": None, "error": None}
+              "inodes": None, "inodes_free": None, "inodes_used": None, "error": None}
     try:
         proc = subprocess.Popen(command, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
@@ -127,6 +128,9 @@ def measure(mountpoint, timeout, statvfs_command=None):
         result["error"] = "unreadable child output: %s" % exc
         return result
     result["measured"] = True
+    # In use, not capacity: a network filesystem's f_files is often a quota
+    # or a synthetic ceiling; what a walk visits is what is there.
+    result["inodes_used"] = max(0, result["inodes"] - result["inodes_free"])
     return result
 
 
@@ -173,7 +177,7 @@ def human_count(n):
 
 def render_table(rows):
     headers = ["mountpoint", "fstype", "remote", "default_class",
-               "capacity", "inodes", "measured"]
+               "capacity", "inodes", "in_use", "measured"]
     with_override = any("override" in r for r in rows)
     if with_override:
         headers.append("override")
@@ -184,6 +188,7 @@ def render_table(rows):
             ("yes (%s)" % r["remote_reason"]) if r["remote"] else "no",
             r["default_class"],
             human_bytes(r["capacity_bytes"]), human_count(r["inodes"]),
+            human_count(r["inodes_used"]),
             "yes" if r["measured"] else "unmeasured: %s" % r["error"],
         ]
         if with_override:
@@ -200,10 +205,18 @@ def render_table(rows):
                      for row in table)
 
 
-def render_toml(rows):
+def render_toml(rows, today=None):
     """The proposed override block: one entry per remote mount, on its
     default. Deleting an entry keeps the default; changing it is a decision
-    that belongs in a diff with a reason (ADR-0016)."""
+    that belongs in a diff with a reason (ADR-0016).
+
+    A measured mount's figures are proposed as `inodes_used`,
+    `capacity_bytes` and `surveyed`, so the record flows survey -> diff -> the users' page
+    (`docs/what-to-run-instead.md`) without anyone retyping a number.
+    `today` is the survey date; a test passes one, the node uses the clock.
+    """
+    if today is None:
+        today = datetime.date.today().isoformat()
     out = ["# Proposed by walk-blocker survey. Review, then paste into site.toml.",
            "# A mount left on its default should be left there on purpose."]
     for r in rows:
@@ -211,8 +224,9 @@ def render_toml(rows):
             continue  # cheap by default, or a site override already decides it
         facts = "%s, remote by %s" % (r["fstype"], r["remote_reason"])
         if r["measured"]:
-            facts += ", capacity %s, inodes %s" % (
-                human_bytes(r["capacity_bytes"]), human_count(r["inodes"]))
+            facts += ", capacity %s, inodes %s of %s in use" % (
+                human_bytes(r["capacity_bytes"]), human_count(r["inodes_used"]),
+                human_count(r["inodes"]))
         else:
             facts += ", unmeasured (%s)" % r["error"]
         out.append("")
@@ -221,6 +235,10 @@ def render_toml(rows):
         out.append("path = %s" % json.dumps(r["mountpoint"]))
         out.append('class = "expensive"  # default; delete this entry to keep the '
                    'default, or set class = "cheap" with a reason')
+        if r["measured"]:
+            out.append("inodes_used = %d" % r["inodes_used"])
+            out.append("capacity_bytes = %d" % r["capacity_bytes"])
+            out.append('surveyed = "%s"' % today)
     return "\n".join(out) + "\n"
 
 

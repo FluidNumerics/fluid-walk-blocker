@@ -214,6 +214,14 @@ def check_semantics(schema, data):
                 raise ConfigError(where + ".maxdepth", "%d exceeds "
                                   "depth_allowance_max %d"
                                   % (mount["maxdepth"], fs["depth_allowance_max"]))
+        # A measurement carries its date. The figures are shown to users as
+        # "as of <date>"; a figure with no date would be shown as a fact about
+        # today, which a year-old survey is not (ADR-0016, tier three).
+        for figure in ("inodes_used", "capacity_bytes"):
+            if figure in mount and "surveyed" not in mount:
+                raise ConfigError(where + "." + figure,
+                                  "a measurement carries its date: set "
+                                  "surveyed = \"YYYY-MM-DD\" beside it")
 
     for i, origin in enumerate(data["reaper"]["origins"]):
         try:
