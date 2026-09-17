@@ -29,7 +29,7 @@ import pathlib
 import shutil
 import subprocess
 
-from conftest import ROOT, make_policy, make_site, render_to  # noqa: F401
+from conftest import ROOT, make_policy, make_site, recording_logger_stub, render_to
 from walk_blocker import __version__, stamp
 from walk_blocker.render import shim as render_shim_module
 
@@ -365,9 +365,14 @@ def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
     for tool in tools:
         write_stub(fake_bin / tool, TOOL_STUB)
     if logger_log is not None:
-        write_stub(fake_bin / TEST_LOGGER,
-                   "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n".format(log=logger_log))
+        write_stub(fake_bin / TEST_LOGGER, recording_logger_stub(logger_log))
     return fake_bin
+
+
+def next_copy_dir(layout):
+    """A fresh `copyN` under tmp_path: where a run that is NOT approved gets
+    its stamped copy, standing in for a checkout (see run_install)."""
+    return layout.tmp_path / ("copy%d" % len(list(layout.tmp_path.glob("copy*"))))
 
 
 def sandbox_env(layout, fake_bin, **extra):
@@ -409,10 +414,7 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
     stage_readme(layout.prefix)
 
     if script is None:
-        if "--i-have-approval" in args:
-            dest = layout.shim_dir
-        else:
-            dest = layout.tmp_path / ("copy%d" % len(list(layout.tmp_path.glob("copy*"))))
+        dest = layout.shim_dir if "--i-have-approval" in args else next_copy_dir(layout)
         stamped_install(tmp_path, dest=dest, layout=layout, **site_overrides)
         script = layout.script
     else:
@@ -438,8 +440,7 @@ def relink_with_a_recording_logger(tmp_path, layout, tools=("find", "grep"),
     A root relink is refused unless it runs from the DEPLOYED copy, so a
     fake_uid=0 caller passes the installed script here."""
     if script is None:
-        dest = layout.tmp_path / ("copy%d" % len(list(layout.tmp_path.glob("copy*"))))
-        stamped_install(tmp_path, dest=dest, layout=layout)
+        stamped_install(tmp_path, dest=next_copy_dir(layout), layout=layout)
         script = layout.script
     bin_dir = layout.toolbin
     log = layout.tmp_path / "logger-calls.txt"
