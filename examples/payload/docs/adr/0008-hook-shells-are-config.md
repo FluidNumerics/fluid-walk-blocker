@@ -1,7 +1,7 @@
 # ADR-0008: Hook shells are a config list with required and best-effort classes, verified not assumed
 
 **Status:** accepted, 2026-09-16
-The Decision's install command below reads `--system`, which is current. It was written as `--system --i-have-approval`; ADR-0021 removed that flag, and the spelling was corrected in place rather than left stale — a reader meets the command they would actually run, and this line is where the superseded one is recorded.
+The Decision's install command below reads `--system`, which is current; the spelling it replaced is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`
 
 ## Context
@@ -178,3 +178,9 @@ A shell that moves from nested-only to registered moves from `best-effort` to
 - `[hooks.<shell>].file`
 - `[hooks.<shell>].package`
 - `[hooks.<shell>].gate`
+
+## Superseded wording
+
+Superseded by ADR-0021. The Decision's install command was written as
+`--system --i-have-approval`; the flag is gone, and the spelling was corrected
+in place so that a reader meets the command they would actually run.

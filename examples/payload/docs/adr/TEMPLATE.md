@@ -9,9 +9,14 @@ Conventions (delete this comment in a real ADR):
 
 - The title is the decision, not the topic. "Read PSI at the user slice" is a
   title; "PSI sampling" is not.
-- A new ADR never edits an old one's Decision. It narrows it by naming the
-  clause, in the **Narrows:** line and again in Context. The old ADR gets one
-  line added under its Status saying which clause is narrowed and by what.
+- A new ADR narrows an old one by naming the clause, in the **Narrows:** line
+  and again in Context. The old ADR gets one line under its Status saying which
+  clause is narrowed and by what, and the superseded wording moves out of the
+  section a reader quotes and into that record's `## Superseded wording`
+  section, so its Decision and Consequences state what holds now (ADR-0023).
+  Two things do not move: a narrowing that clarifies how a clause should be
+  read rather than replacing what it says, and a clause in `## Context`, which
+  is what was true then and is not updated.
 - Decisions, not evidence (ADR-0014). No hostnames, usernames, uids,
   partition or QoS names, customer or engineer names, neighbour timers,
   inode counts, capacities, percentages, user or core counts, vendor build
@@ -19,8 +24,9 @@ Conventions (delete this comment in a real ADR):
   measurement, say the class of measurement and write "measured at a
   reference deployment", then fill in "Re-measure when".
 - Filesystem type names (wekafs, nfs4, lustre, gpfs) are vocabulary and fine.
-- A **Narrows:** line quotes a full clause of the target's body, not a
-  fragment; `tests/test_adr_conventions.py` checks the quote resolves.
+- A **Narrows:** line quotes a full clause, not a fragment, and the quote
+  resolves inside the target's `## Superseded wording` section;
+  `tests/test_adr_conventions.py` checks it and names the exempt narrowings.
 - Adding an ADR, or giving one the closing paragraph, means updating the
   expected count and the settled set in `tests/test_adr_conventions.py`;
   its failure message says which.
@@ -53,6 +59,13 @@ give the number; give the procedure and the bar.
 
 The `site.toml` keys this decision reads or that a re-measurement would change,
 as a list. "none" is a valid answer and must be written.
+
+## Superseded wording
+
+Only where a later record narrowed wording in this one. Quote the superseded
+clause verbatim, name the record that narrowed it, and say what holds instead.
+Omit the section entirely otherwise. It sits below `## Site config touched` and
+above the closing paragraph, which stays the record's last words (ADR-0023).
 
 <!--
 Include the closing paragraph below only where the decision was settled
