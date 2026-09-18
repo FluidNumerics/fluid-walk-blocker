@@ -2386,8 +2386,24 @@ def test_the_previewed_command_is_the_command_that_installs(tmp_path, capsys,
 
 def test_the_preview_does_not_relay_the_standalone_installer_command(
         tmp_path, capsys, monkeypatch):
+    """The child must actually EMIT the command for this to test anything.
+
+    `recording_run` answers every call with empty stdout, so this assertion
+    used to hold over zero relayed lines whatever the filter did -- vacuous
+    before this flag was removed and still vacuous after it, for a second
+    reason. The fixture below is the shape the filter exists to catch, plus
+    a `--relink` line that must SURVIVE, so the test fails both when the
+    filter stops stripping and when it strips too much.
+    """
     pass_prefix_checks(monkeypatch)
-    monkeypatch.setattr(deploy, "run", recording_run([]))
+    child = (
+        "# System-wide install of walk-blocker Layer 1.\n"
+        "#   sh /payload/shim/install.sh --system\n"
+        "#   sh /payload/shim/install.sh --relink\n"
+        "# trailer\n")
+    monkeypatch.setattr(
+        deploy, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, child, ""))
     deploy.system_preview(_args(tmp_path))
     out = capsys.readouterr().out
 
@@ -2396,6 +2412,11 @@ def test_the_preview_does_not_relay_the_standalone_installer_command(
                and "install.sh" in l and "--system" in l
                and "--relink" not in l and "--version" not in l]
     assert offered == [], offered
+    # The reconcile command is not the standalone install and must not be
+    # collateral: a filter that took it too would hide the one install.sh
+    # command an operator may legitimately run by hand.
+    assert "sh /payload/shim/install.sh --relink" in out, out
+    assert "standalone command is omitted" in out
     assert _previewed_command(out)
 
 
