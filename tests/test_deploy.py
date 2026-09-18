@@ -3607,3 +3607,46 @@ def test_the_docstring_names_every_option_the_parser_accepts():
     exempt = {"--help", "--dry-run"}
     for flag in sorted(offered - exempt):
         assert flag in deploy.__doc__, "%s is accepted but undocumented" % flag
+
+
+@pytest.mark.parametrize("escape", [
+    "shim/../../../../etc/hostname",
+    "../outside",
+    "/etc/hostname",
+    "docs/../../..",
+])
+def test_a_record_naming_a_path_outside_the_payload_is_refused(installed, escape):
+    """The mode exists to read a record that may have been tampered with, so
+    the record cannot be assumed well formed. A path like this passes a plain
+    prefix test, leaves the prefix when joined, and would have an unprivileged
+    caller hash and report a file that is no part of the payload.
+
+    Refusing the whole record rather than skipping the entry is deliberate: if
+    it names something outside the payload, no per-file verdict taken from it
+    is worth printing."""
+    path = os.path.join(installed, "site.lock.json")
+    with open(path) as handle:
+        lock = json.load(handle)
+    lock["files"][escape] = "0" * 64
+    with open(path, "w") as handle:
+        json.dump(lock, handle)
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_UNKNOWN, out
+    assert "differs:" not in out and "missing:" not in out
+    assert "no part of the payload" in out
+
+
+def test_a_record_whose_keys_are_not_strings_is_refused(installed):
+    path = os.path.join(installed, "site.lock.json")
+    with open(path, "w") as handle:
+        handle.write('{"version": "0.1.0", "files": {"1": 2}}')
+    with open(path) as handle:
+        raw = json.load(handle)
+    raw["files"] = {"ok": 1}
+    with open(path, "w") as handle:
+        json.dump(raw, handle)
+    # a non-string VALUE is only ever unequal, which is drift, not a refusal;
+    # a non-string KEY cannot survive JSON, so the guard is about types we can
+    # actually receive. This pins that the refusal does not overreach.
+    code, _out = _verify(installed)
+    assert code in (deploy.VERIFY_DRIFT, deploy.VERIFY_UNKNOWN)

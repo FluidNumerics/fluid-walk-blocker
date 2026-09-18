@@ -2201,6 +2201,26 @@ def verify_lines(prefix, lock):
     return lines, checked, unknown
 
 
+def names_only_payload_paths(lock):
+    """Every path in the record stays inside the payload.
+
+    This matters because the whole point of the mode is to read a record that
+    may have been tampered with, so the record cannot be assumed well formed.
+    An entry like `shim/../../../etc/hostname` passes a plain prefix test,
+    leaves the prefix when joined, and would have this mode hash and report a
+    file that is no part of the payload -- as whatever user ran it, and this
+    mode is meant to be run by unprivileged ones.
+    """
+    for rel in lock["files"]:
+        if not rel or rel.startswith("/") or os.path.isabs(rel):
+            return False
+        if os.path.normpath(rel).split("/")[0] in ("..", ""):
+            return False
+        if ".." in rel.split("/"):
+            return False
+    return True
+
+
 def read_installed_lock(prefix):
     """The installed record, or None when it cannot be trusted to be one."""
     try:
@@ -2209,6 +2229,10 @@ def read_installed_lock(prefix):
     except (OSError, ValueError):
         return None
     if not isinstance(lock, dict) or not isinstance(lock.get("files"), dict):
+        return None
+    if not all(isinstance(rel, str) for rel in lock["files"]):
+        return None
+    if not names_only_payload_paths(lock):
         return None
     return lock
 
@@ -2238,10 +2262,12 @@ def system_verify(args, out=None):
 
     lock = read_installed_lock(prefix)
     if lock is None:
-        out.write("walk-blocker verify: %s/site.lock.json is missing or is not "
-                  "a record this can read.\n" % prefix)
-        out.write("  Without it there is nothing to compare against, which is "
-                  "not the same as a clean install.\n")
+        out.write("walk-blocker verify: %s/site.lock.json is missing, or is not "
+                  "a record this can read,\n" % prefix)
+        out.write("  or it names a path that is no part of the payload. "
+                  "Without a record it can\n")
+        out.write("  trust there is nothing to compare against, which is not "
+                  "the same as a clean install.\n")
         return VERIFY_UNKNOWN
 
     lines, checked, unknown = verify_lines(prefix, lock)
