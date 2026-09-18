@@ -107,6 +107,18 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ -n "$MODE" ] || { echo "install.sh: need --system, --relink or --uninstall" >&2; exit 64; }
+# --dry-run is parsed before the mode is known, so it is accepted syntactically
+# in every mode -- but only the --system arm reads it. `--relink` rebuilds the
+# shim farm and `--uninstall` strips the hook blocks, both unconditionally and
+# both as root. Accepting the flag there and writing anyway is worse than
+# refusing it, because the caller believes they asked for a dry run and got
+# one. Refused, not ignored, for the same reason `deploy.py` refuses
+# `--verify --dry-run`. Before ADR-0021 this argv did not parse at all: the
+# flag did not exist here, so it fell to the unknown-argument arm above.
+if [ "$WILL_WRITE" -eq 0 ] && [ "$MODE" != system ]; then
+    echo "install.sh: --dry-run applies to --system only; --$MODE has no dry run" >&2
+    exit 64
+fi
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 # Generated next to this script by the build; sets SG_WRAPPED_NAMES.

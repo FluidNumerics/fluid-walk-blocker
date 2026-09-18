@@ -614,6 +614,38 @@ def test_version_reflects_a_different_stamped_value(tmp_path):
     assert result.stdout.endswith("\nwalk-blocker 9.8.7\n"), result.stdout
 
 
+def test_dry_run_is_refused_in_the_modes_that_cannot_honour_it(tmp_path):
+    """Refused, not ignored, and this is the whole point of the pair.
+
+    `--dry-run` is parsed before the mode is known, so it is syntactically
+    accepted everywhere -- but only the `--system` arm reads it. `--relink`
+    rebuilds the shim farm and `--uninstall` strips the hook blocks, both
+    unconditionally and both as root. Accepting the flag there and writing
+    anyway is worse than refusing, because the caller believes they asked for
+    a dry run and got one.
+
+    Before ADR-0021 this argv did not parse at all: `--dry-run` did not exist
+    in this script, so it fell to the unknown-argument arm. Removing the
+    approval flag introduced the flag -- and the silent ignore with it.
+    """
+    layout = stamped_install(tmp_path)
+    for mode in ("--relink", "--uninstall"):
+        result = subprocess.run(
+            [SH, str(layout.script), mode, "--dry-run"],
+            capture_output=True, text=True)
+        assert result.returncode == 64, (mode, result.stdout, result.stderr)
+        assert "--dry-run applies to --system only" in result.stderr, mode
+        assert mode.lstrip("-") in result.stderr, mode
+
+
+def test_dry_run_is_still_honoured_by_the_system_arm(tmp_path):
+    """The other half: the refusal above must not have taken the real one."""
+    result, layout = run_install(tmp_path, ["--system", "--dry-run"])
+    assert result.returncode == 0, result.stderr
+    assert not layout.bashrc.exists()
+    assert not layout.bin.exists()
+
+
 def test_an_unknown_argument_and_a_missing_mode_are_usage_errors(tmp_path):
     layout = stamped_install(tmp_path)
     for argv in (["--prefix", "/x"], []):
@@ -634,11 +666,11 @@ def test_system_mode_prints_and_does_not_execute(tmp_path):
     assert str(layout.bashrc) in result.stdout
     assert str(layout.zshenv) in result.stdout
     assert str(layout.fishconf) in result.stdout
-    assert not layout.bashrc.exists(), "--system without approval must touch nothing"
+    assert not layout.bashrc.exists(), "a --system dry run must touch nothing"
     assert not layout.bin.exists()
 
 
-def test_system_mode_refuses_without_root_even_when_approved(tmp_path):
+def test_system_mode_refuses_without_root(tmp_path):
     result, layout = run_install(tmp_path, ["--system"], fake_uid=1000)
     assert result.returncode == 3
     assert "must run as root" in result.stderr
