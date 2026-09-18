@@ -44,6 +44,15 @@ advisory guard (ADR-0001), not a test seam. The other `WALK_BLOCKER_*`
 variables are test seams, audited when they change the outcome, and they gain
 no siblings. See ADR-0013.
 
+The one node-side read of the record is `deploy.py --verify`, which hashes
+the installed files against the installed `site.lock.json`. That is integrity,
+not configuration: nothing it reads reaches a decision, a path, a threshold or
+an exit code anywhere else, and a record it cannot parse is its own exit code
+rather than a behaviour. The reaper's rejected JSON reader was rejected
+because its parse failure had no right answer — an empty mount list reads as a
+clean bill of health. Here, refusing to answer is the right answer. Do not
+move this read into `reaper.py` or `guard.sh`, and do not put it on a poll.
+
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
 `[install]` and `[hooks.*]`; `argparse` rejects `--prefix` outright. What
@@ -228,6 +237,8 @@ uvx --from pymarkdownlnt==0.9.39 pymarkdown --config .pymarkdown scan README.md 
 uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 uv run --group dev pyflakes examples/payload/deploy.py   # deploy.py is Python, not shell
 python3 tools/check_no_site_literals.py --require-terms --quiet   # IP hygiene, same as CI; see tools/README-ip-gate.md
+uv run walk-blocker provenance --payload PAYLOAD --repo SITE_REPO   # is this config on the reviewed branch?
+python3 PREFIX/deploy.py --verify                       # on a node: does the install match its record?
 ```
 
 Commands marked with a milestone do not work yet, or run only as a placeholder

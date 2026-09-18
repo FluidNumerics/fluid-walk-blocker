@@ -493,13 +493,60 @@ sh <prefix>/shim/install.sh --version
 
 The payload marker is written by the installer before any other file, so it
 is the answer that survives a half-installed payload. `site.lock.json`
-carries the schema version, the tool version and a hash per file, so the
-deployed configuration can be checked against a commit in the site's own
-repository — `sha256sum` of your `site.toml` against `site_sha256`. The
+carries the schema version, the tool version and a hash per file. The
 three `--version` lines are stamped literals, one number per payload
 (ADR-0013); `reaper.py --version` needs `search_rules.py` beside it, like
 every other invocation. `VERSION` at the root of this tree is the only
 hand-written version anywhere; everything else is stamped from it.
+
+### Is what is running what we reviewed?
+
+Three commands answer it, and no single one of them does. None needs a
+credential on the node, network access, or privileges.
+
+```sh
+# 1. on the node: do the installed files match the record they were built from?
+python3 <prefix>/deploy.py --verify
+
+# 2. off the node: is that record the one the site's repository holds?
+sha256sum <prefix>/site.lock.json      # against payload/site.lock.json there
+
+# 3. off the node: is that configuration on the reviewed branch?
+walk-blocker provenance --payload payload/ --repo . --ref origin/main
+```
+
+Step 1 exits 0 when everything matches, 1 on drift, and 4 when it cannot
+tell — a missing or unreadable record is not a clean install, and it does
+not report one. It needs no privilege on purpose: every installed file is
+world-readable (ADR-0012), so the people whose `PATH` this tool changed can
+check the guard that refuses their commands.
+
+Step 3 answers by content and never by location. It takes the `site_sha256`
+the payload recorded and looks for a commit reachable from the reviewed ref
+whose configuration hashes to it, so the answer survives the repository
+changing hands and its URL with it. A pinned URL would become false on the
+day the intended handover succeeds, and a rename redirect is a convenience
+rather than a boundary: the vacated name can be claimed by anyone. Exit 0
+reviewed, 1 not reviewed, 2 cannot answer. Its `--sha256` flag takes the
+hash straight from step 1's output, so nothing has to be copied off the
+node.
+
+**Where the answer stops.** Step 1 compares a record with the files sitting
+beside it, so anyone who edits a file *and* its entry in the record gets a
+clean report. It is a tripwire for accidents — the undocumented hotfix, the
+truncated copy, the install that stopped half way — and not a seal against
+someone who means it. What it buys is that falsifying both takes knowing
+the record exists and deciding to change it, which turns carelessness into
+intent. The check that actually binds a deployment to a review is step 2
+followed by step 3, and neither of them runs on the node.
+
+**Nothing here is enforced, and it cannot be from this tree.** Making the
+installer refuse an unreviewed payload would need the reviewing commit
+recorded inside the payload, and that is a fixed point that does not exist:
+committing the payload changes the commit the payload would have to name.
+The gate belongs in the site repository's own CI, where the commit already
+exists so the problem dissolves — run `provenance` against the pull
+request's own revision, and `build --check` beside it, as required checks.
 
 ## 12. Promoting to `--kill`
 

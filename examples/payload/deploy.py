@@ -193,7 +193,11 @@ INSTALLED_ENTRIES = ("reaper.py", "search_rules.py", "survey.py", "walk-job",
 #                   order is a list of files under docs/, and every refusal
 #                   names $PREFIX/docs/what-to-run-instead.md
 #   site.toml, site.lock.json   the record of what was built, never an
-#                   input (ADR-0013): `cat` them to learn what is deployed
+#                   input to the guard's BEHAVIOUR (ADR-0013): `cat` them to
+#                   learn what is deployed, and `--verify` hashes the tree
+#                   against the lock. That read decides nothing -- a lock it
+#                   cannot parse is exit 4 and no verdict, which is exactly
+#                   the answer the reaper's rejected reader could not have had
 PAYLOAD_SOURCES = (
     ("reaper.py", False, "0755"),
     ("search_rules.py", False, "0644"),
