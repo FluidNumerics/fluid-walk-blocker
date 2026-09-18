@@ -201,22 +201,26 @@ under investigation. The install reads it once, but the staging snapshot is
 what protects the install, not the payload's location, and reading a wedged
 filesystem is the one thing that can stall the snapshot.
 
-## 7. Preview the install
+## 7. Dry-run the install
 
-As root, on the node:
+As any user, on the node — this needs no privilege, and running it from a
+root shell is one flag away from a live install:
 
 ```sh
-python3 walk-blocker-payload/deploy.py --system
+python3 walk-blocker-payload/deploy.py --system --dry-run
 ```
 
-`--system` alone prints what an approved install would do and exits without
-writing. It names the prefix, the spool directory, each hook file it will
-write a block to, the unit files, and the command that will actually
-install.
+`--dry-run` prints what the install would do and exits without writing. It
+names the prefix, the spool directory, each hook file it will write a block
+to, the unit files, and the command that will actually install.
 
-**It makes every check the approved command makes**, from the same
-`preflight()` function, so that the approved command cannot refuse what the
-preview accepted:
+**Do not drop the flag to "see what it says".** Since ADR-0021 the gate is
+root alone: `--system` on its own installs, immediately, with no further
+confirmation.
+
+**It makes every check the install makes**, from the same
+`preflight()` function, so that the install cannot refuse what the
+dry run accepted:
 
 - the six root-write locations are the literals compiled from `site.toml`;
 - each of them sits in a trust chain that is root-owned end to end, and
@@ -237,16 +241,16 @@ preview accepted:
   refusal and a parent that is not there at all is one too. A `--dry-run`
   install snapshots nothing, so this is the one check it does not make.
 
-Where one of those refuses, the preview prints the whole plan, says which
-check refused and why, and **advertises no command** — because the approved
-command would refuse too, and it would do so after the timer had already
+Where one of those refuses, the dry run prints the whole plan, says which
+check refused and why, and **advertises no command** — because the install
+would refuse too, and it would do so after the timer had already
 been disabled and stopped.
 
-Where the preview is run by an account that may not make one of those
+Where the dry run is run by an account that may not make one of those
 stats — an ancestor with no `o+x`, a root-only file — it says
 `could not be checked as this user` and names the path. That is neither
 "clean" nor a refusal: the check was not made, which is not the same as
-made and passed. Re-run the preview as root to make it before approving.
+made and passed. Re-run the dry run as root to make it before installing.
 
 There are no path flags: `argparse` rejects `--prefix` and its siblings
 outright. Every location the deployer writes as root is a literal compiled
@@ -633,5 +637,5 @@ its output for what it left, and copy the trail somewhere before removing
 it if the evidence is still wanted.
 
 `install.sh --uninstall` exists too, but it refuses to run from anywhere but
-the deployed copy under the prefix, for the same reason an approved install
+the deployed copy under the prefix, for the same reason a writing run
 does: a checkout is writable by the account that owns it (ADR-0005).

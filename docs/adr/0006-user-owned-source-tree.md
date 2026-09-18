@@ -74,7 +74,7 @@ claim is about what ends up on the node: "none of it writable by the account
 being monitored." That claim is about the prefix and the system-wide shell rc,
 and it holds — the payload is root-owned from creation, verified after the
 copy, verified again after `install.sh` runs, and `install.sh` itself refuses
-to run an approved install from anywhere but the deployed copy (ADR-0005,
+to run a writing install from anywhere but the deployed copy (ADR-0005,
 `require_deployed_copy()` and `require_root_owned_payload()`).
 
 **The operator is trusted to have reviewed what they cloned.** That is the

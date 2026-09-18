@@ -112,7 +112,7 @@ still refuses a writing run from anywhere but the deployed copy.
 - ADR-0008's exit-code sentence and ADR-0005's and ADR-0006's prose refer to
   the flag by name. They are descriptions of the command's spelling, not
   decisions that rest on it, so they are reworded where they appear and
-  neither record is narrowed.
+  none of the three is narrowed.
 
 ## Re-measure when
 
