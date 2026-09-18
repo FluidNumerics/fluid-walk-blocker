@@ -30,18 +30,43 @@ from conftest import ROOT
 # excluded on purpose: it is generated, and `build --check` already proves it
 # byte-identical to these sources. Scanning both would double every finding
 # and teach the next reader to edit a generated file.
+#
+# That duplication argument is the weaker half of why checking the TEMPLATE
+# alone is enough. The load-bearing half is that `@@UNSCOPED_DEPTH@@` maps to
+# `str(policy.unscoped_depth)` with no arithmetic, in `render/alternatives.py`
+# and again in `render/shim.py`. Because the substitution is an identity, the
+# template's claim and the rendered page's claim are the SAME claim. Were the
+# mapping ever to gain an offset, the template would still parse as correct,
+# `build --check` would still pass, and the page a user reads would be wrong.
 PROSE_GLOBS = ("README.md", "CLAUDE.md", "docs/*.md", "docs/adr/*.md",
                "node/docs/*.md.in")
 SCHEMA = os.path.join("schema", "site.schema.json")
 
 KEY = "unscoped_depth"
 
+# The source token, and the build placeholder that stands in for it. Two
+# literal tokens, still literal tokens -- NOT a case-insensitive match, which
+# would state a rule this project does not have ("any casing of these letters
+# refers to the key"). `node/docs/what-to-run-instead.md.in` states the
+# boundary twice using the placeholder, and keying on the lower-case token
+# alone made the detector blind to both.
+TOKENS = (KEY, "@@UNSCOPED_DEPTH@@")
+
 # The forms this project uses, each with the offset from `unscoped_depth` of
 # the shallowest root it advertises as allowed. Zero is correct. The non-zero
 # entries are the two wordings that were actually wrong, kept so the parser
 # RECOGNISES them and reports the number they mean, rather than failing as if
 # they were unknown.
-_KEYREF = r"(?:`\[filesystems\]\.unscoped_depth`|this level|this many|this depth|\d+)"
+# What counts as naming the key. A BARE DIGIT is deliberately absent: this
+# parser reads SOURCE prose, where the number is per-site and a sentence
+# should name the key rather than a value, so "at least 1 components below"
+# must be loudly unparseable rather than silently accepted as correct. Its
+# sibling `test_shim_agrees._advertised_minimum` does the opposite and is
+# right to -- that one reads the shim's rendered stderr, where a digit is the
+# only thing there is to find. Different artifact, different correct answer;
+# do not "restore" the digit here.
+_KEYREF = (r"(?:`\[filesystems\]\.unscoped_depth`|@@UNSCOPED_DEPTH@@"
+           r"|this level|this many|this depth)")
 FORMS = (
     # "a root at least N components below the mount point"
     (re.compile(r"at least\s+" + _KEYREF + r"\s+(?:directory\s+)?components?\s+below"), 0),
@@ -141,7 +166,7 @@ def boundary_claims():
     for label, text in list(_prose_sources()) + _schema_descriptions():
         implicit = label.endswith(":" + KEY)      # the key's own description
         for unit in _unwrapped_units(text):
-            if not (implicit or KEY in unit):
+            if not (implicit or any(tok in unit for tok in TOKENS)):
                 continue
             if _claims_a_boundary(unit):
                 claims.append((label, unit))
@@ -157,6 +182,11 @@ def test_the_scan_finds_the_statements_we_know_are_there():
     assert "docs/alternatives.md" in labels
     assert "docs/adr/0007-no-namespace-index.md" in labels
     assert SCHEMA + ":" + KEY in labels
+    # The template states the boundary twice through the build placeholder.
+    # Keying on the lower-case token alone missed both, and this line is the
+    # only thing that makes that failure loud if the token handling is ever
+    # narrowed again -- which is this same bug, in the test written to stop it.
+    assert os.path.join("node", "docs", "what-to-run-instead.md.in") in labels
 
 
 @pytest.mark.parametrize("label,unit", boundary_claims(),
