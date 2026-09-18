@@ -16,11 +16,12 @@ read is the example site's (ADR-0014).
 """
 
 import argparse
-import io
+import contextlib
 import io
 import json
 import os
 import py_compile
+import re
 import shutil
 import stat
 import subprocess
@@ -3585,3 +3586,24 @@ def test_verify_takes_no_path_arguments():
         with pytest.raises(SystemExit) as caught:
             deploy.main(["--verify", flag, "/tmp"])
         assert caught.value.code == 2, flag
+
+
+def test_the_docstring_names_every_option_the_parser_accepts():
+    """The usage block reads as a complete reference, and its first line is
+    what argparse prints as the description, so an option missing from it is
+    one a reader is told does not exist. `--verify` was added without it once.
+
+    The offered set is read from `--help` rather than restated here: a list
+    that repeats the parser agrees with itself and catches nothing."""
+    out = io.StringIO()
+    with pytest.raises(SystemExit):
+        with contextlib.redirect_stdout(out):
+            deploy.main(["--help"])
+    offered = set(re.findall(r"--[a-z][a-z-]+", out.getvalue()))
+    assert "--verify" in offered, "the parser stopped accepting --verify"
+
+    # `--help` is argparse's own, and `--dry-run` was undocumented before this
+    # change; widening that is not this change's business.
+    exempt = {"--help", "--dry-run"}
+    for flag in sorted(offered - exempt):
+        assert flag in deploy.__doc__, "%s is accepted but undocumented" % flag

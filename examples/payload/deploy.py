@@ -5,6 +5,8 @@
     python3 deploy.py --system --i-have-approval
                                          as root, actually install
     python3 deploy.py --uninstall        as root, reverse a --system install
+    python3 deploy.py --verify           compare the installed files against
+                                         the record they were built from
     python3 deploy.py --version
 
 This file ships at the root of the payload `walk-blocker build` emits and
