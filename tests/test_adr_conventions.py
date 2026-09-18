@@ -39,12 +39,19 @@ NARROWS_EXEMPT = {
 
 
 def _superseded_section(text):
-    """The `## Superseded wording` body, or None. The closing paragraph sits
-    below that section (ADR-0005 has both), so it is cut off here rather than
-    counted as part of it."""
+    """The `## Superseded wording` body, or None.
+
+    Stops at the closing paragraph (ADR-0005 has both) AND at any following
+    section. Cutting only at the closing paragraph reads a later section's text
+    as part of this one in a record that has no closing paragraph, which would
+    resolve a Narrows quote against prose that is not the superseded wording.
+    """
     if SUPERSEDED not in text:
         return None
-    return text.split(SUPERSEDED, 1)[1].split(CLOSING, 1)[0]
+    body = text.split(SUPERSEDED, 1)[1]
+    for stop in (CLOSING, "\n## "):
+        body = body.split(stop, 1)[0]
+    return body
 
 
 def _words(text):
@@ -142,6 +149,44 @@ def test_every_narrows_line_quotes_text_its_target_records_as_superseded():
                 "section it came from -- that is a copy, not a move (ADR-0023)"
                 % (_number(path), target, clause, target))
     assert seen >= 8, "expected at least the eight known Narrows lines"
+
+
+def _narrows_clause(narrower, target):
+    for found, clause in NARROWS.findall(_read(_by_number(narrower))):
+        if found == target:
+            return clause
+    raise AssertionError("ADR-%s no longer narrows ADR-%s" % (narrower, target))
+
+
+def test_each_narrows_exemption_still_has_the_reason_it_was_granted_for():
+    """An exemption is a claim about WHY a clause did not move, and ADR-0023
+    says it has to be argued rather than inherited.
+
+    Left as a bare list, the exemptions are the one way to make any future
+    failure of the narrows assertion disappear: add the pair, and the record it
+    covers is never checked again. So the set is pinned -- adding or removing an
+    entry fails here until someone writes the reason -- and each reason's
+    structural precondition is asserted, so an exemption whose ground has gone
+    stops being granted.
+    """
+    assert NARROWS_EXEMPT == {("0016", "0007"), ("0012", "0004")}, (
+        "the narrows exemption list changed. Each entry is a claim that has to "
+        "be argued in ADR-0023 and checked below, not added silently")
+
+    # ("0016", "0007") is exempt because the clause is Context-resident, and
+    # `## Context` is as-of-then by TEMPLATE.md's contract. Move it out of
+    # Context and the ground for the exemption is gone.
+    context = _read(_by_number("0007")).split("\n## Context", 1)[1].split("\n## Decision", 1)[0]
+    assert _words(_narrows_clause("0016", "0007")) in _words(context), (
+        "ADR-0007's narrowed clause is no longer in `## Context`, so the reason "
+        "its exemption was granted has gone -- it should move like the others")
+
+    # ("0012", "0004") is exempt because ADR-0012 keeps the clause in full,
+    # narrowing only an inference that was never part of it. If ADR-0012 stops
+    # saying so, the clause is superseded after all and has to move.
+    assert "kept in full" in _read(_by_number("0012")), (
+        "ADR-0012 no longer says it keeps ADR-0004's clause in full, so that "
+        "exemption has lost its ground")
 
 
 @pytest.mark.parametrize("path", ADRS, ids=_number)
