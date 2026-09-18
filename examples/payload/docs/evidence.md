@@ -56,6 +56,8 @@ the ADR it bears on.
 | 0018 The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table | Guarded-path timing with the trusted `awk` against the pure-`sh` reader on a reference deployment's mount table; the clone and program counts under `strace` are tool facts and live in the test |
 | 0019 The reconcile reports an uncovered mount when its state changes, not on every poll | n/a: design discussion, prompted by the owner's reading of the first deployment plan |
 | 0020 `opaque_traversal` names a process blocked at two consecutive polls, not one | A predecessor's report-only trail over several days at a reference deployment: distinct processes per verdict, and what the `opaque_traversal` rows were |
+| 0021 Root is the authorization | n/a: structural |
+| 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the purge verification |
 
 ## What this file is not
 

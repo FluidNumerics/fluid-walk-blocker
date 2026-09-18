@@ -1,7 +1,7 @@
 {
   "files": {
     "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
-    "README.md": "6d73982b9de441a549180efac5dca475b6eb69bdc6f0a2af65424994fde65439",
+    "README.md": "9d10c13d0241c2e1c5e184285533819bf70cc6a2a34f153b35aa34105aeec778",
     "deploy.py": "417fe236b2c9e863303b0bd00bd75a382fc31f73258ce5198fca471986a75385",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "7ea1d4905f1fcd19402406a2835bdf6cc0e232f3bb57b5a3866e3f28766b880d",
@@ -24,9 +24,10 @@
     "docs/adr/0019-uncovered-mounts-are-reported-on-change.md": "844f1c504c694791690ecdf24e1ebc895861ffb980258c499022adf42290c821",
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/0021-root-is-the-authorization.md": "f52d2f0f328307bb9aa278d98de0f4db2b1a745792959feed3ba2d43d5905f2f",
+    "docs/adr/0022-the-generic-tree-is-published.md": "bf9211503c9fea11eb63e3efadb57c83c56d736f138bfc818a3bcf0ea4fa57a0",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/alternatives.md": "35cf8f184e4ca53e865699f1e6e9637972239e09d2dc35470832fdc2f705fc14",
-    "docs/evidence.md": "145521a85d3f3909d1ea20100ebc9c58d7fe8ff4a0fd35e96c7ba3a3fbfb2a68",
+    "docs/evidence.md": "8bd74867dbdcd6a44fd46afb079fe960d39cc5a32917ad1c0686f63a9e92c45c",
     "docs/operating.md": "1c1b129a79e63de61a058a8f65d66ccac28794754d9ec36c0eac9293e70b1d71",
     "docs/plan.md": "209e5e9b44aecfed7ddd8143b12fcb2ca2552cead84d34f5c64f8fb6866981de",
     "docs/site-config.md": "44877ed688effa199d0b8bd89ed78a2c5400877f205bc0a607d3c69cd5380c1d",

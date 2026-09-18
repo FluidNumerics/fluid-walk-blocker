@@ -38,8 +38,23 @@ given and no term list found. The stderr summary always says `terms=on` or
 gh secret set FORBIDDEN_TERMS --repo FluidNumerics/fluid-walk-blocker < ~/.config/walk-blocker/forbidden-terms.txt
 ```
 
-A pull request from a fork receives no secrets; the CI job then exits 3 and
-fails loudly rather than passing on structural patterns alone.
+## Where each half runs
+
+The gate is two CI jobs (ADR-0022), split along the line between what is
+committed and what is secret.
+
+`ip-hygiene-structural` needs no secret and runs everywhere, including in a
+fork, where it is the whole of the gate that can run.
+
+`ip-hygiene-terms` runs only in this repository. A fork's own CI skips it
+quietly: a fork holds no customer list, has nothing of this customer's to
+protect, and cannot be given the secret by any mechanism GitHub offers. A pull
+request into this repository *from* a fork receives no secrets either, and
+there the job fails and says so rather than skipping — a job skipped by a
+job-level `if` counts as a *passing* required check, so skipping would be a
+green merge button over a scan that never ran. A maintainer re-runs the scan
+from a trusted ref before such a pull request merges, by pushing its branch to
+this repository.
 
 ## What it cannot do
 

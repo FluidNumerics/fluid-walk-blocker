@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0021` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0022` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -211,16 +211,26 @@ reference deployment; record held by Fluid Numerics privately" and give
 the re-measure condition and the config key. See ADR-0014 and
 `docs/evidence.md`.
 
-**The CI gate** (`ip-hygiene` job in `.github/workflows/ci.yml`, driven by
-`tools/check_no_site_literals.py`; how to run and rotate it is in
-`tools/README-ip-gate.md`) is the backstop. It fails the build, not warns,
-and **it must not itself contain the literals it hunts** — the customer term
-list lives outside the repository, at `~/.config/walk-blocker/forbidden-terms.txt`
-on the maintainer's workstation and as the `FORBIDDEN_TERMS` secret in CI;
-only structural patterns are committed. A customer hit is reported by
-position only. If the gate fires on a false positive, fix the wording or add
-a one-line `# site-literal-ok: <reason>` waiver for a structural pattern; a
-customer-term hit cannot be waived.
+**The CI gate** (the `ip-hygiene-structural` and `ip-hygiene-terms` jobs in
+`.github/workflows/ci.yml`, driven by `tools/check_no_site_literals.py`; how to
+run and rotate it is in `tools/README-ip-gate.md`) is the backstop. It fails the
+build, not warns, and **it must not itself contain the literals it hunts** — the
+customer term list lives outside the repository, at
+`~/.config/walk-blocker/forbidden-terms.txt` on the maintainer's workstation and
+as the `FORBIDDEN_TERMS` secret in CI; only structural patterns are committed. A
+customer hit is reported by position only. If the gate fires on a false
+positive, fix the wording or add a one-line `# site-literal-ok: <reason>` waiver
+for a structural pattern; a customer-term hit cannot be waived.
+
+The two halves run in different places, and the asymmetry is deliberate
+(ADR-0022). The structural half runs everywhere, secretless, including in a
+fork. The term half runs only in this repository: a fork's own CI skips it
+quietly, and a pull request into this repository *from* a fork fails it loudly,
+because a job skipped by a job-level `if` counts as a *passing* required check
+and a quiet skip there would be a green merge button over a scan that never ran.
+Do not "fix" that failure into a skip. **Since publication a miss is permanent**
+— a literal that lands here is public in every fork and archive, and the
+before-the-push defences are the only ones left.
 
 ## Style
 
@@ -267,7 +277,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0021`, in order — the decisions
+3. `docs/adr/0001` … `0022`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports
