@@ -132,10 +132,11 @@ An earlier draft of this record claimed a broader standalone role for
 `install.sh` than the installer enforced; review caught the contradiction and
 the record, not the installer, was corrected.
 
-**A future location change is a commit, not a flag.** If the payload ever has
-to move, the constant changes and the tests move with it. That is the intended
-cost: relocating a root-run installer's write targets is a decision worth a
-diff and a review, not a command-line argument.
+**A future location change is a `site.toml` change plus a build, not a flag**
+(ADR-0013). If the payload ever has to move, the site's configuration changes
+and the literals are regenerated from it. That is the intended cost:
+relocating a root-run installer's write targets is a decision worth a diff and
+a review, not a command-line argument.
 
 ## Re-measure when
 
@@ -148,6 +149,15 @@ and no site fact shrinks it.
   `[install].unit_dir`, `[install].staging_parent` — via ADR-0013, which
   generates the literals from them
 - `[hooks.<shell>].file`
+
+## Superseded wording
+
+Narrowed by ADR-0013. The Consequences above read:
+
+> A future location change is a commit, not a flag
+
+The literals are generated from `site.toml`, so a location change is a
+`site.toml` change plus a build.
 
 **This is not to be "fixed" by a later agent.** The question is settled here
 because it kept coming back. If it is revisited, revisit it with a new ADR

@@ -1,7 +1,7 @@
 # ADR-0002: Budget on per-user I/O pressure, not CPU time
 
 **Status:** accepted, 2026-09-16
-One clause of the third Consequences bullet — "it gates scanning, not reporting" — is narrowed by ADR-0009.
+The clause "it gates scanning, not reporting" is narrowed by ADR-0009 and is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0002 — see `docs/evidence.md`
 
 ## Context
@@ -97,9 +97,9 @@ cover the CPU-hog case Arbiter would have caught.
   busiest slice's were separated by a wide gap with nothing in between. The
   reaper first shipped with a threshold read off the cumulative table; it duly
   ranked the offender first and then declined to scan it. The threshold now
-  sits inside that gap, and it gates *scanning*, not reporting: a slice that
-  crosses it costs one `/proc` walk, and a walk that finds no traversal
-  reports nothing.
+  sits inside that gap, and it selects which findings carry
+  `stalling_slice: true` rather than gating anything: every poll scans and
+  classifies the whole process table (ADR-0009).
 - A stalling slice is evidence about a *user*, not a *process*. The reaper must
   never act on the slice alone; the `/proc` step that names a specific offender
   is what makes an action defensible to the person whose work is being killed.
@@ -133,3 +133,13 @@ and the answer is not to tune the threshold until it pretends otherwise.
 
 - `[reaper].io_stall_fraction`
 - `[reaper].cpu_stall_fraction`
+
+## Superseded wording
+
+Narrowed by ADR-0009. The Consequences above read:
+
+> it gates *scanning*, not reporting
+
+PSI corroborates and does not gate: every poll scans and classifies the whole
+process table, and the thresholds select which findings carry
+`stalling_slice: true`.
