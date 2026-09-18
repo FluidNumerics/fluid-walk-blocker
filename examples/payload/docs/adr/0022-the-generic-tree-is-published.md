@@ -100,10 +100,12 @@ record. A published ADR that named the object would be a map to it.
   have reported success and removed nothing. The instrument for an object the
   forge holds outside every ref is the forge's own collection, requested and then
   verified by fetching the object and finding it gone.
-- **The site's repository stops holding a credential for this one.** Its
-  cross-repository checkout needs no token, and its schema-validation job runs
-  unconditionally instead of skipping when a secret is absent. That job is a gate
-  again rather than a gate-shaped report.
+- **The site's repository can stop holding a credential for this one.** Once
+  publication lands, its cross-repository checkout needs no token and its
+  schema-validation job can run unconditionally rather than skipping when a
+  secret is absent, which turns a gate-shaped report back into a gate. That
+  change belongs to that repository and lands there, after publication, not
+  with this record.
 - **Review still reads the diff.** ADR-0014's "the gate's coverage is partial by
   construction" is unchanged and matters more: structural patterns catch shapes
   and the secret catches names, and a site fact with neither shape nor listed term

@@ -32,7 +32,7 @@ def test_the_tracked_tree_has_no_structural_site_literals():
 def test_the_customer_term_list_is_consulted_when_present():
     r = run(["--root", ROOT, "--require-terms", "--quiet"])
     if r.returncode == gate.EXIT_NO_TERMS:
-        pytest.skip("no customer term list on this machine; CI's ip-hygiene job enforces it")
+        pytest.skip("no customer term list on this machine; CI's ip-hygiene-terms job enforces it")
     assert r.returncode == 0, r.stdout
     assert r.stderr.strip().endswith("terms=on")
 

@@ -24,7 +24,7 @@
     "docs/adr/0019-uncovered-mounts-are-reported-on-change.md": "844f1c504c694791690ecdf24e1ebc895861ffb980258c499022adf42290c821",
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/0021-root-is-the-authorization.md": "f52d2f0f328307bb9aa278d98de0f4db2b1a745792959feed3ba2d43d5905f2f",
-    "docs/adr/0022-the-generic-tree-is-published.md": "18fef2c35dce47e3c3f3cc31b9d43f094fc9ac5b7b89c28c75f7097c3a3349e7",
+    "docs/adr/0022-the-generic-tree-is-published.md": "bf9211503c9fea11eb63e3efadb57c83c56d736f138bfc818a3bcf0ea4fa57a0",
     "docs/adr/TEMPLATE.md": "2c1cc6409522a7c3aa33df5772f19e03a9114beece250083a92aaeb2f5c0dc9e",
     "docs/alternatives.md": "35cf8f184e4ca53e865699f1e6e9637972239e09d2dc35470832fdc2f705fc14",
     "docs/evidence.md": "8bd74867dbdcd6a44fd46afb079fe960d39cc5a32917ad1c0686f63a9e92c45c",
