@@ -132,6 +132,15 @@ def test_every_narrows_line_quotes_text_its_target_records_as_superseded():
             assert _words(clause) in _words(section), (
                 "ADR-%s narrows ADR-%s on %r, which ADR-%s does not record "
                 "under `## Superseded wording`" % (_number(path), target, clause, target))
+            # ADR-0023 says the clause MOVES. Presence in the section does not
+            # prove that: a copy satisfies it while the stale sentence stays in
+            # the section a reader quotes, which is the whole defect. Assert the
+            # absence too, or the record that quotes itself passes again.
+            vacated = target_text.split("\n## Context", 1)[1].split(SUPERSEDED, 1)[0]
+            assert _words(clause) not in _words(vacated), (
+                "ADR-%s narrows ADR-%s on %r, which ADR-%s still carries in the "
+                "section it came from -- that is a copy, not a move (ADR-0023)"
+                % (_number(path), target, clause, target))
     assert seen >= 8, "expected at least the eight known Narrows lines"
 
 

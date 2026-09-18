@@ -60,12 +60,21 @@ give the number; give the procedure and the bar.
 The `site.toml` keys this decision reads or that a re-measurement would change,
 as a list. "none" is a valid answer and must be written.
 
+<!--
+Include the section below only where a later record narrowed wording in THIS
+record. Omit it entirely otherwise -- most records never have one. It sits
+below `## Site config touched` and above the closing paragraph, which stays
+the record's last words (ADR-0023).
+
 ## Superseded wording
 
-Only where a later record narrowed wording in this one. Quote the superseded
-clause verbatim, name the record that narrowed it, and say what holds instead.
-Omit the section entirely otherwise. It sits below `## Site config touched` and
-above the closing paragraph, which stays the record's last words (ADR-0023).
+Narrowed by ADR-XXXX. The Decision above read:
+
+> the superseded clause, quoted verbatim and moved out of the section it
+> came from, not copied
+
+What holds instead, in a sentence.
+-->
 
 <!--
 Include the closing paragraph below only where the decision was settled
