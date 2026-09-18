@@ -78,9 +78,10 @@ when the repository was published.
 Publication did not wait for it. The owner judged the two values non-identifying
 in isolation — neither names a customer, host, site or person — and reachable
 only by exact object id, and weighed that against holding the release open on a
-third party's queue. The request stands and the object will still be collected;
-the sequencing is what changed. The specifics are held privately, keyed to this
-record. A published ADR that named the object would be a map to it.
+third party's queue. The request stands; whether and when it is actioned is the
+forge's to decide, and this record does not promise an outcome it does not
+control. The specifics are held privately, keyed to this record. A published ADR
+that named the object would be a map to it.
 
 ## Consequences
 
