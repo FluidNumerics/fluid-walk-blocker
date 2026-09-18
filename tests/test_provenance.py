@@ -301,3 +301,43 @@ def test_only_the_distinct_versions_of_the_file_are_ever_read(repo, monkeypatch)
     assert result["distinct"] == 2
     assert len(reads) == 2, "read %d blobs for 2 distinct versions" % len(reads)
     assert len(set(reads)) == len(reads), "the same blob was read twice"
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-hash", "0" * 63, "0" * 65,
+                                 "g" * 64, "  ", "0" * 32 + "Z" * 32])
+def test_a_value_that_cannot_be_a_digest_is_refused_not_searched_for(
+        bad, repo, capsys):
+    """Searching for it would report NOT FOUND, which reads as "your
+    configuration was never reviewed" when the truth is "you mistyped an
+    argument". A false alarm in that direction is what teaches an operator to
+    stop believing the tool.
+
+    The empty string also used to reach the payload reader with no payload and
+    raise a TypeError: a traceback, which this tree never prints."""
+    code, out, err = _run(capsys, sha256=bad, repo=str(repo))
+    assert code == P.EXIT_ERROR, (out, err)
+    assert "Traceback" not in err
+    assert "not a sha256" in err
+    assert out == ""
+
+
+def test_an_uppercase_digest_is_accepted(repo, capsys):
+    """Refusing the shape must not refuse a correct value written the other
+    way; `sha256sum` output is lowercase but a person may paste either."""
+    code, out, _err = _run(capsys, sha256=P.sha256_bytes(CONFIG_B).upper(),
+                           repo=str(repo))
+    assert code == P.EXIT_FOUND, out
+
+
+def test_a_payload_whose_recorded_digest_is_not_one_is_refused(
+        repo, tmp_path, capsys):
+    """The tool is pointed at records that may have been hand-edited, so the
+    value it reads out of one gets the same check as the value typed in."""
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "site.lock.json").write_text(
+        json.dumps({"site_sha256": "nonsense", "files": {}}))
+    code, _out, err = _run(capsys, payload=str(payload), repo=str(repo))
+    assert code == P.EXIT_ERROR
+    assert "Traceback" not in err
+    assert "not a sha256" in err

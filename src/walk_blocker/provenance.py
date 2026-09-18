@@ -60,6 +60,26 @@ def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+_HEX = frozenset("0123456789abcdef")
+
+
+def checked_digest(value, where):
+    """A sha256 as this tool writes them, or a refusal.
+
+    Refused rather than searched for, because a value that cannot be a digest
+    would match nothing and be reported NOT FOUND -- which reads as "your
+    configuration was never reviewed" when the truth is "you mistyped an
+    argument". A false alarm in that direction is what teaches an operator to
+    stop believing the tool.
+    """
+    text = (value or "").strip().lower()
+    if len(text) != 64 or not set(text) <= _HEX:
+        raise ProvenanceError(
+            "%s is not a sha256: expected 64 hexadecimal characters, got %d "
+            "character(s)" % (where, len(text)))
+    return text
+
+
 def _git(repo, args, timeout, stdin=None):
     """Run git, or raise `ProvenanceError` naming the category and nothing else.
 
@@ -166,7 +186,7 @@ def payload_site_sha256(payload_dir):
     if not isinstance(lock, dict) or not isinstance(lock.get("site_sha256"), str):
         raise ProvenanceError("%s: no site_sha256; is this a built payload?"
                               % lock_path)
-    return lock["site_sha256"]
+    return checked_digest(lock["site_sha256"], lock_path + " site_sha256")
 
 
 def search(repo, ref, path, want, timeout=DEFAULT_TIMEOUT):
@@ -253,7 +273,10 @@ def provenance(payload=None, sha256=None, repo=".", ref=DEFAULT_REF,
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     try:
-        want = sha256 if sha256 else payload_site_sha256(payload)
+        if sha256 is None:
+            want = payload_site_sha256(payload)
+        else:
+            want = checked_digest(sha256, "--sha256")
         result = search(repo, ref, path, want, timeout)
     except ProvenanceError as exc:
         err.write("walk-blocker provenance: %s\n" % exc)
