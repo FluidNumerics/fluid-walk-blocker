@@ -12,7 +12,7 @@ import json
 import os
 import sys
 
-from . import __version__, build, config, paths
+from . import __version__, build, config, paths, provenance
 
 
 def _load_survey_module():
@@ -80,6 +80,12 @@ def cmd_build(args):
     return build.build(args.site, args.out, check=args.check)
 
 
+def cmd_provenance(args):
+    return provenance.provenance(payload=args.payload, sha256=args.sha256,
+                                 repo=args.repo, ref=args.ref, path=args.file,
+                                 timeout=args.timeout, as_json=args.json)
+
+
 # The maze on the README, printed by --help and --version.
 BANNER = """\
   ╶─┬─────────┬─────┬─────┬───┬─────────────┬───────┐
@@ -140,6 +146,28 @@ def build_parser():
                    help="compare DIR against a fresh render and write nothing; "
                         "exit 1 if they differ")
     p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("provenance",
+                       help="tie a built payload back to a reviewed commit")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--payload", metavar="DIR",
+                   help="built payload; its site.lock.json supplies the hash")
+    g.add_argument("--sha256", metavar="HEX",
+                   help="the hash itself, as printed by deploy.py --verify")
+    p.add_argument("--repo", default=".", metavar="DIR",
+                   help="the site's configuration repository (default .)")
+    p.add_argument("--ref", default=provenance.DEFAULT_REF, metavar="REF",
+                   help="the reviewed ref to search (default %s); never HEAD, "
+                        "which would validate against unreviewed work"
+                        % provenance.DEFAULT_REF)
+    p.add_argument("--file", default=provenance.DEFAULT_FILE, metavar="PATH",
+                   help="the configuration's path within the repository "
+                        "(default %s)" % provenance.DEFAULT_FILE)
+    p.add_argument("--timeout", type=float, default=provenance.DEFAULT_TIMEOUT,
+                   metavar="SECONDS", help="budget per git call (default %g)"
+                                           % provenance.DEFAULT_TIMEOUT)
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_provenance)
     return parser
 
 

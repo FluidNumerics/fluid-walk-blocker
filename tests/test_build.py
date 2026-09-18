@@ -412,7 +412,7 @@ def test_python_m_walk_blocker_build(tmp_path):
 def test_the_other_subcommands_are_untouched():
     parser = cli.build_parser()
     names = parser._subparsers._group_actions[0].choices
-    assert set(names) == {"validate", "schema", "survey", "build"}
+    assert set(names) == {"validate", "schema", "survey", "build", "provenance"}
 
 
 # ------------------------------------------------------- committed example --

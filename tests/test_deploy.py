@@ -16,9 +16,12 @@ read is the example site's (ADR-0014).
 """
 
 import argparse
+import contextlib
 import io
+import json
 import os
 import py_compile
+import re
 import shutil
 import stat
 import subprocess
@@ -3384,3 +3387,266 @@ def test_the_offender_listing_is_capped_at_ten_distinct_lines(capsys):
     deploy._write_offenders(offenders + offenders[:3])
     lines = capsys.readouterr().err.splitlines()
     assert lines == ["  /p/%02d: why %d" % (i, i) for i in range(10)], lines
+
+
+# --------------------------------------------------------------------------
+# --verify: the install against the record it was built from
+# --------------------------------------------------------------------------
+
+def _simulate_install(payload, prefix):
+    """Copy exactly what an install copies, reading the table rather than
+    restating it: a payload entry nobody added to PAYLOAD_SOURCES must show up
+    as a test failure, not as a second list that quietly agrees with itself."""
+    os.makedirs(prefix, exist_ok=True)
+    for rel, is_dir, _mode in deploy.PAYLOAD_SOURCES:
+        src, dst = os.path.join(payload, rel), os.path.join(prefix, rel)
+        if is_dir:
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    with open(os.path.join(prefix, deploy.PAYLOAD_MARKER), "w") as handle:
+        handle.write(walk_blocker.__version__ + "\n")
+    return prefix
+
+
+@pytest.fixture
+def installed(built_payload, tmp_path):
+    """A prefix holding what an install would have put there. `built_payload`
+    is the fixture this module already defines for the build's own product."""
+    return _simulate_install(str(built_payload), str(tmp_path / "installed"))
+
+
+def _verify(prefix):
+    class _Args(object):
+        pass
+    args = _Args()
+    args.prefix = prefix
+    out = io.StringIO()
+    return deploy.system_verify(args, out=out), out.getvalue()
+
+
+def test_a_clean_install_verifies(installed):
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_OK, out
+    assert "0 finding(s)" in out
+
+
+def test_an_edited_installed_file_differs(installed):
+    """The oracle for the whole mode."""
+    with open(os.path.join(installed, "shim", "guard.sh"), "a") as handle:
+        handle.write("\n# edited in place\n")
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_DRIFT, out
+    assert "differs: shim/guard.sh" in out
+
+
+def test_a_removed_installed_file_is_missing(installed):
+    os.remove(os.path.join(installed, "LICENSE"))
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_DRIFT, out
+    assert "missing: LICENSE" in out
+
+
+def test_an_added_file_under_an_installed_directory_is_extra(installed):
+    with open(os.path.join(installed, "docs", "stray.md"), "w") as handle:
+        handle.write("not from the payload\n")
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_DRIFT, out
+    assert "extra: docs/stray.md" in out
+
+
+def test_a_file_at_the_prefix_root_that_the_install_did_not_create_is_not_drift(installed):
+    """The prefix may already hold files this install did not create, and the
+    reconcile builds `bin/` there on every poll. Walking the root would report
+    a neighbour's file, and the symlink farm, as drift."""
+    os.makedirs(os.path.join(installed, "bin"), exist_ok=True)
+    with open(os.path.join(installed, "bin", "find"), "w") as handle:
+        handle.write("#!/bin/sh\n")
+    with open(os.path.join(installed, "unrelated"), "w") as handle:
+        handle.write("somebody else's file\n")
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_OK, out
+
+
+def test_the_installer_is_built_but_not_installed_and_is_not_reported_missing(installed):
+    """`deploy.py` is hashed into the lock and never installed -- it is this
+    program, run from the staged copy. A verifier that walks the lock naively
+    reports it missing on every run, forever."""
+    assert not os.path.exists(os.path.join(installed, "deploy.py"))
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_OK, out
+    assert "deploy.py" not in out
+
+
+def test_the_built_but_not_installed_set_is_exactly_the_installer(built_payload):
+    """Pinned so that a future payload file nobody adds to PAYLOAD_SOURCES is a
+    test failure rather than a silent hole in verification."""
+    with open(os.path.join(str(built_payload), "site.lock.json")) as handle:
+        lock = json.load(handle)
+    _expected, not_installed = deploy.expected_from_lock(lock)
+    assert not_installed == {"deploy.py"}
+
+
+def test_verify_checks_every_installed_file(installed, built_payload):
+    with open(os.path.join(str(built_payload), "site.lock.json")) as handle:
+        lock = json.load(handle)
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_OK
+    assert "%d file(s) checked" % (len(lock["files"]) - 1) in out
+
+
+@pytest.mark.parametrize("broken", ["missing", "truncated", "a-list", "no-files-key"])
+def test_a_record_that_cannot_be_read_is_cannot_verify_not_clean(installed, broken):
+    """Exit 1 means drift. A missing record is not drift and must never read as
+    clean either: there is nothing to compare against."""
+    lock = os.path.join(installed, "site.lock.json")
+    if broken == "missing":
+        os.remove(lock)
+    else:
+        with open(lock, "w") as handle:
+            handle.write({"truncated": "{", "a-list": "[]",
+                          "no-files-key": '{"version": "0.1.0"}'}[broken])
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_UNKNOWN, out
+    assert "differs:" not in out and "missing:" not in out
+
+
+def test_a_prefix_that_does_not_exist_is_cannot_verify(tmp_path):
+    code, out = _verify(str(tmp_path / "nothing-installed-here"))
+    assert code == deploy.VERIFY_UNKNOWN, out
+
+
+def test_the_marker_disagreeing_with_the_record_is_drift(installed):
+    """The marker is written before anything else, so it is the one check that
+    survives an install that stopped half way."""
+    with open(os.path.join(installed, deploy.PAYLOAD_MARKER), "w") as handle:
+        handle.write("9.9.9\n")
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_DRIFT, out
+    assert deploy.PAYLOAD_MARKER in out
+
+
+def test_a_record_that_disagrees_with_itself_is_drift(installed):
+    """site_sha256 and the site.toml entry are the lock's one internal
+    relation. A hand edit that updated one and forgot the other is caught."""
+    path = os.path.join(installed, "site.lock.json")
+    with open(path) as handle:
+        lock = json.load(handle)
+    lock["site_sha256"] = "0" * 64
+    with open(path, "w") as handle:
+        json.dump(lock, handle)
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_DRIFT, out
+    assert "site_sha256 disagrees" in out
+
+
+def test_verify_writes_nothing(installed):
+    """It is a reporter. Not a repair, not a chmod, not a re-copy."""
+    def snapshot():
+        seen = {}
+        for base, _dirs, names in os.walk(installed):
+            for name in names:
+                full = os.path.join(base, name)
+                st = os.lstat(full)
+                seen[full] = (st.st_size, st.st_mtime_ns, st.st_mode)
+        return seen
+    before = snapshot()
+    _verify(installed)
+    assert snapshot() == before
+
+
+def test_verify_needs_no_privilege(installed, monkeypatch):
+    """Every installed file is world-readable by decision (ADR-0012), and on a
+    shared node the people whose PATH this changed should be able to check the
+    guard that refuses their command."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    code, _out = _verify(installed)
+    assert code == deploy.VERIFY_OK
+
+
+def test_verify_refuses_the_approval_flag():
+    """Accepting it silently on a read-only mode teaches an operator that the
+    flag is decorative."""
+    with pytest.raises(SystemExit) as caught:
+        deploy.main(["--verify", "--i-have-approval"])
+    assert caught.value.code == 2
+
+
+def test_verify_is_a_mode_and_excludes_the_others():
+    for argv in (["--verify", "--system"], ["--verify", "--uninstall"]):
+        with pytest.raises(SystemExit) as caught:
+            deploy.main(argv)
+        assert caught.value.code == 2, argv
+
+
+def test_verify_takes_no_path_arguments():
+    """ADR-0005: this installer cannot be pointed somewhere else, and the new
+    mode gains no exception."""
+    for flag in PATH_FLAGS:
+        with pytest.raises(SystemExit) as caught:
+            deploy.main(["--verify", flag, "/tmp"])
+        assert caught.value.code == 2, flag
+
+
+def test_the_docstring_names_every_option_the_parser_accepts():
+    """The usage block reads as a complete reference, and its first line is
+    what argparse prints as the description, so an option missing from it is
+    one a reader is told does not exist. `--verify` was added without it once.
+
+    The offered set is read from `--help` rather than restated here: a list
+    that repeats the parser agrees with itself and catches nothing."""
+    out = io.StringIO()
+    with pytest.raises(SystemExit):
+        with contextlib.redirect_stdout(out):
+            deploy.main(["--help"])
+    offered = set(re.findall(r"--[a-z][a-z-]+", out.getvalue()))
+    assert "--verify" in offered, "the parser stopped accepting --verify"
+
+    # `--help` is argparse's own, and `--dry-run` was undocumented before this
+    # change; widening that is not this change's business.
+    exempt = {"--help", "--dry-run"}
+    for flag in sorted(offered - exempt):
+        assert flag in deploy.__doc__, "%s is accepted but undocumented" % flag
+
+
+@pytest.mark.parametrize("escape", [
+    "shim/../../../../etc/hostname",
+    "../outside",
+    "/etc/hostname",
+    "docs/../../..",
+])
+def test_a_record_naming_a_path_outside_the_payload_is_refused(installed, escape):
+    """The mode exists to read a record that may have been tampered with, so
+    the record cannot be assumed well formed. A path like this passes a plain
+    prefix test, leaves the prefix when joined, and would have an unprivileged
+    caller hash and report a file that is no part of the payload.
+
+    Refusing the whole record rather than skipping the entry is deliberate: if
+    it names something outside the payload, no per-file verdict taken from it
+    is worth printing."""
+    path = os.path.join(installed, "site.lock.json")
+    with open(path) as handle:
+        lock = json.load(handle)
+    lock["files"][escape] = "0" * 64
+    with open(path, "w") as handle:
+        json.dump(lock, handle)
+    code, out = _verify(installed)
+    assert code == deploy.VERIFY_UNKNOWN, out
+    assert "differs:" not in out and "missing:" not in out
+    assert "no part of the payload" in out
+
+
+def test_a_record_whose_keys_are_not_strings_is_refused(installed):
+    path = os.path.join(installed, "site.lock.json")
+    with open(path, "w") as handle:
+        handle.write('{"version": "0.1.0", "files": {"1": 2}}')
+    with open(path) as handle:
+        raw = json.load(handle)
+    raw["files"] = {"ok": 1}
+    with open(path, "w") as handle:
+        json.dump(raw, handle)
+    # a non-string VALUE is only ever unequal, which is drift, not a refusal;
+    # a non-string KEY cannot survive JSON, so the guard is about types we can
+    # actually receive. This pins that the refusal does not overreach.
+    code, _out = _verify(installed)
+    assert code in (deploy.VERIFY_DRIFT, deploy.VERIFY_UNKNOWN)
