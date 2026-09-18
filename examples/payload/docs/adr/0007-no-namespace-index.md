@@ -12,14 +12,15 @@ this well: a scheduler job token in argv makes it print the accounting query
 and the node's own job-triage command, which is the cheap answer to the
 question that caused the originating incident.
 
-Two intents had no answer at all: a whole-home unbounded name search, and the
-size question (`du -sh ~`). The first was originally described as "a user
-cannot search their own home directory", which overstates it. The depth gate
-runs before the mount judgement, so any bound within the ceiling passes, and
-any root at or below `[filesystems].unscoped_depth` passes unbounded. The real
-gap is narrower than claimed, and both halves of it are already covered by
-`walk-job`. An index is therefore a *convenience upgrade over `walk-job`*, not
-a gap-filler, which is why it is gated on measurement rather than assumed.
+Two intents had no answer at all: a whole-home unbounded name search, and
+the size question (`du -sh ~`). The first was originally described as "a
+user cannot search their own home directory", which overstates it. The depth
+gate runs before the mount judgement, so any bound within the ceiling
+passes, and any root at `[filesystems].unscoped_depth` or deeper passes
+unbounded. The real gap is narrower than claimed, and both halves of it are
+already covered by `walk-job`. An index is therefore a *convenience upgrade
+over `walk-job`*, not a gap-filler, which is why it is gated on measurement
+rather than assumed.
 
 The obvious remedy is an index: build it once, on a schedule, off the login
 node, and answer from the index instead of walking. The question is whether

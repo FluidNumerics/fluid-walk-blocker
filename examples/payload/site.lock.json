@@ -9,7 +9,7 @@
     "docs/adr/0004-root-owned-deploy-only.md": "bef6a7c04abd9f41409a4a6c57e5ad04b3c03fcf3f44e4fbaca5ad6a535352b8",
     "docs/adr/0005-argumentless-deploy.md": "b0684bafabea5a24ba5e5c537ce60894b0f59db4888da4ab1062e775a58f0f25",
     "docs/adr/0006-user-owned-source-tree.md": "05fd3cf27441fc4f5de819bf1a32bd31d468ec782c3a5b2741eb6040e36aa6ce",
-    "docs/adr/0007-no-namespace-index.md": "d66dea3351d500d75488b836bcc9cbddf909dd873d78a6cfae259de7b61e9118",
+    "docs/adr/0007-no-namespace-index.md": "d0bf06f9760b51d165a76624c64fd20fb1d74b4b996aeba4c17c2f7da8ad0659",
     "docs/adr/0008-hook-shells-are-config.md": "6d0a7bf3c5b777dd9be91b12723d5680f391c898b7e48ad4c453831c37c88b0d",
     "docs/adr/0009-psi-corroborates-it-does-not-gate.md": "47542bf4587dbf37e0c672e5c98f55011be272bcbdeca54d2e06cc207ce80954",
     "docs/adr/0010-opaque-traversal-names-tools.md": "ec8ff0ce850e5c774872a4b95a29f9af67ad8a154054eb313a3e8b2b1338d208",
