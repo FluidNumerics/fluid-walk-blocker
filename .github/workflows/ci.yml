@@ -69,17 +69,53 @@ jobs:
           uvx vermin==1.8.0 --target=3.9- --violations --no-tips \
             node examples/payload/*.py examples/payload/shim
 
-  ip-hygiene:
-    # Two lists (tools/README-ip-gate.md): structural patterns committed in
-    # the repo, customer terms supplied ONLY as a secret. The term list is
-    # written to a 0600 file under RUNNER_TEMP for the duration of the job and
-    # removed in an always() step. The scanner reports customer hits by
-    # position only and --quiet hides even structural matches, so nothing
-    # derived from the secret reaches the log. A fork PR gets no secrets: the
-    # job then exits 3 and fails loudly rather than passing structurally.
+  # The gate has two lists (tools/README-ip-gate.md) and ADR-0022 splits them
+  # into two jobs along the line between what is committed and what is secret.
+  ip-hygiene-structural:
+    # The committed half: the shapes a site fact takes, in
+    # tools/forbidden-patterns.txt. It needs no secret, so it runs everywhere,
+    # including in a fork -- where it is the whole of the gate that CAN run and
+    # the only half a fork's own tree needs. --terms /dev/null pins it to
+    # structural-only rather than letting it pick up a list from the
+    # environment, so the two jobs cannot silently overlap.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Scan the tracked tree for structural patterns
+        run: python3 tools/check_no_site_literals.py --terms /dev/null --quiet
+
+  ip-hygiene-terms:
+    # The secret half. It runs only where the term list can exist (ADR-0022).
+    #
+    # A FORK running its own CI gets a quiet skip via this `if`: it holds no
+    # customer list, has nothing of this customer's to protect, and cannot be
+    # given the secret by any mechanism GitHub offers. Failing its CI over a
+    # secret it neither has nor needs teaches its maintainer that a red gate is
+    # normal, which is how a real finding gets waved through later.
+    #
+    # A fork PR INTO this repository is the opposite case and must NOT skip. A
+    # job skipped by a job-level `if` reports as a PASSING required check, so a
+    # quiet skip there would be a green merge button over a scan that never
+    # ran. That case fails below instead, naming the reason.
+    if: github.repository == 'FluidNumerics/fluid-walk-blocker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Say why the term scan cannot run on a fork pull request
+        # GitHub withholds secrets from a fork's PR run, by design and with no
+        # opt-in. Fail loudly and explain, rather than skip into a false green.
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::The customer-term half of the IP-hygiene gate cannot run on a" \
+               "pull request from a fork: GitHub withholds FORBIDDEN_TERMS from fork runs." \
+               "This is expected, and it is not something the contributor can fix." \
+               "A maintainer re-runs the scan from a trusted ref before this merges." \
+               "See tools/README-ip-gate.md."
+          exit 3
 
       - name: Materialise the customer term list
         id: terms
@@ -90,10 +126,13 @@ jobs:
           umask 077
           f=$(mktemp -p "$RUNNER_TEMP" terms.XXXXXX)
           printf '%s\n' "$FORBIDDEN_TERMS" > "$f"
-          [ -s "$f" ] || { echo "FORBIDDEN_TERMS is empty or unavailable" >&2; exit 3; }
           echo "path=$f" >> "$GITHUB_OUTPUT"
 
       - name: Scan the tracked tree
+        # --require-terms is the load-bearing check, not a file-size test: an
+        # unset secret expands to empty, which printf writes as a lone newline
+        # that `test -s` would call non-empty. The scanner counts PARSED terms
+        # and exits 3 on none, so an absent list cannot pass as a clean scan.
         env:
           TERMS: ${{ steps.terms.outputs.path }}
         run: python3 tools/check_no_site_literals.py --require-terms --quiet --terms "$TERMS"
