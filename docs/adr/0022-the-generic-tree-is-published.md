@@ -71,9 +71,17 @@ Before publication the repository's whole object graph was audited: every commit
 reachable from the default branch and from every pull-request ref, and every
 unreachable object the forge still served. One orphaned object, superseded by an
 amendment before its branch merged, carried two of the customer's values in a
-test fixture. It was purged before the repository was made public, and the purge
-was verified rather than assumed. The specifics are held privately, keyed to this
-record. A published ADR that named the object would be a map to it.
+test fixture. Removing it needs the forge's own collection, because it is
+reachable from no ref a clone controls; that was requested and had not completed
+when the repository was published.
+
+Publication did not wait for it. The owner judged the two values non-identifying
+in isolation — neither names a customer, host, site or person — and reachable
+only by exact object id, and weighed that against holding the release open on a
+third party's queue. The request stands; whether and when it is actioned is the
+forge's to decide, and this record does not promise an outcome it does not
+control. The specifics are held privately, keyed to this record. A published ADR
+that named the object would be a map to it.
 
 ## Consequences
 
@@ -91,15 +99,17 @@ record. A published ADR that named the object would be a map to it.
   repository was private, an object stranded by an amendment was recoverable
   privately and purgeable before anyone outside could reach it. That grace is
   spent. The defences that remain run *before* the push — the pre-commit hook and
-  the gate — and there is no after-the-fact purge of a public repository as clean
-  as the one performed here.
+  the gate — because an after-the-fact collection on a public repository is a
+  request to a third party rather than something this side can carry out, and it
+  runs on their schedule, not the release's.
 - **`git filter-repo` was the wrong instrument, and why is the durable part.** It
   rewrites what is reachable from refs the local clone controls. An object
   orphaned by an amendment and a force-push before merge is reachable from no such
   ref and is retained by the forge independently of them. A local rewrite would
   have reported success and removed nothing. The instrument for an object the
-  forge holds outside every ref is the forge's own collection, requested and then
-  verified by fetching the object and finding it gone.
+  forge holds outside every ref is the forge's own collection, which is verified
+  by fetching the object afterwards and finding it gone. That verification is
+  the step this record's own object is still waiting on.
 - **The site's repository can stop holding a credential for this one.** Once
   publication lands, its cross-repository checkout needs no token and its
   schema-validation job can run unconditionally rather than skipping when a
@@ -118,3 +128,17 @@ n/a: structural. No property of any site bears on whether this tree is published
 ## Site config touched
 
 none
+
+## Superseded wording
+
+Corrected 2026-09-18, after the repository was published. The Decision above
+read:
+
+> It was purged before the repository was made public, and the purge was
+> verified rather than assumed.
+
+That described the sequence as planned, not the one that happened: publication
+went ahead with the collection still outstanding, deliberately and on the
+owner's judgement. The sentence is recorded here because a decision record that
+quietly acquires a true sentence in place of a false one teaches a reader the
+record was right all along.
