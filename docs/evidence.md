@@ -57,7 +57,7 @@ the ADR it bears on.
 | 0019 The reconcile reports an uncovered mount when its state changes, not on every poll | n/a: design discussion, prompted by the owner's reading of the first deployment plan |
 | 0020 `opaque_traversal` names a process blocked at two consecutive polls, not one | A predecessor's report-only trail over several days at a reference deployment: distinct processes per verdict, and what the `opaque_traversal` rows were |
 | 0021 Root is the authorization | n/a: structural |
-| 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the purge verification |
+| 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the collection request outstanding at publication |
 | 0023 A record states what holds now, and narrowed wording moves below it | n/a: structural |
 
 ## What this file is not
