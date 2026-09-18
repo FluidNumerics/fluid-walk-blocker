@@ -202,3 +202,11 @@ def test_the_report_only_job_is_not_a_required_gate_by_accident():
         "measure is no longer continue-on-error. It is a measurement campaign "
         "on an uncharacterised runner, and a gate that flakes trains people to "
         "re-run CI until it is green")
+    # The docstring above claims two properties, so assert both. A name or a
+    # docstring promising coverage the assertions do not provide is the defect
+    # this file exists to catch, and it is not exempt from it.
+    assert "pull_request" in str(measure.get("if", "")), (
+        "measure is no longer restricted to pull requests. On a push to main "
+        "there is no merge base to compare against, so it has nothing to "
+        "measure and would report a failure about the runner rather than the "
+        "change")
