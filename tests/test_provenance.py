@@ -273,14 +273,31 @@ def test_json_output_names_the_commit_and_the_hash(repo, capsys):
     assert len(data["matches"]) == 1
 
 
-def test_only_the_distinct_versions_of_the_file_are_ever_read(repo, capsys):
-    """The cost argument, as a property rather than a claim: a history with
-    many commits over a file that changed twice reads two blobs."""
+def test_only_the_distinct_versions_of_the_file_are_ever_read(repo, monkeypatch):
+    """The cost argument, measured rather than claimed.
+
+    The first version of this test asserted the REPORTED distinct count, which
+    is derived from the same dict the deduplication builds and so cannot tell
+    whether anything was deduplicated. It passed with the deduplication
+    removed. It now counts the reads themselves: a history of eight commits
+    over a configuration that changed twice must read two blobs.
+    """
     for i in range(6):
         _unrelated(repo, "payload rebuild %d" % i)
     head = _git(repo, "rev-parse", "HEAD").strip()
     _git(repo, "update-ref", "refs/remotes/origin/main", head)
+
+    reads = []
+    real = P.blob_sha256
+
+    def counting(repo_path, blob_id, timeout=P.DEFAULT_TIMEOUT):
+        reads.append(blob_id)
+        return real(repo_path, blob_id, timeout)
+
+    monkeypatch.setattr(P, "blob_sha256", counting)
     result = P.search(str(repo), "origin/main", "site.toml",
                       P.sha256_bytes(CONFIG_B))
     assert result["searched"] == 8
     assert result["distinct"] == 2
+    assert len(reads) == 2, "read %d blobs for 2 distinct versions" % len(reads)
+    assert len(set(reads)) == len(reads), "the same blob was read twice"
