@@ -151,6 +151,81 @@ def test_every_narrows_line_quotes_text_its_target_records_as_superseded():
     assert seen >= 8, "expected at least the eight known Narrows lines"
 
 
+# A prose reference to the corpus as a RANGE, e.g. "`0001` through `0023`" or
+# "`docs/adr/0001` … `0023`". The connective is required: without it this also
+# matches a citation pair like "(ADR-0001, ADR-0002)", which is not a range and
+# must not be rewritten when a record is added.
+ADR_RANGE = re.compile(r"0001[^0-9\n]*?(?:through|…|\bto\b)[^0-9\n]*?00(\d\d)")
+# Every `**Narrows:**` line, however malformed. NARROWS is the strict form; a
+# line this matches and NARROWS does not is one the convention test skips
+# silently.
+NARROWS_LOOSE = re.compile(r"^\*\*Narrows:\*\*", re.M)
+
+
+def _prose_files():
+    """Tracked markdown outside the generated payload.
+
+    `examples/payload/` is excluded for the reason `test_boundary_prose.py`
+    gives: it is a build product, `build --check` already proves it identical to
+    these sources, and scanning both reports every finding twice.
+    """
+    out = []
+    for base, dirs, names in os.walk(ROOT):
+        dirs[:] = [d for d in dirs
+                   if d not in {".git", "__pycache__", "node_modules"}
+                   and os.path.join(base, d) != os.path.join(ROOT, "examples", "payload")]
+        for name in sorted(names):
+            if name.endswith(".md"):
+                out.append(os.path.relpath(os.path.join(base, name), ROOT))
+    return sorted(out)
+
+
+def test_every_adr_range_in_prose_names_the_real_last_record():
+    """The corpus size is pinned by the count test, but it is also WRITTEN, in
+    prose, in files no other test reads.
+
+    When a record is added the count test fails and gets fixed; the prose can
+    stay a record behind with everything green. It was hand-updated in three
+    consecutive pull requests, which is how often a hand-updated reference is
+    eventually forgotten.
+    """
+    last = "%04d" % len(ADRS)
+    stale, seen = [], {}
+    for relative in _prose_files():
+        with open(os.path.join(ROOT, relative), encoding="utf-8") as fh:
+            for number, line in enumerate(fh, 1):
+                for match in ADR_RANGE.finditer(line):
+                    seen.setdefault(relative, 0)
+                    seen[relative] += 1
+                    if match.group(1) != last[2:]:
+                        stale.append((relative, number, match.group(1)))
+    assert stale == [], (
+        "prose names a corpus range ending at %r, but the last record is %s: %r"
+        % (stale[0][2] if stale else "", last, stale))
+    # Anti-vacuity: if the matcher stops matching, the assertion above passes
+    # over an empty list and this test becomes furniture. These two files carry
+    # the reading order and their references are the ones that go stale.
+    for required in ("README.md", "CLAUDE.md"):
+        assert seen.get(required), (
+            "no ADR range found in %s -- the matcher has stopped matching, or "
+            "the reading order moved" % required)
+
+
+def test_every_narrows_line_is_matched_by_the_strict_pattern():
+    """`NARROWS` drives the convention tests, so a line it does not match is a
+    narrowing that is never checked.
+
+    The count assertion in the narrows test is a floor, not a coupling: a
+    malformed `Narrows:` line -- wrong quotes, a missing comma -- drops out of
+    `findall` silently and the floor still holds.
+    """
+    for path in ADRS:
+        text = _read(path)
+        assert len(NARROWS_LOOSE.findall(text)) == len(NARROWS.findall(text)), (
+            "%s has a `**Narrows:**` line the strict pattern does not match, so "
+            "its narrowing is skipped by every check in this file" % path)
+
+
 def _narrows_clause(narrower, target):
     for found, clause in NARROWS.findall(_read(_by_number(narrower))):
         if found == target:

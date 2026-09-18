@@ -26,7 +26,11 @@ dependencies = [
 walk-blocker = "walk_blocker.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "pyflakes"]
+# pyyaml is test-only: `tests/test_ci_workflow.py` asserts the shape of the
+# IP-hygiene gate, and a hand-rolled reader for that is a second, unversioned
+# YAML implementation whose bugs would show up as assertions about a workflow
+# that says something else. Nothing under `node/` may import it (ADR-0015).
+dev = ["pytest>=8", "pyflakes", "pyyaml"]
 
 [tool.hatch.version]
 path = "VERSION"

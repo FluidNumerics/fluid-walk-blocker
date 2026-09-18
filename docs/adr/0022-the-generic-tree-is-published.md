@@ -98,10 +98,13 @@ that named the object would be a map to it.
 - **A force-push during review now orphans objects in public.** While the
   repository was private, an object stranded by an amendment was recoverable
   privately and purgeable before anyone outside could reach it. That grace is
-  spent. The defences that remain run *before* the push — the pre-commit hook and
-  the gate — because an after-the-fact collection on a public repository is a
-  request to a third party rather than something this side can carry out, and it
-  runs on their schedule, not the release's.
+  spent, and the defences that remain do not all act in time to replace it. The
+  pre-commit hook runs before the commit; the gate runs in CI, on `push` and
+  `pull_request`, so it acts before the *merge* and not before the push. Nothing
+  in this repository prevents a pushed object from existing — the gate stops a
+  literal reaching `main`, which is what it is for, and an object orphaned on the
+  way there is already retrievable by id. Recovering from that is a request to a
+  third party, on their schedule rather than the release's.
 - **`git filter-repo` was the wrong instrument, and why is the durable part.** It
   rewrites what is reachable from refs the local clone controls. An object
   orphaned by an amendment and a force-push before merge is reachable from no such
