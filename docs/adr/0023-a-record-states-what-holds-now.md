@@ -74,10 +74,22 @@ reader cannot date is worth less than a Context carrying a sentence a later
 record refined. A narrowed clause that lives in Context stays where it is, and
 the Status note carries the correction.
 
+A narrowing that clarifies how a clause should be read, rather than replacing
+what it says, moves nothing. ADR-0012 narrows ADR-0004 by recording that "none
+of it writable by the account being monitored" is kept in full, and that an
+inference about readability was never part of it; the clause still states what
+holds, so it stays where it is and the Status note carries the refinement.
+Filing such a clause under superseded wording would tell a reader that a live
+clause is dead.
+
 `Narrows:` survives, and so does the reciprocal note under the target's Status.
 The quote in a `Narrows:` line resolves against the target's
 `## Superseded wording` section, not against its Decision or Consequences, and
-`tests/test_adr_conventions.py` is what holds that to be true.
+`tests/test_adr_conventions.py` is what holds that to be true. The two
+exemptions above — a Context-resident clause, and a clause a narrowing kept in
+full — are a named list of narrowing pairs in that test, each with its reason,
+so that an exemption is countable and has to be argued for rather than
+absorbed by a looser matcher.
 
 This record is the licence for editing the bodies of accepted records, and it
 exists before any of them is edited. Each such edit is a verbatim move of the
@@ -102,6 +114,13 @@ true, and nothing else — no rewording, no re-wrapping, no tidying in passing.
   correction.** That is the cost of the exemption above, accepted deliberately.
   It is not a defect awaiting a fix, and a later reviewer who re-raises it
   should be answered with this paragraph.
+- **Six of the eight narrowings move wording; two do not.** The count is worth
+  stating because a reviewer counting `Narrows:` lines against sections will
+  otherwise find a discrepancy and read it as an omission. Seven records carry
+  the new section — one of them, ADR-0008, has no `Narrows:` line pointing at it
+  at all and carries superseded wording anyway, which is why the section is
+  keyed on a record holding superseded wording rather than on something
+  narrowing it.
 - **A "verbatim" move is not checkable by the test.** The comparison normalises
   whitespace and strips emphasis and code spans, so a move that silently
   re-wraps a line or drops a backtick passes. Review is the only thing that
