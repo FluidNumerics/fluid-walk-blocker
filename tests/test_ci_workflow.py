@@ -16,9 +16,12 @@ as confident assertions about a workflow that says something else.
 """
 import os
 
-import pytest
-
-yaml = pytest.importorskip("yaml")
+# A plain import, deliberately, not `pytest.importorskip`. PyYAML is a declared
+# member of the `dev` group, so absent it the environment is broken and the
+# suite should say so. Skipping instead would take all seven assertions below
+# out of the run and report green for it -- which is the exact failure ADR-0022
+# is about, reproduced inside the tests that enforce ADR-0022.
+import yaml
 
 from conftest import ROOT
 
@@ -155,6 +158,8 @@ def test_no_document_names_a_gate_job_that_does_not_exist():
     # pattern so that a stale reference anywhere else still fails.
     exempt = {os.path.join("tests", "test_ci_workflow.py")}
     stale = []
+    live = []
+    scanned = 0
     for base, dirs, files in os.walk(ROOT):
         dirs[:] = [d for d in dirs
                    if d not in {".git", "__pycache__", "node_modules"}
@@ -165,14 +170,27 @@ def test_no_document_names_a_gate_job_that_does_not_exist():
             relative = os.path.relpath(os.path.join(base, name), ROOT)
             if relative in exempt:
                 continue
+            scanned += 1
             with open(os.path.join(base, name), encoding="utf-8", errors="replace") as fh:
                 for number, line in enumerate(fh, 1):
                     for found in pattern.findall(line):
-                        if found not in names:
-                            stale.append((relative, number, found))
+                        (stale if found not in names else live).append(
+                            (relative, number, found))
     assert stale == [], (
         "a document names a gate job that is not in ci.yml (jobs are %s): %r"
         % (sorted(names & {STRUCTURAL, TERMS}), stale))
+    # Anti-vacuity, and the reason this test needs it more than most: every
+    # other assertion here fails closed on a bad parse, but this one asserts
+    # over a list built by a filesystem walk. A walk that reached nothing --
+    # wrong root, an extension filter that stopped matching, an exemption that
+    # grew -- leaves `stale` empty and passes while checking nothing.
+    assert scanned > 10, (
+        "scanned only %d files; the walk is not reaching the tree, so the "
+        "assertion above passed over an empty list" % scanned)
+    assert live, (
+        "no reference to a gate job was found anywhere. The documentation does "
+        "name both halves, so finding none means the matcher or the walk has "
+        "stopped working rather than that the tree is clean")
 
 
 def test_the_report_only_job_is_not_a_required_gate_by_accident():
