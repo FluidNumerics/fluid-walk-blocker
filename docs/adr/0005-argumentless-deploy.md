@@ -109,9 +109,9 @@ autouse fixture is autouse for that reason — previously a test that omitted
 **`install.sh` keeps its own flags, but not every mode.** It is a POSIX shell
 script whose own test suite drives it into a tmp tree through those flags, and
 an authorized operator may still run it directly for a **preview** or an
-unprivileged **`--relink`**. What it will not do any more is an approved
-install or a root `--relink` from anywhere but the deployed copy under the
-prefix: `require_deployed_copy()` refuses those, because `link_farm` points
+unprivileged **`--relink`**. What it will not do any more is a writing run
+-- an install, or a root `--relink` -- from anywhere but the deployed copy
+under the prefix: `require_deployed_copy()` refuses those, because `link_farm` points
 every shim at `$HERE/guard.sh` and a checkout is writable by the account that
 owns it.
 

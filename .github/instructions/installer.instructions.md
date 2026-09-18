@@ -5,7 +5,7 @@ description: Reviewing the root-run deployer, the shell installer it invokes, an
 
 # This code runs as root on a shared node
 
-`deploy.py --system --i-have-approval` is run by an authorized sysadmin as
+`deploy.py --system` is run by an authorized sysadmin as
 root. `install.sh` is also executed as root by the systemd timer on every
 reconcile (`[timer].on_calendar`). Assume every path here is a root-write
 sink. Every one of those paths is a literal stamped in by `walk-blocker build`
@@ -48,7 +48,7 @@ uninstall must run it.
 A preview writes nothing, so a check there has nothing to guard — but it still
 has a refusal to predict. Gate the *refusal* on whether the run will write;
 never gate the *check* itself off entirely, or the preview advertises a command
-that fails the moment approval is supplied. Report a clean run with no note: a
+that fails the moment the install is run. Report a clean run with no note: a
 warning that fires every time is one the operator learns to skip.
 
 ## Hook files are config
@@ -68,5 +68,5 @@ reclassify it.
   source tree (ADR-0006). Both are settled.
 - Reading `site.toml`, or any configuration file, on the node (ADR-0013). The
   file in the payload is a record of what was built, not an input.
-- Running an approved install or a root `--relink` from anywhere but
+- Running a writing run -- an install, or a root `--relink` -- from anywhere but
   `$PREFIX/shim`.

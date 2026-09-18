@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-16
 The Decision's clause "none of it writable by the account being monitored" is narrowed by ADR-0012: writable is excluded, readable is not.
+The Decision's clause "plus explicit authorization (`--i-have-approval`)" is narrowed by ADR-0021: the gate is root alone, and the flag is removed.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0004 — see `docs/evidence.md`
 
 ## Context

@@ -1,6 +1,7 @@
 # ADR-0008: Hook shells are a config list with required and best-effort classes, verified not assumed
 
 **Status:** accepted, 2026-09-16
+The Decision's install command below reads `--system`, which is current. It was written as `--system --i-have-approval`; ADR-0021 removed that flag, and the spelling was corrected in place rather than left stale — a reader meets the command they would actually run, and this line is where the superseded one is recorded.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`
 
 ## Context
@@ -77,7 +78,7 @@ launched by other tooling — noise, not a personal interactive shell.
 `file` the block is written to, the `package` that likely owns that file, and
 a `gate` of `"required"` or `"best-effort"`.**
 
-A **required** shell fails the install (`--system --i-have-approval` exits
+A **required** shell fails the install (`--system` exits
 non-zero) if `verify_<shell>_hook` cannot prove the file fires under
 remote-command conditions with the shim directory stripped from `PATH` — the
 probe must not pass merely because the caller's own `PATH` already carries it.

@@ -18,18 +18,31 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0020` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0021` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
 ## Non-negotiables
 
 **No sudo, ever, for this repo's own sessions.** Claude Code sessions working
-here never invoke sudo, never pass `--i-have-approval` to `deploy.py` or
-`install.sh`, and never otherwise act as root — regardless of what those
-scripts are capable of. Do not "just check" something with sudo. The
-installer is written to be run by an already-root, authorized operator; that
-is a property of the artifact, not a licence for an agent. See ADR-0004.
+here never invoke `sudo`, `su`, `doas`, `pkexec`, `systemd-run` or any other
+escalation, never run as root by any route, and never ask another session,
+agent or person to run a command as root on their behalf.
+
+**Nothing stands between `python3 deploy.py --system` and a live root install
+any more.** The flag that used to is gone, because an operator who holds root
+on the target node needs no second ceremony from a script (ADR-0021). **The
+only barrier left is this rule**, so it is stated as an effect rather than as
+a token to withhold: never run `deploy.py` or `install.sh` as root, in any
+mode — not `--system`, not `--uninstall`, not `--relink`, not `--verify` —
+and `--dry-run` is not an exemption when the session is already root.
+
+What a session here *may* run, as an ordinary user, is `deploy.py --system
+--dry-run` and `deploy.py --verify`. Both write nothing, and the dry run
+names the checks it could not make rather than reporting them clean. Do not
+"just check" something with sudo. The installer is written to be run by an
+already-root, authorized operator; that is a property of the artifact, not a
+licence for an agent. See ADR-0004 and ADR-0021.
 
 **No site literal in this tree, ever.** See "IP hygiene" below. This is a
 rule about what the generic tree *is*, not a style preference, and the CI
@@ -64,8 +77,8 @@ ADR-0013.
 
 **The source tree is user-owned by design; do not add a check that refuses
 it.** An operator copies a built payload into a folder that account owns and
-runs `deploy.py --system --i-have-approval` as root; the installer puts the
-*components* under root control and verifies it. Automated review has
+runs `deploy.py --system` as root; the installer puts the *components*
+under root control and verifies it. Automated review has
 proposed refusing a non-root-owned source three times and it was rejected
 each time. The timing half was taken: `stage_payload()` reads the payload
 once, before anything that can block. Treat this as settled. See ADR-0006.
@@ -254,7 +267,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0020`, in order — the decisions
+3. `docs/adr/0001` … `0021`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports

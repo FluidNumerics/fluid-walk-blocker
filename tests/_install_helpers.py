@@ -414,7 +414,14 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
     stage_readme(layout.prefix)
 
     if script is None:
-        dest = layout.shim_dir if "--i-have-approval" in args else next_copy_dir(layout)
+        # A WRITING --system run must come from the deployed copy;
+        # require_deployed_copy() refuses it from anywhere else. Keyed
+        # on "--system and not --dry-run", which is what the approval
+        # flag used to stand in for -- `--uninstall` and `--relink`
+        # keep taking a fresh copy dir exactly as before.
+        dest = (layout.shim_dir
+                if "--system" in args and "--dry-run" not in args
+                else next_copy_dir(layout))
         stamped_install(tmp_path, dest=dest, layout=layout, **site_overrides)
         script = layout.script
     else:

@@ -179,7 +179,7 @@ def test_the_alternative_every_refusal_names_is_actually_linked(tmp_path):
     the node provides walk-job but this installer. The advertised name is
     read out of the rendered guard.sh rather than written here, so the two
     cannot drift apart: rename the tool in one place and this fails."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
     guard = (layout.shim_dir / "guard.sh").read_text()
     advice = [line for line in guard.splitlines() if "-- %s ..." in line]
@@ -211,7 +211,7 @@ def test_the_uninstall_takes_the_walk_job_link_with_it(tmp_path):
     """An empty keep-list sweeps the directory, so walk-job goes the way the
     shims do -- and the `rmdir` that follows only succeeds if nothing is
     left. The payload itself is left for deploy.py."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
     assert os.path.islink(str(layout.bin / "walk-job"))
     result, layout = run_install(tmp_path, ["--uninstall"], layout=layout, fake_uid=0)
@@ -224,7 +224,7 @@ def test_an_install_refuses_a_prefix_with_no_walk_job(tmp_path):
     """Same treatment as a missing guard.sh: the installer is about to put
     this file on every user's PATH, and the answer to a prefix without it is
     to rerun deploy.py rather than to link a name at nothing."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"],
+    result, layout = run_install(tmp_path, ["--system"],
                                  fake_uid=0, walk_job=False)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "walk-job" in result.stderr
@@ -236,7 +236,7 @@ def test_a_user_owned_walk_job_is_refused(tmp_path):
     it, so its owner could choose what they all execute. Checked exactly as
     guard.sh is."""
     result, layout = run_install(
-        tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+        tmp_path, ["--system"], fake_uid=0,
         stat_body=stat_stub_uid_for("*/walk-job", "1000 755"))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "walk-job is owned by" in result.stderr
@@ -317,7 +317,7 @@ def test_relink_is_silent_when_the_hook_is_intact(tmp_path):
     real, then relink from the DEPLOYED copy, which is what the timer runs."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    installed, layout = run_install(tmp_path, ["--system", "--i-have-approval"],
+    installed, layout = run_install(tmp_path, ["--system"],
                                     fake_uid=0, layout=layout)
     assert installed.returncode == 0, installed.stderr
     assert "verified" in installed.stdout
@@ -555,7 +555,7 @@ def test_an_approved_install_runs_the_same_under_both_shells(tmp_path, shell):
         pytest.skip("%s is not installed" % shell)
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"],
+    result, layout = run_install(tmp_path, ["--system"],
                                  fake_uid=0, layout=layout, shell=shutil.which(shell))
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.count("verified") == 3, result.stdout
@@ -614,6 +614,38 @@ def test_version_reflects_a_different_stamped_value(tmp_path):
     assert result.stdout.endswith("\nwalk-blocker 9.8.7\n"), result.stdout
 
 
+def test_dry_run_is_refused_in_the_modes_that_cannot_honour_it(tmp_path):
+    """Refused, not ignored, and this is the whole point of the pair.
+
+    `--dry-run` is parsed before the mode is known, so it is syntactically
+    accepted everywhere -- but only the `--system` arm reads it. `--relink`
+    rebuilds the shim farm and `--uninstall` strips the hook blocks, both
+    unconditionally and both as root. Accepting the flag there and writing
+    anyway is worse than refusing, because the caller believes they asked for
+    a dry run and got one.
+
+    Before ADR-0021 this argv did not parse at all: `--dry-run` did not exist
+    in this script, so it fell to the unknown-argument arm. Removing the
+    approval flag introduced the flag -- and the silent ignore with it.
+    """
+    layout = stamped_install(tmp_path)
+    for mode in ("--relink", "--uninstall"):
+        result = subprocess.run(
+            [SH, str(layout.script), mode, "--dry-run"],
+            capture_output=True, text=True)
+        assert result.returncode == 64, (mode, result.stdout, result.stderr)
+        assert "--dry-run applies to --system only" in result.stderr, mode
+        assert mode.lstrip("-") in result.stderr, mode
+
+
+def test_dry_run_is_still_honoured_by_the_system_arm(tmp_path):
+    """The other half: the refusal above must not have taken the real one."""
+    result, layout = run_install(tmp_path, ["--system", "--dry-run"])
+    assert result.returncode == 0, result.stderr
+    assert not layout.bashrc.exists()
+    assert not layout.bin.exists()
+
+
 def test_an_unknown_argument_and_a_missing_mode_are_usage_errors(tmp_path):
     layout = stamped_install(tmp_path)
     for argv in (["--prefix", "/x"], []):
@@ -628,18 +660,18 @@ def test_an_unknown_argument_and_a_missing_mode_are_usage_errors(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_system_mode_prints_and_does_not_execute(tmp_path):
-    result, layout = run_install(tmp_path, ["--system"])
+    result, layout = run_install(tmp_path, ["--system", "--dry-run"])
     assert result.returncode == 0
     assert "As root" in result.stdout
     assert str(layout.bashrc) in result.stdout
     assert str(layout.zshenv) in result.stdout
     assert str(layout.fishconf) in result.stdout
-    assert not layout.bashrc.exists(), "--system without approval must touch nothing"
+    assert not layout.bashrc.exists(), "a --system dry run must touch nothing"
     assert not layout.bin.exists()
 
 
-def test_system_mode_refuses_without_root_even_when_approved(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=1000)
+def test_system_mode_refuses_without_root(tmp_path):
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=1000)
     assert result.returncode == 3
     assert "must run as root" in result.stderr
     assert not layout.bashrc.exists()
@@ -650,7 +682,7 @@ def test_system_mode_self_executes_when_root_and_approved(tmp_path):
     guard returns before anything useful runs, so the block goes above it."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stderr
     assert "verified" in result.stdout
     assert layout.shims() == {"find", "grep", "du"}
@@ -673,7 +705,7 @@ def test_system_mode_self_executes_when_root_and_approved(tmp_path):
 def test_the_block_exports_the_stamped_shim_dir_and_audit_path(tmp_path):
     """Sourcing the block in a fresh shell yields the two exported values the
     shim reads, and puts the shim directory first on PATH exactly once."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
     probe = tmp_path / "probe.sh"
     probe.write_text('. "%s"\n. "%s"\nprintf \'%%s\\n%%s\\n%%s\\n\' "$WALK_BLOCKER_SHIM_DIR" '
@@ -690,8 +722,8 @@ def test_the_block_exports_the_stamped_shim_dir_and_audit_path(tmp_path):
 def test_system_mode_installing_twice_does_not_stack_blocks(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stderr
     assert layout.bashrc.read_text().count("WALK_BLOCKER_SHIM_DIR=") == 1
     assert layout.zshenv.read_text().count("WALK_BLOCKER_SHIM_DIR=") == 1
@@ -701,7 +733,7 @@ def test_system_uninstall_leaves_the_hook_files_as_it_found_them(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
     layout.zshenv.write_text("# a stock zshenv\n")
-    run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stderr
     assert layout.bashrc.read_text() == STOCK_BASHRC
@@ -716,7 +748,7 @@ def test_a_first_install_backs_up_the_pre_install_hook_files(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
     layout.zshenv.write_text("# a stock zshenv\n")
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (layout.bashrc.parent / (layout.bashrc.name + ORIG)).read_text() == STOCK_BASHRC
     assert (layout.zshenv.parent / (layout.zshenv.name + ORIG)).read_text() == "# a stock zshenv\n"
@@ -730,8 +762,8 @@ def test_a_second_install_does_not_clobber_the_original_backup(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
     layout.zshenv.write_text("# a stock zshenv\n")
-    run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (layout.bashrc.parent / (layout.bashrc.name + ORIG)).read_text() == STOCK_BASHRC
     assert (layout.zshenv.parent / (layout.zshenv.name + ORIG)).read_text() == "# a stock zshenv\n"
@@ -740,7 +772,7 @@ def test_a_second_install_does_not_clobber_the_original_backup(tmp_path):
 def test_no_backup_is_left_when_the_hook_file_did_not_exist(tmp_path):
     """A `.orig` snapshot of a file that was never there would misreport
     that it existed and was empty."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (layout.bashrc.parent / (layout.bashrc.name + ORIG)).exists()
     assert not (layout.zshenv.parent / (layout.zshenv.name + ORIG)).exists()
@@ -749,7 +781,7 @@ def test_no_backup_is_left_when_the_hook_file_did_not_exist(tmp_path):
 def test_system_uninstall_refuses_without_root(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=1000, layout=layout)
     assert result.returncode == 3
     assert "must run as root" in result.stderr
@@ -763,7 +795,7 @@ def test_system_mode_hook_verification_catches_a_hook_that_does_not_fire(tmp_pat
     it -- and says plainly that the partial state is live, not rolled back."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, bash_ignores_bashrc=True)
     assert result.returncode == 4, (
         "installer reported success with a shell that ignores the hook file\n"
@@ -783,7 +815,7 @@ def test_system_mode_reports_a_written_but_empty_block_plainly(tmp_path):
     --uninstall, not just that nothing was linked."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, tools=())
     assert result.returncode == 4, result.stdout + result.stderr
     assert "nothing was linked" in result.stderr
@@ -801,7 +833,7 @@ def test_system_mode_verification_cannot_pass_on_an_inherited_PATH(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
     env = sandbox_env(layout, layout.toolbin, PATH="%s:%s" % (layout.bin, layout.toolbin))
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, bash_ignores_bashrc=True,
                                  zsh_ignores_zshenv=True, env=env)
     assert result.returncode == 4, (
@@ -816,7 +848,7 @@ def test_zsh_verification_cannot_pass_on_an_inherited_PATH(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
     env = sandbox_env(layout, layout.toolbin, PATH="%s:%s" % (layout.bin, layout.toolbin))
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, zsh_ignores_zshenv=True, env=env)
     assert result.returncode == 4, result.stdout + result.stderr
     assert "a non-interactive bash resolves" in result.stdout, (
@@ -829,7 +861,7 @@ def test_every_path_the_hook_blocks_advertise_exists(tmp_path):
     reader to a file under the prefix. The reference is read out of the
     generated block rather than written here, so moving the pointer fails
     this instead of going quiet."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
     for hook in (layout.bashrc, layout.zshenv, layout.fishconf):
         text = hook.read_text()
@@ -847,7 +879,7 @@ def test_every_path_the_hook_blocks_advertise_exists(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_system_mode_zsh_hook_verification_catches_a_hook_that_does_not_fire(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  zsh_ignores_zshenv=True)
     assert result.returncode == 4, result.stdout + result.stderr
     assert "FAILED to verify the zsh hook" in result.stderr
@@ -859,7 +891,7 @@ def test_verify_hooks_reports_both_failures_in_one_run(tmp_path):
     """verify_hooks() does not short-circuit: a single failed install reports
     every broken required hook in the same run rather than one-fix-one-
     discover."""
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0,
                              bash_ignores_bashrc=True, zsh_ignores_zshenv=True)
     assert result.returncode == 4, result.stdout + result.stderr
     assert result.stderr.count("FAILED to verify the") == 2, result.stderr
@@ -871,7 +903,7 @@ def test_a_symlinked_zshenv_file_is_refused(tmp_path):
     secret.chmod(0o600)
     link = tmp_path / "zshenv-link"
     os.symlink(str(secret), str(link))
-    result, _l = run_install(tmp_path, ["--system"], fake_uid=0, layout=Layout(tmp_path, zshenv=link))
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], fake_uid=0, layout=Layout(tmp_path, zshenv=link))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "symlink" in result.stderr
     assert secret.read_text() == "PRIVATE\n"
@@ -890,7 +922,7 @@ def test_zshenv_fifo_is_refused_on_uninstall(tmp_path):
 def test_uninstall_still_works_on_a_plain_zshenv(tmp_path):
     layout = Layout(tmp_path)
     layout.zshenv.write_text("# a stock zshenv\n")
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.zshenv.read_text()
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
@@ -903,7 +935,7 @@ def test_bashrc_and_zshenv_blocks_are_not_accidentally_shared_content(tmp_path):
     separate content, so a prose change meant for one shell cannot silently
     land on the other's file: each block carries the text specific to its
     own shell's mechanism, not the other's."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     bashrc_text = layout.bashrc.read_text()
     zshenv_text = layout.zshenv.read_text()
@@ -918,7 +950,7 @@ def test_bashrc_and_zshenv_blocks_are_not_accidentally_shared_content(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_fish_hook_is_written_and_verifies_when_fish_is_present(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stderr == "", "fish verifying successfully must not print to stderr"
     assert "%s written (best-effort)" % layout.fishconf in result.stdout
@@ -930,7 +962,7 @@ def test_fish_hook_is_skipped_silently_when_fish_is_absent(tmp_path):
     """The ordinary case on a node without fish: nothing is written, nothing
     is reported as broken -- as link_farm skips a name that does not
     resolve."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  fish_absent=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not layout.fishconf.exists()
@@ -942,7 +974,7 @@ def test_fish_hook_is_skipped_silently_when_fish_is_absent(tmp_path):
 def test_fish_hook_failure_is_not_fatal_to_the_install(tmp_path):
     """A best-effort hook that does not fire is a warning, never a failed
     install (ADR-0008) -- and the file is still written either way."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  fish_ignores_conf=True)
     assert result.returncode == 0, "a fish verify failure must not fail the install\n" + result.stderr
     assert result.stdout.count("verified") == 2, "bash and zsh must still have succeeded"
@@ -960,7 +992,7 @@ def test_a_symlinked_fish_conf_file_is_refused(tmp_path):
     secret.chmod(0o600)
     link = tmp_path / "fish-conf-link.fish"
     os.symlink(str(secret), str(link))
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0,
                              layout=Layout(tmp_path, fishconf=link))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "symlink" in result.stderr
@@ -972,7 +1004,7 @@ def test_the_preview_predicts_the_fish_dropin_refusal(tmp_path):
     not advertise a command the install then refuses."""
     link = tmp_path / "fish-conf-link.fish"
     os.symlink(str(tmp_path / "nowhere"), str(link))
-    result, _l = run_install(tmp_path, ["--system"], layout=Layout(tmp_path, fishconf=link))
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=Layout(tmp_path, fishconf=link))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "will refuse" in result.stdout and "hooks.fish.file" in result.stdout
 
@@ -982,7 +1014,7 @@ def test_fish_conf_directory_is_created_when_it_does_not_exist(tmp_path):
     write_fish_conf() creates it, intermediates included, at 0755."""
     layout = Layout(tmp_path, fishconf=tmp_path / "nofish" / "conf.d" / "walk-blocker.fish")
     assert not layout.fishconf.parent.exists()
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert layout.fishconf.exists()
     assert oct(layout.fishconf.parent.stat().st_mode & 0o777) == oct(0o755)
@@ -992,7 +1024,7 @@ def test_fish_conf_directory_is_created_when_it_does_not_exist(tmp_path):
 def test_uninstall_removes_the_fish_conf_file(tmp_path):
     """Plain removal, unconditional: it must not error when fish is no
     longer present to have written one."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     assert layout.fishconf.exists()
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout, fish_absent=True)
@@ -1005,7 +1037,7 @@ def test_uninstall_removes_the_fish_conf_file(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_a_required_zsh_that_cannot_verify_fails_the_install(tmp_path):
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0,
                              zsh_ignores_zshenv=True, **{"hooks.zsh.gate": "required"})
     assert result.returncode == 4, result.stdout + result.stderr
 
@@ -1013,7 +1045,7 @@ def test_a_required_zsh_that_cannot_verify_fails_the_install(tmp_path):
 def test_a_best_effort_zsh_that_cannot_verify_does_not_fail_the_install(tmp_path):
     """The same build with zsh reclassified: the hook is written, its failure
     is a warning, and the install reports success."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  zsh_ignores_zshenv=True, **{"hooks.zsh.gate": "best-effort"})
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.zshenv.read_text(), "still written"
@@ -1023,7 +1055,7 @@ def test_a_best_effort_zsh_that_cannot_verify_does_not_fail_the_install(tmp_path
 
 
 def test_a_best_effort_shell_that_is_absent_is_neither_written_nor_reported(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  zsh_absent=True, **{"hooks.zsh.gate": "best-effort"})
     assert result.returncode == 0, result.stdout + result.stderr
     assert not layout.zshenv.exists()
@@ -1037,7 +1069,7 @@ def test_a_best_effort_shell_that_is_absent_is_neither_written_nor_reported(tmp_
 def test_a_required_shell_whose_binary_is_absent_is_a_hard_failure(tmp_path):
     """An automatic pass on "absent" would silently convert "unchecked" into
     "verified"."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  zsh_absent=True)
     assert result.returncode == 4, result.stdout + result.stderr
     assert "no zsh on PATH" in result.stderr
@@ -1048,7 +1080,7 @@ def test_a_required_fish_gates_the_install(tmp_path):
     """The class is the site's call, not the shell's: fish reclassified as
     required is written with the required hooks and its failure fails the
     install, with the same not-rolled-back report bash and zsh give."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  fish_ignores_conf=True, **{"hooks.fish.gate": "required"})
     assert result.returncode == 4, result.stdout + result.stderr
     assert "FAILED to verify the fish hook" in result.stderr
@@ -1056,14 +1088,14 @@ def test_a_required_fish_gates_the_install(tmp_path):
     assert "NOT rolled back" in result.stderr
     assert layout.fishconf.exists()
 
-    absent, _l = run_install(tmp_path / "absent", ["--system", "--i-have-approval"], fake_uid=0,
+    absent, _l = run_install(tmp_path / "absent", ["--system"], fake_uid=0,
                              fish_absent=True, **{"hooks.fish.gate": "required"})
     assert absent.returncode == 4, absent.stdout + absent.stderr
     assert "no fish on PATH" in absent.stderr
 
 
 def test_a_disabled_hook_is_never_written_verified_or_reported(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  zsh_ignores_zshenv=True, **{"hooks.zsh.enabled": False})
     assert result.returncode == 0, result.stdout + result.stderr
     assert not layout.zshenv.exists()
@@ -1072,7 +1104,7 @@ def test_a_disabled_hook_is_never_written_verified_or_reported(tmp_path):
                                  script=layout.script, **{"hooks.zsh.enabled": False})
     assert relink.returncode == 0, relink.stderr
     assert "zsh PATH hook" not in relink.stderr
-    preview, _l = run_install(tmp_path, ["--system"], layout=layout, **{"hooks.zsh.enabled": False})
+    preview, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout, **{"hooks.zsh.enabled": False})
     assert str(layout.zshenv) not in preview.stdout
 
 
@@ -1088,7 +1120,7 @@ def test_a_disabled_hook_is_left_alone_by_uninstall(tmp_path):
 
 
 def test_the_preview_lists_each_class_by_file(tmp_path):
-    result, layout = run_install(tmp_path, ["--system"], **{"hooks.zsh.gate": "best-effort"})
+    result, layout = run_install(tmp_path, ["--system", "--dry-run"], **{"hooks.zsh.gate": "best-effort"})
     assert result.returncode == 0, result.stderr
     out = result.stdout
     required_at = out.index("REQUIRED hook file")
@@ -1110,7 +1142,7 @@ def test_a_symlinked_bashrc_file_is_refused(tmp_path):
     secret.chmod(0o600)
     link = tmp_path / "bashrc-link"
     os.symlink(str(secret), str(link))
-    result, _l = run_install(tmp_path, ["--system"], fake_uid=0, layout=Layout(tmp_path, bashrc=link))
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], fake_uid=0, layout=Layout(tmp_path, bashrc=link))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "symlink" in result.stderr
     assert secret.read_text() == "PRIVATE\n"
@@ -1122,7 +1154,7 @@ def test_a_dangling_bashrc_symlink_is_refused(tmp_path):
     would then create a regular file at the link's target."""
     link = tmp_path / "dangling"
     os.symlink(str(tmp_path / "nowhere"), str(link))
-    result, _l = run_install(tmp_path, ["--system"], fake_uid=0, layout=Layout(tmp_path, bashrc=link))
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], fake_uid=0, layout=Layout(tmp_path, bashrc=link))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "symlink" in result.stderr
 
@@ -1130,7 +1162,7 @@ def test_a_dangling_bashrc_symlink_is_refused(tmp_path):
 def test_a_regular_bashrc_file_is_still_accepted(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text("# existing\n")
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.bashrc.read_text()
 
@@ -1167,7 +1199,7 @@ def test_the_generated_block_restores_an_awkward_audit_path_verbatim(tmp_path):
     awkward = "it'sa;id>%s `whoami` $(id) \"q\" a|b&c.jsonl" % canary
     layout = stamped_install(tmp_path)
     rewrite_stamped_line(layout.script, "SG_AUDIT_FILENAME", "'%s'" % awkward.replace("'", "'\\''"))
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, script=layout.script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "WALK_BLOCKER_AUDIT=" in layout.bashrc.read_text()
@@ -1191,7 +1223,7 @@ def test_an_audit_path_with_a_newline_is_refused_not_truncated(tmp_path):
         H.stamp_install_text(site_values(Layout(tmp_path), **{"install.audit_filename": "a\n"}))
     layout = stamped_install(tmp_path)
     rewrite_stamped_line(layout.script, "SG_AUDIT_FILENAME", "'a.jsonl\n'")
-    result, _l = run_install(tmp_path, ["--system"], layout=layout, script=layout.script)
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout, script=layout.script)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "newline" in result.stderr
 
@@ -1200,13 +1232,13 @@ def test_a_prefix_with_a_newline_is_refused(tmp_path):
     """The prefix reaches the block as $BIN, so it has the same problem."""
     layout = stamped_install(tmp_path)
     rewrite_stamped_line(layout.script, "DEFAULT_PREFIX", "'%s\n'" % layout.prefix)
-    result, _l = run_install(tmp_path, ["--system"], layout=layout, script=layout.script)
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout, script=layout.script)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "newline" in result.stderr
 
 
 def test_ordinary_paths_are_unaffected_by_the_newline_check(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (layout.bin / "find").is_symlink()
 
@@ -1217,7 +1249,7 @@ def test_an_approved_install_is_refused_from_a_checkout(tmp_path):
     every other user's PATH. Being root at the time is what makes it
     effective, not what prevents it."""
     layout = stamped_install(tmp_path, dest=tmp_path / "someones-checkout")
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, script=layout.script)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "deployed copy" in result.stderr
@@ -1226,7 +1258,7 @@ def test_an_approved_install_is_refused_from_a_checkout(tmp_path):
 
 
 def test_an_approved_install_is_allowed_from_the_deployed_copy(tmp_path):
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stdout + result.stderr
     shim = layout.bin / "find"
     assert shim.is_symlink()
@@ -1237,7 +1269,7 @@ def test_the_preview_is_still_allowed_from_a_checkout(tmp_path):
     """Preview prints and installs nothing, so it has no location to get
     wrong -- and refusing it would make the guard undiscoverable."""
     layout = stamped_install(tmp_path, dest=tmp_path / "someones-checkout")
-    result, _l = run_install(tmp_path, ["--system"], layout=layout, script=layout.script)
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout, script=layout.script)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -1268,7 +1300,7 @@ def test_uninstall_refuses_a_bashrc_that_is_not_a_regular_file(tmp_path):
 def test_uninstall_still_works_on_a_plain_bashrc(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.bashrc.read_text()
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
@@ -1285,7 +1317,7 @@ def test_an_approved_install_is_refused_when_the_payload_is_not_root_owned(tmp_p
     payload came from deploy.py: copying shim/ into any user-writable
     directory laid out the same way makes the two paths match. With the real
     stat, the walk sees the tmp tree's true ownership."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  real_stat=True)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "not root" in result.stderr
@@ -1295,7 +1327,7 @@ def test_an_approved_install_is_refused_when_the_payload_is_not_root_owned(tmp_p
 
 def test_an_approved_install_is_refused_on_a_world_writable_ancestor(tmp_path):
     """Root-owned is not enough if someone else can replace what is under it."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  stat_body="#!/bin/sh\nprintf '0 777\\n'\n")
     assert result.returncode == 3, result.stdout + result.stderr
     assert "mode 777" in result.stderr
@@ -1306,7 +1338,7 @@ def test_an_approved_install_is_refused_when_a_payload_file_is_not_root_owned(tm
     """A trusted directory chain does not make its CONTENTS trusted: a
     root-owned 0755 shim/ can hold a user-owned guard.sh, and every shim
     would then point at an inode its owner can still rewrite."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  stat_body=stat_stub_uid_for("*/guard.sh", "1000 755"))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "guard.sh is owned by" in result.stderr
@@ -1322,7 +1354,7 @@ def test_an_approved_install_is_refused_when_a_payload_file_is_a_symlink(tmp_pat
     real_guard.write_text("#!/bin/sh\nexit 0\n")
     (layout.shim_dir / "guard.sh").unlink()
     os.symlink(str(real_guard), str(layout.shim_dir / "guard.sh"))
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, script=layout.script)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "is a symlink" in result.stderr
@@ -1335,7 +1367,7 @@ def test_an_approved_install_refuses_a_bashrc_in_a_writable_directory(tmp_path):
     and the write. The real stat sees the tmp tree's true ownership."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, real_stat=True)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "not root" in result.stderr
@@ -1348,7 +1380,7 @@ def test_the_preview_notes_a_writable_directory_but_does_not_refuse(tmp_path):
     silent would advertise a command the install then refuses."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system"], layout=layout, real_stat=True)
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout, real_stat=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "will refuse" in result.stdout, result.stdout
     assert "not root" in result.stdout
@@ -1360,7 +1392,7 @@ def test_a_trusted_hook_directory_passes_the_chain_check(tmp_path):
     which is exactly what the stand-in reports."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.bashrc.read_text()
 
@@ -1371,7 +1403,7 @@ def test_an_approved_install_refuses_a_bashrc_owned_by_someone_else(tmp_path):
     owner chooses what runs during the deploy."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, stat_body=stat_stub_uid_for(str(layout.bashrc), "1000 644"))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "uid 1000" in result.stderr
@@ -1383,7 +1415,7 @@ def test_an_approved_install_refuses_a_bashrc_owned_by_someone_else(tmp_path):
 def test_an_approved_install_refuses_a_group_writable_bashrc(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, stat_body=stat_stub_uid_for(str(layout.bashrc), "0 664"))
     assert result.returncode == 3, result.stdout + result.stderr
     assert "mode 664" in result.stderr
@@ -1426,7 +1458,7 @@ def test_a_symlink_in_the_trusted_chain_is_refused(tmp_path):
     os.symlink(str(real_dir), str(link))
     layout = Layout(tmp_path, bashrc=link / "bashrc")
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "is a symlink" in result.stderr
     assert "cannot be walked" in result.stderr
@@ -1442,7 +1474,7 @@ def test_wrapped_names_is_not_sourced_before_it_is_checked(tmp_path):
     (layout.shim_dir / "wrapped_names.sh").write_text(
         "SG_WRAPPED_NAMES='find grep du'\n: > '%s'\n" % canary)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, script=layout.script,
                                  stat_body=stat_stub_uid_for("*/wrapped_names.sh", "1000 644"))
     assert result.returncode == 3, result.stdout + result.stderr
@@ -1454,7 +1486,7 @@ def test_wrapped_names_is_still_sourced_when_it_is_trusted(tmp_path):
     shim farm is built from an empty name list."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (layout.bin / "find").is_symlink()
 
@@ -1493,7 +1525,7 @@ def test_an_unprivileged_relink_from_a_checkout_still_works(tmp_path):
 def test_the_preview_advertises_a_teardown_that_actually_runs(tmp_path):
     """A preview must not advertise what the tool refuses: the teardown it
     offers names the DEPLOYED copy, never $HERE."""
-    result, layout = run_install(tmp_path, ["--system"])
+    result, layout = run_install(tmp_path, ["--system", "--dry-run"])
     assert result.returncode == 0, result.stdout + result.stderr
     offered = [ln for ln in result.stdout.splitlines()
                if ln.lstrip("# ").strip().startswith("sh ")
@@ -1507,7 +1539,7 @@ def test_the_preview_advertises_a_teardown_that_actually_runs(tmp_path):
 def test_the_advertised_teardown_runs_from_the_deployed_copy(tmp_path):
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0, layout=layout)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout, script=layout.script)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1522,7 +1554,7 @@ def test_a_fifo_payload_entry_is_refused(tmp_path):
     (layout.shim_dir / "guard.sh").unlink()
     os.mkfifo(str(layout.shim_dir / "guard.sh"))
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  layout=layout, script=layout.script, timeout=30)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "not a" in result.stderr and "regular file" in result.stderr
@@ -1565,7 +1597,7 @@ def test_a_relative_path_does_not_hang_the_trusted_chain_walk(tmp_path):
     layout = Layout(tmp_path, prefix=work, bashrc="bashrc")
     work.mkdir()
     (work / "bashrc").write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0,
                              layout=layout, cwd=str(work), timeout=30)
     assert result.returncode is not None
 
@@ -1578,7 +1610,7 @@ def test_a_relative_path_is_anchored_so_its_real_ancestors_are_checked(tmp_path)
     layout = Layout(tmp_path, prefix=work, bashrc="bashrc")
     work.mkdir()
     (work / "bashrc").write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0,
+    result, _l = run_install(tmp_path, ["--system"], fake_uid=0,
                              layout=layout, cwd=str(work), timeout=30, real_stat=True)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "not root" in result.stderr
@@ -1590,7 +1622,7 @@ def test_the_preview_notes_a_bashrc_it_will_refuse(tmp_path):
     advertised command that fails the instant approval is supplied."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system"], layout=layout,
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout,
                              stat_body=stat_stub_uid_for(str(layout.bashrc), "1000 644"))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "will refuse" in result.stdout, result.stdout
@@ -1603,7 +1635,7 @@ def test_a_clean_bashrc_gets_no_preview_note(tmp_path):
     noise the operator learns to skip past."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(STOCK_BASHRC)
-    result, _l = run_install(tmp_path, ["--system"], layout=layout)
+    result, _l = run_install(tmp_path, ["--system", "--dry-run"], layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "will refuse" not in result.stdout
 
@@ -1616,7 +1648,7 @@ def test_the_system_install_creates_the_audit_dir_world_readable(tmp_path):
     """0755, not 0750. ADR-0004's invariant is that a MONITORED ACCOUNT CANNOT
     WRITE the audit trail; 0755 still refuses that. What 0750 did was hide
     the trail from the people who have to read it."""
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
     mode = layout.spool.stat().st_mode & 0o7777
     assert mode == 0o755, oct(mode)
@@ -1629,7 +1661,7 @@ def test_the_relink_puts_the_audit_dir_mode_back_every_poll(tmp_path):
     """The hooks beside this are REPORTED and never repaired, because their
     files are the distribution's. This directory is ours, so a chmod that
     blinds the trail is corrected on the next poll."""
-    installed, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     assert (layout.spool.stat().st_mode & 0o7777) == 0o755
     layout.spool.chmod(0o750)
@@ -1642,7 +1674,7 @@ def test_the_relink_puts_the_audit_dir_mode_back_every_poll(tmp_path):
 def test_a_relink_that_cannot_fix_the_audit_dir_still_relinks(tmp_path):
     """Non-fatal by construction: a directory this cannot repair must not
     take the relink -- and through ExecStartPre, the reaper -- down."""
-    installed, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     shutil.rmtree(str(layout.spool))
     layout.spool.write_text("not a directory\n")   # `install -d` cannot win this
@@ -1653,7 +1685,7 @@ def test_a_relink_that_cannot_fix_the_audit_dir_still_relinks(tmp_path):
 def test_a_blocked_audit_dir_reaches_the_journal_by_name(tmp_path):
     """The correction is not the whole point; the RECORD is. A relink that
     silently put the mode back would lose the fact that somebody tried."""
-    installed, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     healthy, records = relink_with_a_recording_logger(tmp_path, layout, fake_uid=0, script=layout.script)
     assert healthy.returncode == 0, healthy.stderr
@@ -1670,7 +1702,7 @@ def test_a_blocked_audit_dir_reaches_the_journal_by_name(tmp_path):
 def test_a_first_time_audit_dir_is_recorded_as_created_not_corrected(tmp_path):
     """`created` and `mode-corrected` are different events: one is a deploy,
     the other is somebody having changed it since."""
-    installed, layout = run_install(tmp_path, ["--system", "--i-have-approval"], fake_uid=0)
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     shutil.rmtree(str(layout.spool))
     result, records = relink_with_a_recording_logger(tmp_path, layout, fake_uid=0, script=layout.script)
@@ -1833,7 +1865,7 @@ def test_the_install_forgets_what_an_earlier_install_reported(tmp_path):
     state = layout.spool / STATE_NAME
     state.write_text("boot x\n/archive nfs4\n")
     layout.audit.write_text("")
-    result, layout = run_install(tmp_path, ["--system", "--i-have-approval"],
+    result, layout = run_install(tmp_path, ["--system"],
                                  fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stderr
     assert not state.exists(), "the install kept an earlier install's memory"

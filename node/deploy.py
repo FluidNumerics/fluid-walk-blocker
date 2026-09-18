@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Deploy walk-blocker from a built payload onto the node it was built for.
 
-    python3 deploy.py --system           PRINT the root commands and exit
-    python3 deploy.py --system --i-have-approval
-                                         as root, actually install
+    python3 deploy.py --system           as root, install
+    python3 deploy.py --system --dry-run make every check and PRINT the
+                                         commands, writing nothing; needs no
+                                         privilege, and says which checks it
+                                         could not make as an ordinary user
     python3 deploy.py --uninstall        as root, reverse a --system install
     python3 deploy.py --verify           compare the installed files against
                                          the record they were built from
@@ -43,30 +45,36 @@ Three things about this deployment are design, not habit:
     bypassable, so Layer 1's upkeep must never be able to take Layer 2
     down -- neither by refusing (the `-`) nor by hanging (the bound).
 
-Root-owned, gated on real authentication (the operator is already root --
-checked with `os.geteuid()`, not reimplemented) plus explicit authorization
-(`--i-have-approval`). Reversing a control is the safer direction, so
-`--uninstall` needs root alone (ADR-0004). This repository's own agent
-sessions never pass `--i-have-approval` or otherwise act as root.
+Root-owned, gated on real authentication and nothing else: the operator is
+already root, checked with `os.geteuid()` and not reimplemented. There is no
+second authorization flag. Whoever holds root on the target node has the
+authority this installs with, and a script that demanded a further ceremony
+from them would be gainsaying a judgement that is not its to make (ADR-0021,
+narrowing ADR-0004). `--uninstall` is root alone for the same reason it
+always was: reversing a control is the safer direction.
+
+This repository's own agent sessions never run any of this as root, in any
+mode. That rule no longer has a flag holding it up, so it is stated as an
+effect in CLAUDE.md rather than as a token to withhold.
 
 The payload is read ONCE, into a root-only snapshot, before anything that
 can block; the copies read the snapshot. The source directory itself stays
 owned by whoever unpacked it -- that is the workflow, and refusing it was
 considered and rejected (ADR-0006).
 
-`--system` and `--system --i-have-approval` make the SAME checks, from the
+`--system` and `--system --dry-run` make the SAME checks, from the
 same `preflight()`: the arguments are the compiled literals, the six
 root-write locations sit in a trusted chain (and the hook files are plain
 root-owned regular files), the audit directory is usable and not writable
 beyond root, the prefix is reachable by the users Layer 1 exists for, the
 prefix is not somebody else's populated directory, and the parent the
 payload snapshot is staged under is a directory in a trusted chain. The
-contract is that reading the preview is enough -- the approved command must
-not refuse what the preview accepted. Where the preview runs unprivileged
+contract is that reading the dry run is enough -- the real install must
+not refuse what the dry run accepted. Where the dry run runs unprivileged
 and may not make one of those stats it says "could not be checked as this
 user" rather than reporting it clean; run as root, that same answer is a
 refusal. A dry run stages nothing, so the staging parent is the one check
-it does not make -- in the preview and in the install alike.
+it does not make -- in the dry run and in the install alike.
 """
 
 import argparse
@@ -543,7 +551,11 @@ def system_preview(args, env=None):
     # each was handed separately.
     print(__doc__.strip())
     print()
-    result = run([TRUSTED_SH, os.path.join(REPO, "shim", "install.sh"), "--system"],
+    # --dry-run, and the flag is load-bearing: `install.sh --system` alone
+    # now INSTALLS. A dry run that quietly installed Layer 1 from the
+    # checkout would be the worst possible failure of this command.
+    result = run([TRUSTED_SH, os.path.join(REPO, "shim", "install.sh"),
+                  "--system", "--dry-run"],
                  check=False, env=env)
     # A failing child preview is a real answer, not noise. install.sh checks
     # FILESYSTEM state that a literal cannot make true by construction --
@@ -554,23 +566,31 @@ def system_preview(args, env=None):
     if result.returncode != 0:
         sys.stderr.write(result.stderr or "")
         sys.stderr.write(
-            "deploy.py: the installer's own preview refused (exit %d), so "
-            "--i-have-approval\n  would refuse too. Fix the condition above "
+            "deploy.py: the installer's own dry run refused (exit %d), so "
+            "the install\n  would refuse too. Fix the condition above "
             "before deploying; no command is\n  advertised here because none "
             "would work.\n" % result.returncode)
         return 6
-    # install.sh's standalone `--system --i-have-approval` command is correct
-    # advice when install.sh is run by hand and WRONG to relay here: run
-    # directly it copies nothing, re-owns nothing, installs no Layer 2, and
-    # links every shim back at this directory -- so its owner can later edit
-    # code every account executes. Only deploy.py's own command is
-    # advertised. The filter matches a COMMAND-shaped line, not any prose
-    # mentioning both; the looser test once cut a sentence in half.
+    # install.sh's standalone `--system` command is correct advice when
+    # install.sh is run by hand and WRONG to relay here: run directly it
+    # copies nothing, re-owns nothing, installs no Layer 2, and links every
+    # shim back at this directory -- so its owner can later edit code every
+    # account executes. Only deploy.py's own command is advertised. The
+    # filter matches a COMMAND-shaped line, not any prose mentioning both;
+    # the looser test once cut a sentence in half.
+    #
+    # Keyed on `--system`, NOT on the removed approval flag. Keying it on a
+    # string this tree no longer emits would silently disable the filter and
+    # leave its tests passing over an empty list -- which is what the old
+    # predicate would have become the moment that flag was deleted.
+    # `--relink` and `--version` are the modes that are safe to relay.
     for line in (result.stdout or "").splitlines():
         stripped = line.lstrip("# ").strip()
         if (stripped.startswith(("sh ", "sh\t"))
                 and "install.sh" in stripped
-                and "--i-have-approval" in stripped):
+                and "--system" in stripped
+                and "--relink" not in stripped
+                and "--version" not in stripped):
             print("#   (install.sh's standalone command is omitted here: run")
             print("#   directly it skips the copy, the chown and Layer 2, and")
             print("#   points the shims at this directory. Use deploy.py.)")
@@ -623,36 +643,35 @@ def system_preview(args, env=None):
     #
     # `privileged` is asked, not assumed: this command is documented to be
     # run as root first, and is also perfectly runnable by the operator as
-    # themselves. A root preview can see everything the install will, so for
+    # themselves. A root dry run can see everything the install will, so for
     # it "could not check" is the refusal it is for the install.
     rc, checks = preflight(args, privileged=_is_root())
     if rc != 0:
         sys.stderr.write(
-            "deploy.py: --i-have-approval would refuse too, so no command is "
+            "deploy.py: the install would refuse too, so no command is "
             "advertised here.\n")
         return rc
 
     # Never silently: a check nobody could make is not a check that passed,
-    # and the whole contract of this preview is that reading it is enough.
+    # and the whole contract of this dry run is that reading it is enough.
     unknown = [check for check in checks if check.state == CHECK_UNKNOWN]
     if unknown:
         print()
-        print("# NOT CHECKED. This preview is running as a user who may not")
+        print("# NOT CHECKED. This dry run is running as a user who may not")
         print("# inspect these paths, so the following were not made -- which")
-        print("# is not the same as made and passed. Re-run the preview as")
-        print("# root to make them before approving:")
+        print("# is not the same as made and passed. Re-run the dry run as")
+        print("# root to make them before deploying:")
         for check in unknown:
             print("#   %s (%s): could not be checked as this user -- %s"
                   % (check.subject, check.name, check.reason))
         print()
 
-    print("# Run as root with --i-have-approval to actually install:")
+    print("# Run as root, without --dry-run, to actually install:")
     # No path flags to forward, and that is the fix rather than a
     # simplification of it: keeping a forwarded flag list in sync with the
     # install was the bug. The payload path is still quoted, since a
     # directory with a space in it makes the line unrunnable.
-    cmd = [TRUSTED_PYTHON3, os.path.join(REPO, "deploy.py"),
-           "--system", "--i-have-approval"]
+    cmd = [TRUSTED_PYTHON3, os.path.join(REPO, "deploy.py"), "--system"]
     print("#   %s" % " ".join(shlex.quote(c) for c in cmd))
     return 0
 
@@ -1719,10 +1738,25 @@ def _write_offenders(offenders):
 
 
 def system_execute(args, env=None):
-    if not _is_root():
-        sys.stderr.write(
-            "deploy.py: --system --i-have-approval must run as root\n")
+    # A dry run writes nothing, so it needs no privilege -- and deciding
+    # whether to deploy should not require becoming root first. The root
+    # gate is on the writing, which is where it belongs now that there is
+    # no second flag in front of it (ADR-0021).
+    if not args.dry_run and not _is_root():
+        sys.stderr.write("deploy.py: --system must run as root\n")
         return 3
+
+    if args.dry_run:
+        # Everything a reader needs before the command list: what this is,
+        # the installer's own dry run, the rendered units, and -- when this
+        # user could not make a check -- which ones, rather than a clean
+        # bill of health nobody earned. A non-zero here means the install
+        # would refuse too, so the commands are not advertised underneath.
+        rc = system_preview(args, env=env)
+        if rc != 0:
+            return rc
+        print()
+        print("# The commands, in the order they would run:")
 
     def repair(spool):
         # Repair before judging. These are this installer's own files and
@@ -1734,10 +1768,14 @@ def system_execute(args, env=None):
         for path, _mode in spool_mode_repairs(spool):
             run(["chmod", "go-w", path], dry_run=args.dry_run, env=env)
 
-    # Every check, from the function the preview calls: an install that
-    # refuses something the preview accepted is a guardrail that fails
+    # Every check, from the function the dry run calls: an install that
+    # refuses something the dry run accepted is a guardrail that fails
     # exactly when it is being installed, half-applied, on a shared node.
-    rc, _checks = preflight(args, privileged=True, repair=repair)
+    # `privileged` is asked rather than asserted, because a dry run reaches
+    # here as an ordinary user: for a check that user cannot make, "could
+    # not check" is the honest answer and system_preview() above has already
+    # said so. On the writing path _is_root() is True or we returned 3.
+    rc, _checks = preflight(args, privileged=_is_root(), repair=repair)
     if rc != 0:
         return rc
 
@@ -1871,9 +1909,9 @@ def system_execute(args, env=None):
 
     # No path flags: install.sh carries the same literals, stamped from the
     # same site.toml by the same build. From the DEPLOYED copy, which is the
-    # only place install.sh will run an approved install from.
+    # only place install.sh will run a writing install from.
     run([TRUSTED_SH, os.path.join(args.prefix, "shim", "install.sh"),
-         "--system", "--i-have-approval"],
+         "--system"],
         capture=False, dry_run=args.dry_run, env=env)
 
     # Re-assert AFTER install.sh, because it creates $prefix/bin -- the
@@ -2319,10 +2357,10 @@ def main(argv=None):
     mode.add_argument("--verify", action="store_true",
                       help="compare the installed files against the record "
                            "they were built from; writes nothing")
-    parser.add_argument("--i-have-approval", action="store_true",
-                        help="actually install rather than only preview "
-                             "(also requires root)")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --system: make every check and print the "
+                             "commands without running any of them; writes "
+                             "nothing and needs no privilege")
     args = parser.parse_args(argv)
 
     # The six locations are deliberately NOT options. argparse rejects
@@ -2333,14 +2371,15 @@ def main(argv=None):
         setattr(args, attr, value)
 
     if args.verify:
-        if args.i_have_approval:
-            parser.error("--verify writes nothing, so it takes no approval")
+        # Rejected rather than ignored. `--verify --dry-run` reads as a
+        # safer verify, and there is no such thing: a caller who believes
+        # the plain one writes something has misunderstood what to run.
+        if args.dry_run:
+            parser.error("--verify writes nothing, so a dry run is the same run")
         return system_verify(args)
     if args.uninstall:
         return system_uninstall(args)
-    if args.i_have_approval:
-        return system_execute(args)
-    return system_preview(args)
+    return system_execute(args)
 
 
 if __name__ == "__main__":
