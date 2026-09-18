@@ -77,7 +77,7 @@ launched by other tooling — noise, not a personal interactive shell.
 `file` the block is written to, the `package` that likely owns that file, and
 a `gate` of `"required"` or `"best-effort"`.**
 
-A **required** shell fails the install (`--system --i-have-approval` exits
+A **required** shell fails the install (`--system` exits
 non-zero) if `verify_<shell>_hook` cannot prove the file fires under
 remote-command conditions with the shim directory stripped from `PATH` — the
 probe must not pass merely because the caller's own `PATH` already carries it.

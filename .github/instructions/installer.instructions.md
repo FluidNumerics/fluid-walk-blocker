@@ -5,7 +5,7 @@ description: Reviewing the root-run deployer, the shell installer it invokes, an
 
 # This code runs as root on a shared node
 
-`deploy.py --system --i-have-approval` is run by an authorized sysadmin as
+`deploy.py --system` is run by an authorized sysadmin as
 root. `install.sh` is also executed as root by the systemd timer on every
 reconcile (`[timer].on_calendar`). Assume every path here is a root-write
 sink. Every one of those paths is a literal stamped in by `walk-blocker build`

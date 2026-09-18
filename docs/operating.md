@@ -261,13 +261,22 @@ stop here and go back to step 2.
 As root, on the node:
 
 ```sh
-python3 walk-blocker-payload/deploy.py --system --i-have-approval
+python3 walk-blocker-payload/deploy.py --system --dry-run   # read this first
+python3 walk-blocker-payload/deploy.py --system             # then install
 ```
 
-The flag says what it means: the site owner's authorization to install a
-root-run guardrail on a shared node has been given, and the person typing
-this holds it. Sessions of automated agents working in this repository never
-pass it (see `CLAUDE.md`).
+Root is the only gate. There is no second flag to type, because the person
+who holds root on the node already holds the authority this installs with,
+and a script that asked them to confirm it would be relocating a judgement
+away from the one party with the context to make it (ADR-0021).
+
+The consequence is worth stating plainly: `--system` installs, immediately,
+with no further confirmation. Run `--dry-run` first. It makes every check the
+install makes, needs no privilege, writes nothing, and prints both the
+rendered units and the exact command sequence — and where it runs as an
+ordinary user who cannot make one of the checks, it says so rather than
+reporting it clean. Sessions of automated agents working in this repository
+never run any of this as root, in any mode (see `CLAUDE.md`).
 
 What it writes, all root-owned and none of it writable by any monitored
 account (ADR-0004):

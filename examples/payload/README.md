@@ -130,7 +130,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0020` |
+| `docs/adr/` | the decisions, `0001` through `0021` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/operating.md` | the operator's runbook |
@@ -149,8 +149,9 @@ after which nothing is measurable.
 - **Processes that predate the deployment.** The reaper will report them;
   nothing here retroactively wraps a shell that already started.
 - **Sudo for agent sessions.** Automated agents working in this repository
-  never act as root and never pass `--i-have-approval`. The installer is for
-  an authorized human who already holds root (ADR-0004).
+  never act as root, in any mode: the install is gated on root alone, so
+  that rule is the only barrier in front of it. The installer is for an
+  authorized human who already holds root (ADR-0004, ADR-0021).
 - **Restricting non-interactive ssh, or any transport.** Layer 2 is
   transport-agnostic on purpose (ADR-0003).
 - **An index of the large filesystem.** Not at that scale, by this tree or a
@@ -198,7 +199,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0020`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0021`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook
 6. `docs/alternatives.md` — what to run instead: the users' grimoire, and the

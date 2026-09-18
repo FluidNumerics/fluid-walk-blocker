@@ -3,13 +3,12 @@
 # put it on PATH. POSIX sh; runs on the node.
 #
 # Run ONCE, system-wide, by an authorized root sysadmin -- normally invoked
-# for you by `deploy.py --system --i-have-approval`, not by hand. Ordinary
+# for you by `deploy.py --system`, not by hand. Ordinary
 # users never run this: it is not a per-account setup step, and nothing is
 # required of an individual login shell beyond already existing on the node.
 #
-#   install.sh --system                PRINT what an install would do and exit
-#   install.sh --system --i-have-approval
-#                                      as root, actually install. Saves each
+#   install.sh --system --dry-run      PRINT what an install would do and exit
+#   install.sh --system                as root, actually install. Saves each
 #                                      hook file's pre-install content to
 #                                      <file>.walk-blocker.orig, once, the
 #                                      first time this runs.
@@ -73,11 +72,11 @@ sg_banner() {
 sg_usage() {
     sg_banner
     printf '%s\n' \
-        'usage: install.sh --system [--i-have-approval] | --relink | --uninstall | --version' \
+        'usage: install.sh --system [--dry-run] | --relink | --uninstall | --version' \
         '' \
-        '  --system              print what an install would do and exit' \
-        '  --system --i-have-approval' \
-        '                        as root, actually install' \
+        '  --system              as root, install' \
+        '  --system --dry-run    print what an install would do and exit;' \
+        '                        writes nothing and needs no privilege' \
         '  --relink              reconcile the shim farm, hooks, audit directory and' \
         '                        mount table; the timer runs this as root every poll' \
         '  --uninstall           as root, reverse a --system install' \
@@ -87,12 +86,18 @@ sg_usage() {
 }
 
 MODE=''
-APPROVED=0
+# POSITIVE, and deliberately so: writing is the default and --dry-run takes
+# it away. The variable it replaced was negative ($APPROVED, 0 unless asked),
+# and every call site below tests it in the "is this run about to write"
+# sense -- so inverting the default while keeping the old name would have
+# flipped the meaning of each one. A dropped negation here is a dry run that
+# writes as root. See ADR-0021.
+WILL_WRITE=1
 
 while [ $# -gt 0 ]; do
     case $1 in
         --system|--uninstall|--relink) MODE=${1#--} ;;
-        --i-have-approval) APPROVED=1 ;;
+        --dry-run) WILL_WRITE=0 ;;
         -h|--help) sg_usage; exit 0 ;;
         # Exits here rather than setting a MODE: this has to answer on a node
         # where the install is broken, which is when it is asked.
@@ -278,7 +283,7 @@ require_deployed_copy() {
         echo "  that the shims point at root-owned files. Run from here they" >&2
         echo "  would point into this directory, which every login shell on" >&2
         echo "  the node would then execute." >&2
-        echo "  Use: python3 deploy.py --system --i-have-approval" >&2
+        echo "  Use: python3 deploy.py --system" >&2
         exit 3
     fi
     require_root_owned_payload "$HERE"
@@ -406,13 +411,13 @@ require_trusted_chain() {
     done
     if [ -n "$_bad" ]; then
         if [ "$_fatal" -eq 1 ]; then
-            echo "install.sh: refusing --i-have-approval: $_bad." >&2
+            echo "install.sh: refusing --system: $_bad." >&2
             echo "  $2" >&2
-            echo "  Use: python3 deploy.py --system --i-have-approval" >&2
+            echo "  Use: python3 deploy.py --system" >&2
             exit 3
         fi
         echo "# NOTE: $_bad,"
-        echo "# so --i-have-approval will refuse. $2"
+        echo "# so --system will refuse. $2"
         echo
     fi
 }
@@ -470,7 +475,7 @@ require_root_owned_payload() {
     for _path in "$1/guard.sh" "$1/install.sh" "$1/wrapped_names.sh" \
                  "$PREFIX/walk-job"; do
         if [ -L "$_path" ]; then
-            echo "install.sh: refusing --i-have-approval: $_path is a symlink," >&2
+            echo "install.sh: refusing --system: $_path is a symlink," >&2
             echo "  so what every shim executes is decided elsewhere." >&2
             exit 3
         fi
@@ -482,24 +487,24 @@ require_root_owned_payload() {
         # non-regular guard.sh leaves every shim unusable while the verify
         # functions, which only check that the name resolves, still pass.
         if [ ! -f "$_path" ]; then
-            echo "install.sh: refusing --i-have-approval: $_path is not a" >&2
+            echo "install.sh: refusing --system: $_path is not a" >&2
             echo "  regular file, and uid and mode say nothing about that." >&2
             exit 3
         fi
         _info=$(stat -c '%u %a' "$_path" 2>/dev/null) || {
-            echo "install.sh: refusing --i-have-approval: cannot examine $_path" >&2
+            echo "install.sh: refusing --system: cannot examine $_path" >&2
             exit 3
         }
         _euid=${_info%% *}
         _emode=${_info##* }
         if [ "$_euid" != 0 ]; then
-            echo "install.sh: refusing --i-have-approval: $_path is owned by" >&2
+            echo "install.sh: refusing --system: $_path is owned by" >&2
             echo "  uid $_euid, not root. Its owner could rewrite what every" >&2
             echo "  login shell on this node executes." >&2
             exit 3
         fi
         if [ "$(( 0$_emode & 022 ))" -ne 0 ]; then
-            echo "install.sh: refusing --i-have-approval: mode $_emode on" >&2
+            echo "install.sh: refusing --system: mode $_emode on" >&2
             echo "  $_path lets a non-root user rewrite it." >&2
             exit 3
         fi
@@ -513,10 +518,10 @@ require_plain_hook_file() {
     # which shell reads it. $3 is the site.toml key the file came from, so
     # the messages name the value an operator would change.
     #
-    # $2: 1 when this run will WRITE the file, 0 for a preview. It is NOT
-    # $APPROVED: "did the operator approve an install" and "is this run about
-    # to rewrite the file" are different questions. `--uninstall` never sets
-    # APPROVED and rewrites the file through strip_block() all the same.
+    # $2: 1 when this run will WRITE the file, 0 for a dry run. Passed, not
+    # read from the global: `--uninstall` rewrites the file through
+    # strip_block() without going through the --system arm at all, so "this
+    # run writes" is a property of the call site rather than of the mode.
     #
     # strip_block() and prepend_block() both READ this file and write it back
     # as a 0644 regular file, so a symlink here republishes its target's
@@ -571,7 +576,7 @@ require_plain_hook_file() {
                 exit 3
             fi
             echo "# NOTE: $3 $1 is $_lbad,"
-            echo "# so --i-have-approval will refuse. It is sourced as root to"
+            echo "# so --system will refuse. It is sourced as root to"
             echo "# verify the hook fires, so its owner would choose what runs."
             echo
         fi
@@ -601,7 +606,7 @@ require_plain_dropin() {
             echo "install.sh: refusing $3 $1: it is $_dbad." >&2
             exit 3
         fi
-        echo "# NOTE: $3 $1 is $_dbad, so --i-have-approval will refuse."
+        echo "# NOTE: $3 $1 is $_dbad, so --system will refuse."
         echo
     fi
 }
@@ -880,7 +885,7 @@ fish_conf_block() {
     # all -- shquote()'s output just happens to be valid under both readings).
     cat <<BLOCK
 # walk-blocker -- generated by install.sh, do not edit by hand.
-# Reinstalling (deploy.py --system --i-have-approval) regenerates this file;
+# Reinstalling (deploy.py --system) regenerates this file;
 # editing it here will not survive that.
 #
 # Layer 1 of walk-blocker. ADVISORY: an absolute path to the real tool, a
@@ -1237,7 +1242,7 @@ report_hook_state() {
     sg_report hook_check "$_hook_state"
     echo "walk-blocker: $_hook_shell PATH hook $_hook_state in $_hook_file" >&2
     echo "  Layer 1 is not reaching \`ssh host 'cmd'\` for $_hook_shell. Reinstall" >&2
-    echo "  with deploy.py --system --i-have-approval, as root." >&2
+    echo "  with deploy.py --system, as root." >&2
     if [ "$_hook_state" = block-missing ]; then
         echo "  $_hook_file may be configuration owned by the $_hook_pkg package;" >&2
         echo "  an upgrade of $_hook_pkg that took the maintainer's version is the" >&2
@@ -1266,7 +1271,7 @@ report_dropin_state() {
     fi
     sg_report hook_check "$_hook_state"
     echo "walk-blocker: $_hook_shell PATH hook $_hook_state in $_hook_file" >&2
-    echo "  Reinstall with deploy.py --system --i-have-approval, as root, to" >&2
+    echo "  Reinstall with deploy.py --system, as root, to" >&2
     echo "  regenerate it." >&2
     return 0
 }
@@ -1745,24 +1750,29 @@ case $MODE in
         # there would advertise a path the install would not use.
         require_no_newline "$PREFIX" "install.prefix"
         require_no_newline "$AUDIT" "install.spool_dir/install.audit_filename"
-        # A preview writes nothing; an approved install does. Every required
+        # A dry run writes nothing; a real install does. Every required
         # hook's file is checked; a best-effort hook's only when its shell
         # resolves, because that is the only case in which it is written.
         for _ch in $SG_HOOKS_REQUIRED; do
-            check_hook_file "$_ch" "$APPROVED"
+            check_hook_file "$_ch" "$WILL_WRITE"
         done
         for _ch in $SG_HOOKS_BEST_EFFORT; do
             if command -v "$_ch" >/dev/null 2>&1; then
-                check_hook_file "$_ch" "$APPROVED"
+                check_hook_file "$_ch" "$WILL_WRITE"
             fi
         done
         # See require_deployed_copy(). Two arms need this, so it is a
         # function rather than a second copy of the same lines -- install and
         # uninstall diverge when written twice.
-        if [ "$APPROVED" -eq 1 ]; then
-            require_deployed_copy "--system --i-have-approval"
+        #
+        # Gated on "this run writes", which is what the guarantee was always
+        # about: running the installer out of a checkout points every shim
+        # back at that checkout. It was gated on the approval flag only
+        # because that flag was how a writing run announced itself.
+        if [ "$WILL_WRITE" -eq 1 ]; then
+            require_deployed_copy "--system"
         fi
-        if [ "$APPROVED" -eq 1 ] && is_root; then
+        if [ "$WILL_WRITE" -eq 1 ] && is_root; then
             # Root-owned and not user-writable, which is the invariant --
             # NOT a particular mode. See assert_audit_dir().
             assert_audit_dir "$AUDIT"
@@ -1787,8 +1797,8 @@ case $MODE in
                 fi
             done
             echo "walk-blocker: system-wide install complete under $PREFIX"
-        elif [ "$APPROVED" -eq 1 ]; then
-            echo "install.sh: --i-have-approval given, but this must run as root" >&2
+        elif [ "$WILL_WRITE" -eq 1 ]; then
+            echo "install.sh: --system must run as root; use --dry-run to see what it would do" >&2
             exit 3
         else
             cat <<SYS
@@ -1796,9 +1806,9 @@ case $MODE in
 #
 # Root is required to actually install. As root, from the built payload:
 #
-#   python3 deploy.py --system --i-have-approval
+#   python3 deploy.py --system
 #
-# NOT this script run directly, which always refuses an approved install
+# NOT this script run directly, which always refuses a writing install
 # from anywhere but the deployed \$PREFIX/shim copy: link_farm points every
 # shim at \$HERE/guard.sh, and a checkout is writable by the account that
 # owns it. deploy.py stages the payload, makes it root-owned, verifies that,
@@ -1850,9 +1860,11 @@ SYS
             exit 3
         fi
         # ALWAYS 1: strip_block() rewrites the file, so every check that
-        # protects a write applies here, whether or not --i-have-approval was
-        # given. Uninstall already requires root, so this path is as
-        # privileged as the install.
+        # protects a write applies here. Not $WILL_WRITE -- this arm writes
+        # whatever the --system arm was told, which is exactly why the
+        # parameter is passed rather than read from the global. Uninstall
+        # already requires root, so this path is as privileged as the
+        # install.
         #
         # Every enabled hook, not gated on the shell still resolving: an
         # uninstall cleans up what was written; it does not condition that on

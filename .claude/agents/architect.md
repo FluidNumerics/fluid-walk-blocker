@@ -119,7 +119,8 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 
 Name the ones the task touches; do not paste all of them.
 
-- **No sudo, ever**, for this repo's own sessions; never `--i-have-approval`.
+- **No sudo, ever**, for this repo's own sessions; never run the installer
+  as root in any mode, `--dry-run` included (ADR-0021).
 - **No site literals in the generic tree.** Hostnames, usernames, uids, partition/QoS names, customer or engineer names, neighbour timers, measured figures. Fixtures use `site.example.toml`'s fictional values. The CI gate is the backstop, not the rule.
 - **The node never reads config.** A site value is a `site.toml` key, compiled by `walk-blocker build`. Adding a runtime read is an ADR-0013 question, not a convenience.
 - `node/` and `deploy.py` are **stdlib-only Python 3.9 or POSIX `sh`** — no PEP 723 there, no 3.10 syntax.

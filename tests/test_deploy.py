@@ -212,9 +212,9 @@ def _move_constants(monkeypatch, root, spool=None):
 
 
 def _previewed_command(out):
-    """The constructed root command from a preview's output."""
+    """The constructed root command from a dry run's output."""
     return next(l for l in out.splitlines()
-                if "--i-have-approval" in l
+                if "--system" in l
                 and os.path.join(deploy.REPO, "deploy.py") in l)
 
 
@@ -398,7 +398,7 @@ def test_preview_names_a_command_that_can_actually_run(
     deploy.system_preview(_args(tmp_path))
     out = capsys.readouterr().out
 
-    assert "%s %s --system --i-have-approval" % (
+    assert "%s %s --system" % (
         deploy.TRUSTED_PYTHON3, os.path.join(deploy.REPO, "deploy.py")) in out
     assert "sh %s" % os.path.join(deploy.REPO, "deploy.py") not in out
 
@@ -412,7 +412,8 @@ def test_the_preview_runs_the_payloads_own_installer_preview(tmp_path, monkeypat
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_preview(_args(tmp_path)) == 0
     assert calls == [[deploy.TRUSTED_SH,
-                      os.path.join(deploy.REPO, "shim", "install.sh"), "--system"]]
+                      os.path.join(deploy.REPO, "shim", "install.sh"),
+                      "--system", "--dry-run"]]
 
 
 def test_deploy_system_refuses_without_root(tmp_path, monkeypatch):
@@ -425,8 +426,8 @@ def test_deploy_system_refuses_without_root(tmp_path, monkeypatch):
 
 
 def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
-    """Reversing a control is the safer direction, so it needs proof of root
-    but not the extra --i-have-approval ceremony installing does."""
+    """Reversing a control is the safer direction. It needs proof of root,
+    which since ADR-0021 is the whole of the install's gate too."""
     args = _args(tmp_path)
 
     monkeypatch.setattr(deploy, "_is_root", lambda: False)
@@ -501,7 +502,7 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
         return seen
 
     before = snapshot()
-    proc = subprocess.run([NODE_PYTHON, script, "--system"],
+    proc = subprocess.run([NODE_PYTHON, script, "--system", "--dry-run"],
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 6, proc.stdout + proc.stderr
     assert snapshot() == before, "a preview must leave the tree untouched"
@@ -514,7 +515,8 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
     assert "System-wide install of walk-blocker Layer 1" in out
     assert not [l for l in out.splitlines()
                 if l.lstrip("# ").strip().startswith("sh ")
-                and "install.sh" in l and "--i-have-approval" in l]
+                and "install.sh" in l and "--system" in l
+                and "--relink" not in l and "--version" not in l]
     assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in out
     assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
         deploy.TRUSTED_PYTHON3, layout.prefix, layout.spool) in out
@@ -526,7 +528,7 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
 
 def _previewed_lines(out, script):
     return [l for l in out.splitlines()
-            if "--i-have-approval" in l and script in l]
+            if "--system" in l and script in l]
 
 
 # --------------------------------------------------------------------------
@@ -983,7 +985,7 @@ def test_deploy_system_executes_when_root_and_approved(tmp_path, monkeypatch):
     assert any(c[0] == "install" and args.prefix in c for c in calls), calls
     assert any(
         any("install.sh" in arg for arg in c)
-        and "--system" in c and "--i-have-approval" in c
+        and "--system" in c and "--dry-run" not in c
         for c in calls), calls
     assert any(c[:2] == ["systemctl", "daemon-reload"] for c in calls)
     assert any(c[:3] == ["systemctl", "enable", "--now"] for c in calls)
@@ -1022,7 +1024,7 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
     installer = next(c for c in calls if any("install.sh" in a for a in c))
     assert installer == [deploy.TRUSTED_SH,
                          os.path.join(args.prefix, "shim", "install.sh"),
-                         "--system", "--i-have-approval"], installer
+                         "--system"], installer
 
     pass_uninstall_checks(monkeypatch, args.prefix)
     calls.clear()
@@ -2361,7 +2363,7 @@ def test_a_non_default_path_is_refused_before_anything_runs(tmp_path,
 
 def test_the_previewed_command_is_the_command_that_installs(tmp_path, capsys,
                                                             monkeypatch):
-    """Every advertised approval command is deploy.py's and carries no path
+    """Every advertised install command is deploy.py's and carries no path
     flags, and none advertises install.sh."""
     pass_prefix_checks(monkeypatch)
     monkeypatch.setattr(deploy, "run", recording_run([]))
@@ -2369,16 +2371,17 @@ def test_the_previewed_command_is_the_command_that_installs(tmp_path, capsys,
     out = capsys.readouterr().out
 
     advertised = [ln for ln in out.splitlines()
-                  if ln.startswith("#   ") and "--i-have-approval" in ln]
+                  if ln.startswith("#   ") and "deploy.py" in ln
+                  and "--system" in ln]
     assert advertised, out
     for line in advertised:
-        assert line.strip().endswith(
-            "deploy.py --system --i-have-approval"), line
+        assert line.strip().endswith("deploy.py --system"), line
         for flag in PATH_FLAGS:
             assert flag not in line, (flag, line)
     assert not [ln for ln in out.splitlines()
                 if ln.lstrip("# ").strip().startswith("sh ")
-                and "install.sh" in ln and "--i-have-approval" in ln], out
+                and "install.sh" in ln and "--system" in ln
+                and "--relink" not in ln and "--version" not in ln], out
 
 
 def test_the_preview_does_not_relay_the_standalone_installer_command(
@@ -2390,7 +2393,8 @@ def test_the_preview_does_not_relay_the_standalone_installer_command(
 
     offered = [l for l in out.splitlines()
                if l.lstrip("# ").strip().startswith("sh ")
-               and "install.sh" in l and "--i-have-approval" in l]
+               and "install.sh" in l and "--system" in l
+               and "--relink" not in l and "--version" not in l]
     assert offered == [], offered
     assert _previewed_command(out)
 
@@ -2402,8 +2406,8 @@ def test_the_relay_filter_strips_a_command_but_not_prose(tmp_path, capsys,
     pass_prefix_checks(monkeypatch)
     child = (
         "# preamble\n"
-        "#   sh /somewhere/install.sh --system --i-have-approval\n"
-        "# NOT install.sh run with --i-have-approval directly, because ...\n"
+        "#   sh /somewhere/install.sh --system\n"
+        "# NOT install.sh run with --system directly, because ...\n"
         "# trailer\n")
     monkeypatch.setattr(
         deploy, "run",
@@ -2413,7 +2417,7 @@ def test_the_relay_filter_strips_a_command_but_not_prose(tmp_path, capsys,
 
     assert "sh /somewhere/install.sh" not in out
     assert "standalone command is omitted" in out
-    assert ("# NOT install.sh run with --i-have-approval directly, because ..."
+    assert ("# NOT install.sh run with --system directly, because ..."
             in out)
     assert "# trailer" in out
 
@@ -2431,8 +2435,9 @@ def test_a_refusing_child_preview_is_relayed_not_swallowed(tmp_path, capsys,
     captured = capsys.readouterr()
     assert "it is a symlink" in captured.err
     assert "would refuse too" in captured.err
-    assert "--i-have-approval" not in [
-        l for l in captured.out.splitlines() if l.startswith("#   ")]
+    assert not [l for l in captured.out.splitlines()
+                if l.startswith("#   ") and "deploy.py" in l
+                and "--system" in l]
 
 
 # --------------------------------------------------------------------------
@@ -3564,11 +3569,12 @@ def test_verify_needs_no_privilege(installed, monkeypatch):
     assert code == deploy.VERIFY_OK
 
 
-def test_verify_refuses_the_approval_flag():
-    """Accepting it silently on a read-only mode teaches an operator that the
-    flag is decorative."""
+def test_verify_refuses_a_dry_run():
+    """Accepting it silently on a read-only mode teaches an operator that
+    `--verify` alone writes something. It does not, so there is no safer
+    spelling of it to reach for."""
     with pytest.raises(SystemExit) as caught:
-        deploy.main(["--verify", "--i-have-approval"])
+        deploy.main(["--verify", "--dry-run"])
     assert caught.value.code == 2
 
 
@@ -3602,9 +3608,9 @@ def test_the_docstring_names_every_option_the_parser_accepts():
     offered = set(re.findall(r"--[a-z][a-z-]+", out.getvalue()))
     assert "--verify" in offered, "the parser stopped accepting --verify"
 
-    # `--help` is argparse's own, and `--dry-run` was undocumented before this
-    # change; widening that is not this change's business.
-    exempt = {"--help", "--dry-run"}
+    # `--help` is argparse's own. `--dry-run` used to be exempt here because
+    # it was undocumented; it is the inspection path now, so it is not.
+    exempt = {"--help"}
     for flag in sorted(offered - exempt):
         assert flag in deploy.__doc__, "%s is accepted but undocumented" % flag
 
