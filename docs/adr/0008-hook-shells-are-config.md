@@ -1,6 +1,7 @@
 # ADR-0008: Hook shells are a config list with required and best-effort classes, verified not assumed
 
 **Status:** accepted, 2026-09-16
+The Decision's install command below reads `--system`, which is current. It was written as `--system --i-have-approval`; ADR-0021 removed that flag, and the spelling was corrected in place rather than left stale — a reader meets the command they would actually run, and this line is where the superseded one is recorded.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`
 
 ## Context

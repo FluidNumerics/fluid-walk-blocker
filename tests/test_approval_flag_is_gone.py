@@ -57,14 +57,27 @@ EXEMPT_FILES = {
     os.path.join("docs", "adr", "0021-root-is-the-authorization.md"),
 }
 
-# One legitimate unrelated use: ADR-0007 is about every refusal naming a
-# sanctioned alternative, and calls that alternative "approved". Waived by the
-# sentence, not by the file, so a second `approv` appearing in ADR-0007 for a
-# reason to do with the installer would still fail.
+# A waiver is a LINE, not a file, so the rest of each record stays guarded: a
+# second `approv` appearing in either file for a reason to do with the
+# installer still fails.
+#
+# ADR-0007's is a legitimate unrelated use -- that record is about every
+# refusal naming a sanctioned alternative, and calls it "approved".
 WAIVED_LINES = {
     (os.path.join("docs", "adr", "0007-no-namespace-index.md"),
      "Every command Layer 1 refuses is required to have an approved alternative"),
+    # ADR-0008's Decision carries the install command. ADR-0021 removed the
+    # flag it used to name, and the spelling was corrected in place so that a
+    # reader meets the command they would actually run; this Status line is
+    # where the superseded spelling is recorded instead. Current state first,
+    # the deprecated one below it rather than in the reader's way.
+    (os.path.join("docs", "adr", "0008-hook-shells-are-config.md"),
+     "It was written as `--system --i-have-approval`; ADR-0021 removed that flag"),
 }
+
+
+def _waived(relative, line):
+    return any(relative == f and waived in line for f, waived in WAIVED_LINES)
 
 STEM = re.compile(r"approv", re.I)
 TOKEN = "--i-have-approval"
@@ -108,7 +121,8 @@ def test_no_document_names_the_removed_flag(relative):
     """A deleted token, so this is a strict literal ban."""
     if relative in EXEMPT_FILES:
         return
-    hits = [(n, l) for n, l in enumerate(_lines(relative), 1) if TOKEN in l]
+    hits = [(n, l) for n, l in enumerate(_lines(relative), 1)
+            if TOKEN in l and not _waived(relative, l)]
     assert hits == [], "%s still names the removed flag: %r" % (relative, hits)
 
 
@@ -121,7 +135,7 @@ def test_no_document_describes_an_approval_ceremony(relative):
     for number, line in enumerate(_lines(relative), 1):
         if not STEM.search(line):
             continue
-        if any(relative == f and waived in line for f, waived in WAIVED_LINES):
+        if _waived(relative, line):
             continue
         hits.append((number, line.strip()))
     assert hits == [], (

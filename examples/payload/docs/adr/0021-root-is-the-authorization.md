@@ -112,7 +112,13 @@ still refuses a writing run from anywhere but the deployed copy.
 - ADR-0008's exit-code sentence and ADR-0005's and ADR-0006's prose refer to
   the flag by name. They are descriptions of the command's spelling, not
   decisions that rest on it, so they are reworded where they appear and
-  none of the three is narrowed.
+  none of the three is narrowed. ADR-0005's and ADR-0006's are Consequences
+  prose. ADR-0008's is inside its Decision, where `TEMPLATE.md` otherwise
+  forbids an edit: the spelling is corrected there anyway, so that a reader
+  meets the command they would actually run, and the superseded spelling is
+  recorded under that record's Status. The rule being applied is that the
+  current state comes first and a deprecated one is recorded below it, not
+  preserved in the reader's way.
 
 ## Re-measure when
 
