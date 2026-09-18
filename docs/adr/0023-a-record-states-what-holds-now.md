@@ -17,11 +17,10 @@ quoted. A reader meets the superseded sentence first, in `## Decision` or
 sentence without scrolling back to the Status block. Eight clauses across seven
 records are in that state.
 
-The live exhibit is ADR-0004. Its Decision still describes the install as gated
-on root "plus explicit authorization (`--i-have-approval`), it self-executes".
-ADR-0021 removed that flag. A reader who reaches ADR-0004's Decision and stops
-there has read a command that does not exist, in the section most likely to be
-copied.
+The live exhibit was ADR-0004. Its Decision described the install as gated on
+root plus an explicit authorization flag, which ADR-0021 had removed. A reader
+who reached that Decision and stopped there had read a command that no longer
+existed, in the section most likely to be copied.
 
 This was raised on the pull request that removed the flag. Both moves available
 at the time were bad: preserve the sentence verbatim, and a reader's first

@@ -38,8 +38,8 @@ backstop against that account.
 Delete `--user` mode. `--system` becomes the only deployment path, and it
 stops being print-only: gated on real authentication (the operator already
 has root — checked with `id -u` in the shell installer and `os.geteuid()` in
-`deploy.py`, never reimplemented) plus explicit authorization
-(`--i-have-approval`), it self-executes — root-owned shims and payload under
+`deploy.py`, never reimplemented), it self-executes — root-owned shims and
+payload under
 `[install].prefix`, the PATH block above the guard clause in the system-wide
 shell rc named by `[hooks.<shell>].file`, the audit trail under
 `[install].spool_dir`, and the reaper as a root-run `systemd` timer under
@@ -102,3 +102,14 @@ account can disable into a backstop against that account.
 - `[install].unit_dir`
 - `[install].spool_dir`
 - `[hooks.<shell>].file`
+
+## Superseded wording
+
+Narrowed by ADR-0021. The Decision above read, before the flag was removed:
+
+> plus explicit authorization (`--i-have-approval`), it self-executes
+
+The gate is root alone. The clause narrowed by ADR-0012 — "none of it writable
+by the account being monitored" — is not recorded here: ADR-0012 keeps it in
+full and narrows only an inference about readability that was never part of it,
+so it still states what holds and stays in the Decision (ADR-0023).

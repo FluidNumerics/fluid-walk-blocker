@@ -89,8 +89,8 @@ the site.
 - `opaque_traversal` and `runaway_traversal` now differ in what they claim,
   not merely in how much detail they carry. The companion change that modelled
   `ugrep` (ADR-0011) moves the one real finding out of this verdict entirely —
-  after both, `opaque_traversal` means "a tool this tree has not modelled,
-  doing something in D that might be a walk", and nothing weaker.
+  after both, `opaque_traversal` means a tool this tree has not modelled,
+  observed in D at two consecutive polls (ADR-0020), and nothing weaker.
 - **An exclusion list is a place defects hide, and this one is kept small on
   purpose.** The honest risk is not the `tail` entry; it is the next five added
   at once because they "obviously" cannot walk either. The one-at-a-time rule
@@ -114,3 +114,11 @@ evidence. Never add a sibling by analogy.
 ## Site config touched
 
 - `[reaper].stream_filters`
+
+## Superseded wording
+
+Narrowed by ADR-0020. The Consequences above read:
+
+> a tool this tree has not modelled, doing something in D that might be a walk
+
+The arm names a process observed in D at two consecutive polls, not one.

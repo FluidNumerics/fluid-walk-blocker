@@ -85,9 +85,10 @@ shipped in the payload as `survey.py`. It takes a timeout-bounded `statfs` per
 mount, each in its own subprocess so that one wedged mount cannot hang the
 survey; prints type, remoteness, the tier-one default, capacity and inode
 count; and proposes a `[[filesystems.mounts]]` block for the administrator to
-review. It never writes configuration. The reconcile logs one journald line
-per mount in the live table that no override covers, so a mount running on its
-default is visible without anyone running the survey.
+review. It never writes configuration. The reconcile logs a journald line when
+a mount's standing changes — first seen uncovered, covered, unmounted — rather
+than on every poll (ADR-0019), so a mount running on its default is visible
+without anyone running the survey.
 
 ## Consequences
 
@@ -144,3 +145,12 @@ investigate; the reconcile's per-mount line is what makes that choice visible.
 - `[[filesystems.mounts]]` — `path`, `class`, `maxdepth`
 - `[filesystems].maxdepth_allowed` and `[filesystems].depth_allowance_max`, as
   the bounds a `maxdepth` override sits between
+
+## Superseded wording
+
+Narrowed by ADR-0019. The Decision above read:
+
+> The reconcile logs one journald line per mount in the live table that no override covers
+
+The line is logged when a mount's standing changes — first seen uncovered,
+covered, unmounted — not on every poll.

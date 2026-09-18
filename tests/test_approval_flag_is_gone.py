@@ -68,11 +68,12 @@ WAIVED_LINES = {
      "Every command Layer 1 refuses is required to have an approved alternative"),
     # ADR-0008's Decision carries the install command. ADR-0021 removed the
     # flag it used to name, and the spelling was corrected in place so that a
-    # reader meets the command they would actually run; this Status line is
-    # where the superseded spelling is recorded instead. Current state first,
-    # the deprecated one below it rather than in the reader's way.
+    # reader meets the command they would actually run; the superseded spelling
+    # is recorded in that record's `## Superseded wording` section, which
+    # ADR-0023 made the place it goes. The waiver moved with the sentence: it
+    # was on the Status line until that restructure.
     (os.path.join("docs", "adr", "0008-hook-shells-are-config.md"),
-     "It was written as `--system --i-have-approval`; ADR-0021 removed that flag"),
+     "`--system --i-have-approval`; the flag is gone"),
 }
 
 

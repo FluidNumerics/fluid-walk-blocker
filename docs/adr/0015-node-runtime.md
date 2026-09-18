@@ -54,8 +54,10 @@ or Python that runs on the 3.9 stdlib with no third-party import. The shim is
 the `sh` part, and the shim is generated (ADR-0013), so its grammar is written
 once, in Python, in the rule table.
 
-Before `sg_exec_real`, the shim forks nothing — no `$(...)`, no backticks, no
-pipeline — reads exactly one file, `/proc/mounts`, and makes no `statfs`,
+Before `sg_exec_real`, the fast path forks nothing — no `$(...)`, no backticks,
+no pipeline — and a call that reaches a mount judgement pays exactly one
+documented fork, the trusted `awk` over `/proc/mounts` (ADR-0018). Either way
+the shim reads exactly one file, `/proc/mounts`, and makes no `statfs`,
 network or configuration call. Everything it needs to decide is in its argv,
 its environment, its cwd and that one file. Both properties are tested: the
 fast path is asserted fork-free, and the set of files it opens is asserted.
@@ -112,3 +114,12 @@ with it before deciding anything.
 none. The budgets are `measure.sh` arguments and live in the site's own
 evidence. `[trusted_binaries].sh` and `.python3` name which interpreters the
 node runs but do not change the rule.
+
+## Superseded wording
+
+Narrowed by ADR-0018. The Decision above read:
+
+> Before `sg_exec_real`, the shim forks nothing — no `$(...)`, no backticks, no pipeline
+
+The fork-free rule is the fast path's. A call that reaches a mount judgement
+pays one documented fork before the real tool.
