@@ -71,6 +71,8 @@ import argparse
 import atexit
 import collections
 import errno
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -2072,6 +2074,197 @@ BANNER = """\
 """
 
 
+# --------------------------------------------------------------------------
+# --verify: does the install still match the record it was built from?
+# --------------------------------------------------------------------------
+#
+# 0 match, 1 drift, 4 cannot verify. Not 2: argparse owns 2 in this file, and
+# 1 is the house idiom for a finding (`build --check`, the reaper's actionable
+# exit). Drift outranks cannot-verify, because "something definitely differs"
+# is true whatever the unreadable bytes hold -- and the report lists the
+# unreadable paths either way, so 1 is never read as "everything else is fine".
+VERIFY_OK, VERIFY_DRIFT, VERIFY_UNKNOWN = 0, 1, 4
+
+_VERIFY_CHUNK = 65536
+
+
+def _sha256_file(path):
+    """The file's digest, or None if it cannot be read.
+
+    Chunked deliberately: `hashlib.file_digest` is 3.11 and up, and node code
+    runs on a login node's Python, which is 3.9 at the floor (ADR-0015).
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(_VERIFY_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def expected_from_lock(lock):
+    """({installed relative path: digest}, {built but not installed}).
+
+    Derived from PAYLOAD_SOURCES rather than from the lock, because the two
+    sets are NOT the same: `deploy.py` is built into the payload and hashed
+    into the lock, and is never installed -- it is this program, run from the
+    staged copy. Walking the lock naively reports it missing forever.
+    """
+    files = lock["files"]
+    expected, covered = {}, set()
+    for rel, is_dir, _mode in PAYLOAD_SOURCES:
+        if is_dir:
+            prefix = rel + "/"
+            for key in files:
+                if key.startswith(prefix):
+                    expected[key] = files[key]
+                    covered.add(key)
+        elif rel in files:
+            expected[rel] = files[rel]
+            covered.add(rel)
+    return expected, set(files) - covered
+
+
+def present_under(prefix):
+    """Relative paths on disk under the DIRECTORY entries of the payload.
+
+    Only those: the prefix's own root may hold files this install did not
+    create, including the `bin/` symlink farm the reconcile rebuilds, so
+    walking it would report a neighbour's file as drift.
+    """
+    found = set()
+    for rel, is_dir, _mode in PAYLOAD_SOURCES:
+        if not is_dir:
+            continue
+        root = os.path.join(prefix, rel)
+        for base, _dirs, names in os.walk(root):
+            for name in names:
+                full = os.path.join(base, name)
+                found.add(os.path.relpath(full, prefix).replace(os.sep, "/"))
+    return found
+
+
+def verify_lines(prefix, lock):
+    """(sorted report lines, checked, unknown) for an installed tree."""
+    expected, _not_installed = expected_from_lock(lock)
+    lines, checked, unknown = [], 0, 0
+
+    for rel in sorted(expected):
+        path = os.path.join(prefix, rel)
+        if not os.path.exists(path):
+            lines.append("missing: %s" % rel)
+            continue
+        digest = _sha256_file(path)
+        if digest is None:
+            lines.append("unchecked: %s (could not be read as this user)" % rel)
+            unknown += 1
+            continue
+        checked += 1
+        if digest != expected[rel]:
+            lines.append("differs: %s" % rel)
+
+    for rel in sorted(present_under(prefix) - set(expected)):
+        lines.append("extra: %s" % rel)
+
+    # The marker is written before anything else, so it is the one check that
+    # survives an install that stopped half way.
+    marker = os.path.join(prefix, PAYLOAD_MARKER)
+    stamped = None
+    if os.path.exists(marker):
+        try:
+            with open(marker) as handle:
+                stamped = handle.read().strip()
+        except OSError:
+            stamped = None
+    if stamped is not None and stamped != lock.get("version"):
+        lines.append("differs: %s (says %s, the record says %s)"
+                     % (PAYLOAD_MARKER, stamped, lock.get("version")))
+
+    # The lock's one internal relation. A hand edit that updated a file's
+    # digest and forgot this leaves the record disagreeing with itself.
+    site_digest = lock["files"].get("site.toml")
+    if site_digest is not None and lock.get("site_sha256") != site_digest:
+        lines.append("differs: site.lock.json (site_sha256 disagrees with its "
+                     "own site.toml entry)")
+
+    return lines, checked, unknown
+
+
+def read_installed_lock(prefix):
+    """The installed record, or None when it cannot be trusted to be one."""
+    try:
+        with open(os.path.join(prefix, "site.lock.json")) as handle:
+            lock = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(lock, dict) or not isinstance(lock.get("files"), dict):
+        return None
+    return lock
+
+
+def system_verify(args, out=None):
+    """Compare the installed tree against the record it was built from.
+
+    Reads the record; takes no behaviour from it. Nothing here decides, writes,
+    repairs or changes an exit code elsewhere, so ADR-0013's rule that the node
+    has no configuration parser is untouched in the part that matters: the
+    reaper's rejected JSON reader was rejected because its parse failure had no
+    right answer, since an empty mount list reads as a clean bill of health.
+    Here, refusing to answer IS the right answer, and it is exit 4.
+
+    Deliberately never checks for root. Every installed file is world-readable
+    by decision (ADR-0012), and on a shared node the people whose PATH this
+    tool changed should be able to check that the guard refusing their command
+    is the guard that was reviewed.
+    """
+    out = sys.stdout if out is None else out
+    prefix = args.prefix
+
+    if not os.path.isdir(prefix):
+        out.write("walk-blocker verify: %s is not a directory; nothing is "
+                  "installed here.\n" % prefix)
+        return VERIFY_UNKNOWN
+
+    lock = read_installed_lock(prefix)
+    if lock is None:
+        out.write("walk-blocker verify: %s/site.lock.json is missing or is not "
+                  "a record this can read.\n" % prefix)
+        out.write("  Without it there is nothing to compare against, which is "
+                  "not the same as a clean install.\n")
+        return VERIFY_UNKNOWN
+
+    lines, checked, unknown = verify_lines(prefix, lock)
+
+    out.write("walk-blocker verify: %s\n" % prefix)
+    out.write("  built by walk-blocker %s, schema %s, payload %s\n"
+              % (lock.get("walk_blocker_version"), lock.get("schema_version"),
+                 lock.get("version")))
+    out.write("  site_sha256 %s\n" % lock.get("site_sha256"))
+    out.write("  contents only: modes and ownership are asserted at install, "
+              "not here.\n")
+    out.write("  a record beside what it describes cannot detect an edit to "
+              "both; see the runbook.\n")
+    out.write("\n")
+    for line in lines:
+        out.write(line + "\n")
+    if lines:
+        out.write("\n")
+    out.write("%d file(s) checked, %d finding(s), %d could not be read.\n"
+              % (checked, len([l for l in lines if not l.startswith("unchecked:")]),
+                 unknown))
+
+    if any(not line.startswith("unchecked:") for line in lines):
+        return VERIFY_DRIFT
+    if unknown:
+        return VERIFY_UNKNOWN
+    return VERIFY_OK
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
@@ -2089,6 +2282,11 @@ def main(argv=None):
                       help="system-wide install (root-owned)")
     mode.add_argument("--uninstall", action="store_true",
                       help="reverse a --system install (root-owned)")
+    # A mode, not a path argument: it points nowhere, reads the same compiled
+    # prefix as everything else here, and needs no privilege.
+    mode.add_argument("--verify", action="store_true",
+                      help="compare the installed files against the record "
+                           "they were built from; writes nothing")
     parser.add_argument("--i-have-approval", action="store_true",
                         help="actually install rather than only preview "
                              "(also requires root)")
@@ -2102,6 +2300,10 @@ def main(argv=None):
     for attr, value in sorted(default_paths().items()):
         setattr(args, attr, value)
 
+    if args.verify:
+        if args.i_have_approval:
+            parser.error("--verify writes nothing, so it takes no approval")
+        return system_verify(args)
     if args.uninstall:
         return system_uninstall(args)
     if args.i_have_approval:
