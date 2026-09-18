@@ -106,7 +106,7 @@
           "minimum": 0,
           "maximum": 16,
           "default": 2,
-          "description": "A root this many components or fewer below an expensive mount point is refused when walked unbounded; deeper roots pass. A bounded walk is a different claim and is governed by the depth ceiling instead (ADR-0007)."
+          "description": "A root at this level or deeper on an expensive mount will walk unbounded; fewer components than this will be blocked on this node. A bounded walk is a different claim and is governed by the depth ceiling instead (ADR-0007)."
         },
         "depth_allowance_max": {
           "type": "integer",
