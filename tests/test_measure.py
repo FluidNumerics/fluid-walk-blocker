@@ -86,6 +86,24 @@ def slow_guard(tmp_path_factory, rendered_shim):
     because the shim reads its own `$0` to learn which tool it is standing in
     for -- a wrapper would hand it the wrapper's name and measure a different
     code path, or none.
+
+    Used by the ratio tests, and -- since #47 -- by every single-guard test
+    whose expected outcome requires the measured overhead to be POSITIVE.
+    `measure.sh` refuses, before any gate, when an overhead lands at or below
+    zero, because a guarded run no slower than the bare one measured nothing.
+    Against the plain guard that refusal is not hypothetical: its real fast
+    path costs about the same as one scheduling hiccup, so on a contended
+    runner the subtraction can land negative and a test asserting a budget
+    verdict gets the refusal instead.
+
+    Measured, 25 runs each under identical load: the plain guard returned a
+    minimum overhead of -4.54 ms and took that refusal 3 times; this spun copy
+    returned a minimum of +26.01 ms and took it none. Raising the iteration
+    count does NOT substitute -- under load the spread grows with the count
+    rather than shrinking, because the noise is correlated stalls rather than
+    per-iteration jitter. The spin works because it adds deterministic work to
+    the shim side only, and contention dilates that work just as it dilates
+    the noise.
     """
     path = tmp_path_factory.mktemp("slow") / "guard.sh"
     lines = rendered_shim["guard_text"].split("\n")
@@ -303,15 +321,33 @@ def test_asking_for_fewer_pairs_than_the_gate_needs_is_refused_up_front(guard):
 # device names are made up, and the only real path in it is the tmp directory
 # under test.
 
-@pytest.fixture
-def slow_table(tmp_path, guard):
-    """A mount table that puts the rendered guard on a wekafs mount and
+def _mount_table(tmp_path, subject):
+    """A mount table that puts `subject`'s directory on a wekafs mount and
     everything else on a local root."""
     table = tmp_path / "mounts"
     table.write_text(
         "/dev/sda1 / ext4 rw,relatime 0 0\n"
-        "fast %s wekafs rw,relatime 0 0\n" % os.path.dirname(guard))
+        "fast %s wekafs rw,relatime 0 0\n" % os.path.dirname(subject))
     return {"WALK_BLOCKER_MEASURE_MOUNTS": str(table)}
+
+
+@pytest.fixture
+def slow_table(tmp_path, guard):
+    """The table for runs whose subject is the plain rendered guard."""
+    return _mount_table(tmp_path, guard)
+
+
+@pytest.fixture
+def spun_table(tmp_path, slow_guard):
+    """The same table, naming the SPUN guard instead.
+
+    The two guards live in different temporary directories, so a run measuring
+    `slow_guard` against `slow_table` would find its subject on the local root
+    rather than on the wekafs entry -- and the two tests below, which exist to
+    show the filesystem check letting an unlisted type through, would pass
+    without the check ever having something to let through. Vacuous, and green.
+    """
+    return _mount_table(tmp_path, slow_guard)
 
 
 def test_a_guard_on_an_expensive_filesystem_is_refused_before_timing(guard, slow_table):
@@ -347,25 +383,28 @@ def test_the_reference_guard_is_checked_too(guard, rendered_shim, slow_table, tm
     assert guard in r.stderr and str(cand) not in r.stderr
 
 
-def test_a_filesystem_not_on_the_list_is_fine(guard, slow_table):
+def test_a_filesystem_not_on_the_list_is_fine(slow_guard, spun_table):
     """The inverse -- otherwise the two tests above would pass against a check
-    that refused everything. Same table, a list that does not name wekafs."""
-    r = run_measure([guard, "1", "1000", "1000"],
+    that refused everything. Same table, a list that does not name wekafs.
+
+    Reaches a real reading, so it takes the spun guard and the table that
+    names it; see `slow_guard`."""
+    r = run_measure([slow_guard, "1", "1000", "1000"],
                     env=dict(NO_DISCARD, WALK_BLOCKER_MEASURE_SLOW_FSTYPES="nosuchfs",
-                             **slow_table))
+                             **spun_table))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "within the 1000 ms budget" in r.stdout
 
 
-def test_the_filesystem_check_can_be_disabled(guard, slow_table):
+def test_the_filesystem_check_can_be_disabled(slow_guard, spun_table):
     """For a machine where every filesystem is one of these."""
-    r = run_measure([guard, "1", "1000", "1000"],
+    r = run_measure([slow_guard, "1", "1000", "1000"],
                     env=dict(NO_DISCARD, WALK_BLOCKER_MEASURE_SLOW_FSTYPES="",
-                             **slow_table))
+                             **spun_table))
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_drifting_single_guard_run_refuses_instead_of_judging_the_shim(guard):
+def test_a_drifting_single_guard_run_refuses_instead_of_judging_the_shim(slow_guard):
     """What a node hit first: baseline drift of a fifth, and the run reported
     "shim overhead exceeds the budget" -- a verdict about the code, from a
     reading whose own two measurements of the same bare binary disagreed by
@@ -373,8 +412,13 @@ def test_a_drifting_single_guard_run_refuses_instead_of_judging_the_shim(guard):
 
     Exit 2, with the usage errors rather than the gate failures: "this
     measured nothing" is not "the shim got slower", and the difference has to
-    survive being read by something other than a human."""
-    r = run_measure([guard, "1", "1000", "1000"],
+    survive being read by something other than a human.
+
+    Takes the spun guard because positivity is checked BEFORE drift: against
+    the plain guard a contended run can refuse with "an overhead came back at
+    or below zero" instead, failing this test for the wrong reason while it
+    appears to be about drift."""
+    r = run_measure([slow_guard, "1", "1000", "1000"],
                     env={"WALK_BLOCKER_MEASURE_DRIFT_PCT": "-1"})
     assert r.returncode == 2, r.stdout + r.stderr
     assert "disagree" in r.stderr
@@ -449,7 +493,7 @@ def test_the_env_knobs_are_validated_too(guard):
     assert "WARMUP must be a whole number, not 'q'" in r.stderr
 
 
-def test_a_negative_threshold_is_still_accepted(guard):
+def test_a_negative_threshold_is_still_accepted(slow_guard):
     """And the inverse, because the validator must not break the idiom it
     shares the file with: a negative threshold means "discard everything",
     which is how the drift and floor gates are driven deliberately. It fires
@@ -466,11 +510,11 @@ def test_a_negative_threshold_is_still_accepted(guard):
     `-` would read as "not enabled" and silently disable the gate, which is
     the silent-pass defect reproduced inside its own fix. Emptiness is tested
     before stripping."""
-    r = run_measure([guard, "1", "1000", "1000"],
+    r = run_measure([slow_guard, "1", "1000", "1000"],
                     env=dict(NO_DISCARD, WALK_BLOCKER_MEASURE_FLOOR_PCT="-1"))
     assert r.returncode == 0, r.stdout + r.stderr
     for bad in ("-", "--1", "-.", "1-2"):
-        r = run_measure([guard, "1", "1000", "1000"],
+        r = run_measure([slow_guard, "1", "1000", "1000"],
                         env={"WALK_BLOCKER_MEASURE_DRIFT_PCT": bad})
         assert r.returncode == 2, (bad, r.stdout + r.stderr)
         assert "must be a number, not '%s'" % bad in r.stderr, bad
@@ -485,11 +529,11 @@ def test_a_warmup_of_zero_is_a_legitimate_ask(guard):
     assert "must be at least" not in r.stderr, r.stderr
 
 
-def test_a_decimal_ceiling_is_accepted(guard):
+def test_a_decimal_ceiling_is_accepted(slow_guard):
     """The inverse: the real ones are decimals -- a budget in ms with a
     fraction, a ratio like 1.25x -- and a validator that rejected them would
     be worse than none."""
-    r = run_measure([guard, "1", "1000.5", "1000.5"], env=NO_DISCARD)
+    r = run_measure([slow_guard, "1", "1000.5", "1000.5"], env=NO_DISCARD)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "within the 1000.5 ms budget" in r.stdout
 
@@ -579,17 +623,21 @@ def test_against_without_a_reference_is_a_usage_error():
     assert "usage:" in r.stderr
 
 
-def test_the_absolute_budget_still_gates_in_single_guard_mode(guard):
+def test_the_absolute_budget_still_gates_in_single_guard_mode(slow_guard):
     """The ratio gate does not replace this one. A 0 ms budget is exceeded by
     any shim at all, which is the point: the arithmetic is what is under test,
-    not the shim's speed."""
-    r = run_measure([guard, "1", "0", "0"], env=NO_DISCARD)
+    not the shim's speed.
+
+    And because the shim's speed is not the subject, the subject may as well
+    be a shim that is unambiguously slow -- which is what stops a contended
+    runner turning this into the positivity refusal instead (#47)."""
+    r = run_measure([slow_guard, "1", "0", "0"], env=NO_DISCARD)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "exceeds the" in r.stderr and "0 ms budget" in r.stderr
 
 
-def test_a_budget_the_shim_clears_passes(guard):
-    r = run_measure([guard, "1", "1000", "1000"], env=NO_DISCARD)
+def test_a_budget_the_shim_clears_passes(slow_guard):
+    r = run_measure([slow_guard, "1", "1000", "1000"], env=NO_DISCARD)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "within the 1000 ms budget" in r.stdout
     assert "guarded path within the 1000 ms budget" in r.stdout
