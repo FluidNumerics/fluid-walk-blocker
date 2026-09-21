@@ -96,11 +96,13 @@ def slow_guard(tmp_path_factory, rendered_shim):
     runner the subtraction can land negative and a test asserting a budget
     verdict gets the refusal instead.
 
-    Measured, 25 runs each under identical load: the plain guard returned a
-    minimum overhead of -4.54 ms and took that refusal 3 times; this spun copy
-    returned a minimum of +26.01 ms and took it none. Raising the iteration
-    count does NOT substitute -- under load the spread grows with the count
-    rather than shrinking, because the noise is correlated stalls rather than
+    Measured on a developer workstation under synthetic CPU load, NOT at a
+    deployment -- 25 runs per arm: the plain guard returned a minimum overhead
+    of -4.54 ms and took that refusal 3 times; this spun copy returned a
+    minimum of +26.01 ms and took it none. Re-run that comparison if the
+    shim's fast path changes, or if SPIN moves. Raising the iteration count
+    does NOT substitute -- under load the spread grows with the count rather
+    than shrinking, because the noise is correlated stalls rather than
     per-iteration jitter. The spin works because it adds deterministic work to
     the shim side only, and contention dilates that work just as it dilates
     the noise.
