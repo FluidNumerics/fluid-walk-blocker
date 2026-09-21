@@ -93,7 +93,13 @@ def test_the_exit_code_constant_is_one_no_wrapped_tool_can_claim():
     """Not 1 (grep's "no match"), not 2 (grep's OWN error, which made a
     refusal indistinguishable from the tool failing by itself), and outside
     every band a caller could confuse it with: 126/127 the shell and the
-    shim's own not-found, 128+ signals, 255 ssh. 77 is EX_NOPERM. ADR-0024."""
+    shim's own not-found, 128+ signals, 255 ssh. 77 is EX_NOPERM. ADR-0024.
+
+    The band assertions look redundant against the first one and are not: the
+    first pins the value a later reader may legitimately change, and these
+    pin the CLASS it has to stay inside when they do. Deleting them as
+    duplication would leave the next value unconstrained.
+    """
     assert R.EXIT_REFUSED == 77
     assert R.EXIT_REFUSED not in (0, 1, 2, 126, 127, 255)
     assert R.EXIT_REFUSED < 128
