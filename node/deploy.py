@@ -133,6 +133,13 @@ DEFAULT_AUDIT_FILENAME = '@@install.audit_filename@@'  # GENERATED from site.tom
 # thing being avoided.
 STAGING_PARENT = '@@install.staging_parent@@'  # GENERATED from site.toml:install.staging_parent
 
+# The snapshot's name, minus the leaf `mkdtemp` picks. Named because two
+# places need it and they must not drift: the call that creates the directory,
+# and the dry run, which reports the path it WOULD create and has no leaf to
+# report. A literal in both would let the preview name a directory shaped
+# unlike the one the install makes.
+STAGING_PREFIX = "walk-blocker-stage."
+
 # `[hooks.<shell>]` (ADR-0008). Each shell's system startup file is a
 # root-write sink -- install.sh reads it, rewrites it 0644, and has the real
 # shell source it AS ROOT to prove the hook fires -- so every one of them
@@ -1540,10 +1547,19 @@ def stage_payload(env=None, dry_run=False):
     0700 and owned by root, since it holds bytes not yet verified.
     """
     if dry_run:
-        # A dry run must not create anything. It prints the commands it would
-        # issue, so it reports the snapshot against REPO and the caller reads
-        # from REPO too -- the plan is identical either way.
-        return REPO
+        # A dry run must not create anything, so it has no snapshot and no
+        # leaf: `mkdtemp` picks that, and picking it here would either create
+        # the directory or invent a name the install will not use. What it
+        # returns instead is the PLANNED path -- the compiled parent, the
+        # real prefix, and the leaf as the pattern it is.
+        #
+        # Returning REPO here instead was the older answer, and it was wrong
+        # in the one way that matters: the caller reads this to build the
+        # copy commands it prints, so every one of them named the payload
+        # directory while the install copies from the snapshot. The preview
+        # became a second account of the install rather than the install's
+        # own plan, and an operator is told to check it before deploying.
+        return os.path.join(STAGING_PARENT, STAGING_PREFIX + "XXXXXXXX")
     # preflight() has already refused on this, through this same writer, so
     # in the install's own sequence this is the second look. Kept: the check
     # belongs where the root-only directory is created, and a guard held
@@ -1553,7 +1569,7 @@ def stage_payload(env=None, dry_run=False):
     if chain:
         write_untrusted_staging_refusal(STAGING_PARENT, chain)
         raise SystemExit(6)
-    staging = tempfile.mkdtemp(prefix="walk-blocker-stage.", dir=STAGING_PARENT)
+    staging = tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=STAGING_PARENT)
     os.chmod(staging, 0o700)
     # atexit rather than a try/finally around the rest of system_execute():
     # every refusal there returns rather than raising, so a finally would
@@ -1756,7 +1772,14 @@ def system_execute(args, env=None):
         if rc != 0:
             return rc
         print()
-        print("# The commands, in the order they would run:")
+        print("# The commands, in the order they would run. The payload is")
+        print("# copied from the snapshot the install takes under")
+        print("# %s, not from this directory (ADR-0006)." % STAGING_PARENT)
+        print("# That snapshot does not exist yet and its last component is")
+        print("# chosen when it is created, so the %sXXXXXXXX below is a"
+              % STAGING_PREFIX)
+        print("# pattern -- the only part of these commands a dry run cannot")
+        print("# know. Everything else is what will run:")
 
     def repair(spool):
         # Repair before judging. These are this installer's own files and
@@ -1788,8 +1811,10 @@ def system_execute(args, env=None):
     # command, and there are tests pinning that. Not later: placed just
     # before the copies it would leave the window as wide as a `systemctl
     # stop --now` takes.
-    staging = stage_payload(env=env, dry_run=args.dry_run)
-    source_root = REPO if args.dry_run else staging
+    # One source for both runs. A dry run gets the planned path rather than a
+    # different one, so the command list it prints is the command list the
+    # install issues -- the same sequence, not a second account of it.
+    source_root = stage_payload(env=env, dry_run=args.dry_run)
 
     # Disarm first. On a redeploy the timer from the previous install is
     # still active, firing ExecStartPre on every slot -- so between the
