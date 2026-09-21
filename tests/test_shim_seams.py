@@ -145,7 +145,7 @@ def test_fstypes_seam_and_table_agree(shim_env, node_fs, policy, monkeypatch):
     for argv in (["find", "/scratch", "-name", "x"], ["find", "/archive", "-name", "x"],
                  ["find", "/home/me", "-name", "x"], ["grep", "-r", "pat", "/"]):
         table = R.check(argv, "/", mounts, live) is not None
-        shim = run_shim(shim_env, argv, env={"WALK_BLOCKER_FSTYPES": "nfs4"}).returncode == 2
+        shim = run_shim(shim_env, argv, env={"WALK_BLOCKER_FSTYPES": "nfs4"}).returncode == R.EXIT_REFUSED
         assert table == shim, argv
 
 
@@ -181,11 +181,11 @@ def test_a_depth_by_mount_override_past_the_allowance_max_falls_back(shim_env):
     exactly as `_parse_depth_by_mount` does."""
     result = run_shim(shim_env, ["find", "/home/me", "-maxdepth", "9"],
                       env={"WALK_BLOCKER_DEPTH_BY_MOUNT": "/home=999"})
-    assert result.returncode == 2
+    assert result.returncode == R.EXIT_REFUSED
     # ...and it took the compiled 4 away too, since the variable is present.
     result = run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"],
                       env={"WALK_BLOCKER_DEPTH_BY_MOUNT": "/home=999"})
-    assert result.returncode == 2
+    assert result.returncode == R.EXIT_REFUSED
 
 
 def test_a_present_but_empty_depth_seam_clears_every_allowance(shim_env, policy, monkeypatch):
@@ -194,7 +194,7 @@ def test_a_present_but_empty_depth_seam_clears_every_allowance(shim_env, policy,
     assert R.depth_allowance("/home", R.Policy.from_env(policy)) == policy.maxdepth_allowed
     result = run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"],
                       env={"WALK_BLOCKER_DEPTH_BY_MOUNT": ""})
-    assert result.returncode == 2
+    assert result.returncode == R.EXIT_REFUSED
     assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"]).returncode == 0
 
 
@@ -206,7 +206,7 @@ def test_depth_seam_drops_malformed_pairs_like_the_table(shim_env, policy, monke
     assert R.depth_allowance("/home", live) == 3  # only the trailing-slash pair survives
     env = {"WALK_BLOCKER_DEPTH_BY_MOUNT": seam}
     assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "3"], env=env).returncode == 0
-    assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"], env=env).returncode == 2
+    assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"], env=env).returncode == R.EXIT_REFUSED
 
 
 def test_depth_seam_adds_an_expensive_override_for_an_unlisted_mount(
@@ -224,7 +224,7 @@ def test_depth_seam_adds_an_expensive_override_for_an_unlisted_mount(
     for argv in (["find", "/run", "-name", "x"], ["find", "/run", "-maxdepth", "1"]):
         table = R.check(argv, "/", mounts, live) is not None
         result = run_shim(shim_env, argv, env=env)
-        assert (result.returncode == 2) == table, (argv, result.stderr.decode())
+        assert (result.returncode == R.EXIT_REFUSED) == table, (argv, result.stderr.decode())
 
 
 def test_fstypes_and_depth_by_mount_set_together_are_still_audited(shim_env, tmp_path):

@@ -2632,10 +2632,27 @@ fi
 # escape-hatch record above, action `refused`; the reader tells them apart by
 # one field. Off the fast path by construction: every allowed call has
 # already exec'd, so the forks this costs are paid only by a call that was
-# about to print a screenful and exit 2 anyway. Before the printf, so an
+# about to print a screenful and exit anyway. Before the printf, so an
 # interrupted terminal cannot lose the record.
 sg_audit_emit refused '' "$sg_hit_root" "$sg_hit_mount" "$sg_hit_fs" \
     "$sg_reason" '' ''
+
+# ONE line on stdout. Everything below stays on stderr: this ADDS a channel
+# and moves no text, so a caller reading stderr loses nothing.
+#
+# It is here because the guard's own founding example cannot see a refusal
+# without it. `find ... 2>/dev/null` is the reflex for suppressing
+# permission-denied noise and it suppresses this too, and the exit code is
+# laundered by any pipe, since `$?` after a pipeline is the LAST command's
+# status. Together those make "found nothing" and "was not allowed to look"
+# the same observation -- the one answer this guard must never give. The
+# distinct exit code is the other half; neither closes it alone (ADR-0024).
+#
+# Before the group, not after: on a terminal both streams land together and
+# this reads as a header, where the stderr block's last line is chosen on
+# purpose. `printf` is a builtin, so the audit path's documented program
+# count is unchanged, and the fast path a refusal never reaches is untouched.
+printf 'walk-blocker: REFUSED -- guidance on stderr; re-run without 2>/dev/null\n'
 
 if [ "$sg_reason" = descends_into ]; then
     sg_why="starts above $sg_hit_mount and descends into it"
@@ -2756,4 +2773,4 @@ fi
     printf '\nwalk-blocker %s\n' "$SG_VERSION"
 } >&2
 
-exit 2
+exit 77

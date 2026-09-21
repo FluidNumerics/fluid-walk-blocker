@@ -413,7 +413,7 @@ measure_guard() {
     chmod +x "$tmp/bin/grep"
 
     # The same proof for the guarded path, and it needs its own: `du` reaching
-    # its stub means the shim ALLOWED the call and exec'd. A refusal exits 2
+    # its stub means the shim ALLOWED the call and exec'd. A refusal exits 77
     # without ever reaching it, and timing that would report the early-return
     # path while claiming to report the expensive one.
     printf '#!/bin/sh\nprintf "REACHED\\n"\nexit 0\n' > "$tmp/bin/du"

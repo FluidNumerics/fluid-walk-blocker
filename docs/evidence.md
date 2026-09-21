@@ -59,6 +59,7 @@ the ADR it bears on.
 | 0021 Root is the authorization | n/a: structural |
 | 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the collection request outstanding at publication |
 | 0023 A record states what holds now, and narrowed wording moves below it | n/a: structural |
+| 0024 A refusal is legible to a caller that reads neither stderr nor a pipeline's exit code | n/a: structural |
 
 ## What this file is not
 
