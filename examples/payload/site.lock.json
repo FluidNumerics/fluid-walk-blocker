@@ -2,7 +2,7 @@
   "files": {
     "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
     "README.md": "9012d0a5cc68829c158196aee5a6f6ef07563f16baf6ad5e88c3f62ab90e8a0e",
-    "deploy.py": "417fe236b2c9e863303b0bd00bd75a382fc31f73258ce5198fca471986a75385",
+    "deploy.py": "96029d1fd60ad614de1306ced455dde679b15cb1c80f7fb622302b726854e3fe",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "b84d631d0916e0a5073d7dd7c4fa7fd018a11a1f810fedd86514706be2c94285",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -29,7 +29,7 @@
     "docs/adr/TEMPLATE.md": "2f91c335abaaab317e1337a6b1a99ffe73e54e1e8e1541111480073b9391733b",
     "docs/alternatives.md": "35cf8f184e4ca53e865699f1e6e9637972239e09d2dc35470832fdc2f705fc14",
     "docs/evidence.md": "98bb48b4d4b9611143e1f30ed218dd90c0abeebc177909cc44e0ac40dd595f42",
-    "docs/operating.md": "1c1b129a79e63de61a058a8f65d66ccac28794754d9ec36c0eac9293e70b1d71",
+    "docs/operating.md": "d740c6972d6291414fc010a4b10a9a87e04ab846f671976cb4cb32ae663e9646",
     "docs/plan.md": "209e5e9b44aecfed7ddd8143b12fcb2ca2552cead84d34f5c64f8fb6866981de",
     "docs/site-config.md": "44877ed688effa199d0b8bd89ed78a2c5400877f205bc0a607d3c69cd5380c1d",
     "docs/what-to-run-instead.md": "09615bccc301862a6c8b4f7a47c2d59f99bbe5468025d87ee53f70fbe6d34779",

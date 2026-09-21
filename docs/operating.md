@@ -214,6 +214,15 @@ python3 walk-blocker-payload/deploy.py --system --dry-run
 names the prefix, the spool directory, each hook file it will write a block
 to, the unit files, and the command that will actually install.
 
+The copy commands read from the snapshot under `[install].staging_parent`,
+not from the payload directory you are standing in — the install takes that
+snapshot first and copies out of it (ADR-0006). Its last component is chosen
+when it is created, so the preview writes it as
+`walk-blocker-stage.XXXXXXXX`. **That pattern is the only part of the printed
+commands a dry run cannot know**; everything else is the command that will
+run. A preview naming your payload directory as the source is reading an old
+build — the source there is the snapshot.
+
 **Do not drop the flag to "see what it says".** Since ADR-0021 the gate is
 root alone: `--system` on its own installs, immediately, with no further
 confirmation.
@@ -239,7 +248,9 @@ dry run accepted:
   there, as a root-only `0700` directory, between the last of the checks
   above and its first `systemctl`, so a parent someone else can write is a
   refusal and a parent that is not there at all is one too. A `--dry-run`
-  install snapshots nothing, so this is the one check it does not make.
+  install snapshots nothing, so this is the one check it does not make — it
+  names the path it would snapshot into, which is not the same as having
+  found that path usable. Re-run as root to make the check before deploying.
 
 Where one of those refuses, the dry run prints the whole plan, says which
 check refused and why, and **advertises no command** — because the install

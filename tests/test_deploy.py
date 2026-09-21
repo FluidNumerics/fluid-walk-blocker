@@ -1473,7 +1473,81 @@ def test_a_dry_run_creates_no_snapshot(tmp_path, monkeypatch):
            if n.startswith("walk-blocker-stage.")}
     assert new == set(), new
     assert os.listdir(deploy.STAGING_PARENT) == []
-    assert deploy.stage_payload(dry_run=True) == deploy.REPO
+
+    # The planned path, not the payload directory and not a real snapshot:
+    # under the pinned parent, shaped like the one the install creates, and
+    # still nothing on disk after asking for it.
+    planned = deploy.stage_payload(dry_run=True)
+    assert planned.startswith(deploy.STAGING_PARENT + os.sep), planned
+    assert os.path.basename(planned).startswith(deploy.STAGING_PREFIX), planned
+    assert planned != deploy.REPO
+    assert not os.path.exists(planned), planned
+    assert os.listdir(deploy.STAGING_PARENT) == []
+
+
+def _payload_copies(calls, prefix):
+    """The commands that put payload sources INTO THE PREFIX, with the
+    snapshot's random leaf normalised away.
+
+    Keyed on the destination, because the real install also copies REPO into
+    the snapshot and a dry run has no counterpart for that -- those are the
+    staging half, and `test_the_snapshot_covers_every_payload_source` is what
+    holds them. What belongs here is the half both legs perform.
+
+    TWO EXCLUSIONS, both deliberate, because an exclusion nobody can see is
+    where the next divergence hides:
+
+    - `install -d`, which creates the prefix and names no source;
+    - the payload MARKER, which is generated rather than copied and is the
+      one install line that deliberately does not reach `run()` on the dry
+      path. `test_the_dry_run_names_the_version_and_writes_nothing` pins both
+      halves of that exception; it is not this test's to re-litigate.
+
+    `mkdtemp` picks the leaf, so the two legs cannot be compared literally:
+    the install has a real one, a dry run has none to have. Normalising it is
+    what leaves everything else -- which file, from where, to where, with
+    which mode -- compared exactly."""
+    out = []
+    for cmd in calls:
+        if cmd[0] not in ("install", "cp") or cmd[:2] == ["install", "-d"]:
+            continue
+        if not cmd[-1].startswith(prefix):
+            continue
+        if cmd[-1].endswith(deploy.PAYLOAD_MARKER):
+            continue
+        out.append([re.sub(r"walk-blocker-stage\.[^/]*",
+                           "walk-blocker-stage.<leaf>", arg) for arg in cmd])
+    return out
+
+
+def test_the_dry_run_copies_from_where_the_install_copies_from(tmp_path,
+                                                               monkeypatch):
+    """The preview is the install's own plan, not a second account of it.
+
+    A dry run creates no snapshot, so it has no leaf to name -- but naming
+    the payload directory instead made the previewed command sequence differ
+    from the executed one in every copy, which is the one thing an operator
+    reads it to check (#54). The leaf is normalised on both sides; nothing
+    else is.
+
+    This fails on the commit before the fix, with REPO on the left and the
+    snapshot on the right."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    prefix = _args(tmp_path).prefix
+
+    dry_calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(dry_calls))
+    assert deploy.system_execute(_args(tmp_path, dry_run=True)) == 0
+
+    real_calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(real_calls))
+    assert deploy.system_execute(_args(tmp_path)) == 0
+
+    previewed = _payload_copies(dry_calls, prefix)
+    executed = _payload_copies(real_calls, prefix)
+    assert executed, "the real install copied nothing -- the test proves nothing"
+    assert previewed == executed
 
 
 def test_the_source_tree_is_not_required_to_be_root_owned(tmp_path,
