@@ -26,7 +26,7 @@
     "docs/adr/0021-root-is-the-authorization.md": "f52d2f0f328307bb9aa278d98de0f4db2b1a745792959feed3ba2d43d5905f2f",
     "docs/adr/0022-the-generic-tree-is-published.md": "31427638789c792cc7a902c4257f11b9ec126321c0ed2719da55308198b1933c",
     "docs/adr/0023-a-record-states-what-holds-now.md": "98460870a93bc01a0d2e1c564c56a0b84c603f2641a0944275b95c0258b7beca",
-    "docs/adr/0024-a-refusal-is-legible-to-an-indirect-caller.md": "a05d98e69653033e46f469ca647b37c693acd245a13dcb429ce08951cefbd49c",
+    "docs/adr/0024-a-refusal-is-legible-to-an-indirect-caller.md": "a98b5af98d8789d8f5a50ef659c49e19e22ca2df31ac9aaa7273b6293bec6f4a",
     "docs/adr/TEMPLATE.md": "2f91c335abaaab317e1337a6b1a99ffe73e54e1e8e1541111480073b9391733b",
     "docs/alternatives.md": "847b77f60d40fbead0393434bbcb2403d653caa34fbb51781a9bb7c4f8ecea05",
     "docs/evidence.md": "fd0967388d38e9526a550c2a308216bebcaf8e492b734a07537fd2105193f09b",

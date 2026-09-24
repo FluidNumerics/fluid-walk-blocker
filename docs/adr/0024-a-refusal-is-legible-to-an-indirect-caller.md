@@ -76,9 +76,15 @@ likely to have read anything.
 free above the search family's 0/1/2 — adjacent, small, memorable. Rejected
 because adjacency is the whole problem. The claim this half needs is "no
 wrapped tool claims this code", and the wrapped list cannot be audited
-exhaustively: a site may install a tool whose exit vocabulary was not
-verifiable where this was decided, and a code one step outside the family's
-range is the most likely place for such a tool to have grown a meaning. 77 is
+exhaustively against every site: a code one step outside the family's range is
+the most likely place an as-yet-unchecked tool would have grown a meaning.
+`ugrep` was the one wrapped tool whose vocabulary could not be checked where
+this was first decided, for lack of a reachable binary; checked since, against
+a real one: 0 on a match, 1 on no match, 2 on a bad flag or a bad path — the
+same 0/1/>1 shape as the rest of the family, no collision with 77. That closes
+the one concrete gap this record had, and it does not touch the argument
+against adjacency, which was never about this one tool: another site's tool,
+not yet checked anywhere, is still the case 77 is chosen to survive. 77 is
 `EX_NOPERM` from `sysexits.h` — "was not allowed to look", which is what a
 refusal is — and it sits outside every band a caller could confuse it with:
 0/1/2 for search outcomes, 126 and 127 for the shell and for this shim's own
