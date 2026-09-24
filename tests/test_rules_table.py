@@ -89,10 +89,20 @@ def test_a_device_bound_answers_descends_into_and_never_at_or_near_root(mounts, 
     assert hit is not None and hit.reason == "at_or_near_root"
 
 
-def test_the_exit_code_constant_is_not_greps_no_match():
-    """Exit 2, never 1. grep uses 1 for 'no match' and a caller must never
-    read a block as an empty result."""
-    assert R.EXIT_REFUSED == 2
+def test_the_exit_code_constant_is_one_no_wrapped_tool_can_claim():
+    """Not 1 (grep's "no match"), not 2 (grep's OWN error, which made a
+    refusal indistinguishable from the tool failing by itself), and outside
+    every band a caller could confuse it with: 126/127 the shell and the
+    shim's own not-found, 128+ signals, 255 ssh. 77 is EX_NOPERM. ADR-0024.
+
+    The band assertions look redundant against the first one and are not: the
+    first pins the value a later reader may legitimately change, and these
+    pin the CLASS it has to stay inside when they do. Deleting them as
+    duplication would leave the next value unconstrained.
+    """
+    assert R.EXIT_REFUSED == 77
+    assert R.EXIT_REFUSED not in (0, 1, 2, 126, 127, 255)
+    assert R.EXIT_REFUSED < 128
 
 
 def test_escape_hatch_and_seams_are_the_documented_names():
@@ -549,7 +559,7 @@ def test_fzf_value_flags_were_audited_by_asking_fzf(mounts, policy):
 
 
 def test_fzf_and_sk_are_unwrapped_by_default_and_the_site_decides():
-    """fzf is reached through keybindings, where `exit 2` is an invisible
+    """fzf is reached through keybindings, where a refusal is an invisible
     no-op; the table's default leaves it alone, the site's list is what the
     build applies, and Layer 2 sees every profile regardless."""
     assert R.DEFAULT_UNWRAPPED == frozenset({"fzf", "sk"})

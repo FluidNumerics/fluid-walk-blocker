@@ -34,7 +34,7 @@ sits underneath it.
 **Layer 1** is a PATH shim (ADR-0001). A shell hook puts `<prefix>/bin`
 first on `PATH`; each wrapped name there is a symlink to `guard.sh`, which
 reads its argv, its cwd and `/proc/mounts`, and either `exec`s the real
-tool or refuses with exit 2 and a message naming the alternative. On the
+tool or refuses with exit 77 and a message naming the alternative. On the
 fast path it decides from argv and cwd alone, opening no file and creating
 no process; on the guarded path one trusted `awk` reads `/proc/mounts` once
 (ADR-0018). Neither path makes a `statfs`, network or configuration read,

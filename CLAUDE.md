@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0023` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0024` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -106,8 +106,14 @@ by default; an unknown remote type is guarded; `[[filesystems.mounts]]` is
 the only way to loosen. Measurement is `walk-blocker survey`, run by an
 admin, out of band, proposing an override. See ADR-0016.
 
-**Refusal exits 2, never 1.** `grep` uses 1 for "no match" and no caller
-may read a refusal as an empty result.
+**Refusal exits 77, and prints one line on stdout as well.** `grep` uses 1
+for "no match" and 2 for its own errors, so neither code is available: a
+refusal must read as neither an empty result nor a tool failure. 77 is
+`EX_NOPERM` -- "was not allowed to look" -- and no wrapped tool claims it.
+The code alone is not enough, because `$?` after a pipeline is the last
+command's status, so the refusal also prints one greppable line on stdout
+while the full text stays on stderr. **Adding a channel is the design;
+moving the text is not.** See ADR-0024.
 
 **Table and shim must agree.** `guard.sh` and `wrapped_names.sh` are
 generated from the rule table and `site.toml`; edit those and rebuild. A
@@ -277,7 +283,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0023`, in order — the decisions
+3. `docs/adr/0001` … `0024`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports

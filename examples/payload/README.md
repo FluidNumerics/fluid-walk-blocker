@@ -75,10 +75,12 @@ default is `--report`.
    ceiling, or every root is on a cheap mount, or the root sits at least
    `[filesystems].unscoped_depth` components below the mount point, it
    `exec`s the real tool.
-4. Otherwise it exits 2 with a refusal that names the bound the tool
-   accepts, the allowance on that mount, and `walk-job`. Exit 2, never 1:
-   `grep` uses 1 for "no match" and a refusal must never read as an empty
-   result.
+4. Otherwise it exits 77 with a refusal that names the bound the tool
+   accepts, the allowance on that mount, and `walk-job`, and it prints one
+   line on stdout pointing at that text. 77, not 2: `grep` uses 1 for "no
+   match" and 2 for its own errors, so a refusal must read as neither an
+   empty result nor a tool failure — and stderr alone does not reach a
+   caller that discards it (ADR-0024).
 5. Whether or not the shim ran, the reaper polls on `[timer].on_calendar`,
    differences PSI per user slice, walks `/proc`, and writes a finding for
    every process that is a known tool on an expensive mount past
@@ -130,7 +132,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0023` |
+| `docs/adr/` | the decisions, `0001` through `0024` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/operating.md` | the operator's runbook |
@@ -199,7 +201,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0023`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0024`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook
 6. `docs/alternatives.md` — what to run instead: the users' grimoire, and the

@@ -25,7 +25,10 @@ same invocation and it is allowed:
   one;
 - a cheap mount, which is never judged at all.
 
-The refusal exits 2, never 1, so no caller reads it as "no match".
+The refusal exits 77, a code no wrapped tool claims, so no caller reads it
+as "no match" OR as the tool's own failure. It also prints one line on
+stdout, because stderr is the stream a scripted caller discards and an exit
+code is what a pipeline hides (ADR-0024).
 
 ## Ask the question, not the filesystem
 
@@ -144,7 +147,7 @@ reading before you are refused:
 | `du` | `-x` only — its `-d` prunes output, not the walk, so no depth flag bounds it | `walk-job -- du -sh DIR` |
 | `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep` | no depth flag exists; change tool: `rg --max-depth N`, or `find DIR -maxdepth N -type f -exec grep ... {} +` | `walk-job -- grep ...` |
 | `ugrep` | `--depth N` (also spelled `-N`). A bare directory operand is already depth 1, so the common shape is fine as typed; `-r` is what makes it unbounded | `walk-job -- ugrep ...` |
-| `fzf`, `sk` | not wrapped (`[shim].unwrapped_tools`): they are reached through a keybinding or an editor plugin, where an exit-2 refusal is an invisible no-op. They walk the current directory whenever nothing is piped in; pipe something in — `ls DIR \| fzf`, or a manifest — and they filter instead of walking. Layer 2 still sees them | — |
+| `fzf`, `sk` | not wrapped (`[shim].unwrapped_tools`): they are reached through a keybinding or an editor plugin, where a refusal is an invisible no-op. They walk the current directory whenever nothing is piped in; pipe something in — `ls DIR \| fzf`, or a manifest — and they filter instead of walking. Layer 2 still sees them | — |
 
 `N` is the depth the refusal prints: `[filesystems].maxdepth_allowed`, or
 the mount's own `maxdepth` where the site measured one.

@@ -258,12 +258,84 @@ def test_a_fstypes_seam_with_a_glob_reaches_the_awk_reader(shim_variant, tmp_pat
 # the refusal text
 # --------------------------------------------------------------------------
 
-def test_refusal_exit_code_is_not_greps_no_match(shim_env):
-    """Exit 2, never 1. grep uses 1 for 'no match' and a caller must never
-    read a block as an empty result."""
+def test_refusal_exit_code_is_one_grep_itself_never_emits(shim_env):
+    """grep's own vocabulary is 0/1/2 -- match, no match, error. A refusal
+    must land outside all three, or a caller that checks $? still cannot tell
+    a refusal from grep failing by itself. ADR-0024."""
     result = run_shim(shim_env, ["grep", "-r", "pat", "/scratch"])
-    assert result.returncode == R.EXIT_REFUSED == 2
-    assert result.returncode != 1
+    assert result.returncode == R.EXIT_REFUSED == 77
+    assert result.returncode not in (0, 1, 2)
+
+
+def _through_a_callers_shell(shim_env, argv, script, cwd="/"):
+    """The shim invoked by a shell that owns the redirect, as a caller's own
+    would. `script` is dash source with `%s` where the command goes; going
+    through a real shell is the point, because what this pins is what the
+    SHELL does to a refusal -- swallow its stderr, or launder its exit code
+    through a pipeline -- and a redirect this suite applied itself would
+    prove nothing about either.
+    """
+    command, environ, real_cwd = conftest.shim_invocation(
+        shim_env, argv, cwd=cwd, env=None)
+    quoted = " ".join("'%s'" % part.replace("'", "'\\''") for part in command)
+    return subprocess.run([SHIM_SH, "-c", script % quoted],
+                          capture_output=True, env=environ, cwd=real_cwd,
+                          input=b"")
+
+
+def test_a_refusal_reaches_a_caller_that_discards_stderr(shim_env):
+    """The defect ADR-0024 closes. `2>/dev/null` is the standard reflex for
+    suppressing permission-denied noise from find and grep, and it used to
+    suppress the entire refusal with it -- leaving a caller unable to tell
+    "found nothing" from "was not allowed to look"."""
+    result = _through_a_callers_shell(
+        shim_env, ["find", "/scratch", "-name", "x"], "%s 2>/dev/null")
+    assert result.returncode == R.EXIT_REFUSED
+    assert result.stderr == b"", "the shell's redirect did not take"
+    assert b"walk-blocker: REFUSED" in result.stdout, (
+        "a caller that discards stderr still sees nothing: %r" % result.stdout)
+
+
+def test_a_refusal_reaches_the_founding_incidents_shape(shim_env):
+    """ADR-0001's originating command carries `2>/dev/null` AND a pipe, and
+    `$?` after a pipeline is the LAST command's status -- so the exit code
+    is laundered too and the stdout line is the only channel left. If this
+    fails, the guard is invisible to the very call it was built for."""
+    head = shutil.which("head")
+    if head is None:
+        pytest.skip("no head(1) here; the pipeline shape needs a real one")
+    # By absolute path: the fixture PATH holds only the shim and the closed
+    # bin directory, so a bare `head` would be a 127 dressed up as a finding.
+    result = _through_a_callers_shell(
+        shim_env, ["find", "/scratch", "-type", "f", "-name", "job-*.out"],
+        "%s 2>/dev/null | " + head + " -500")
+    assert result.returncode == 0, (
+        "the pipeline reports head's status; if this is ever non-zero the "
+        "premise of the sentinel has changed and ADR-0024 needs rereading")
+    assert b"walk-blocker: REFUSED" in result.stdout, (
+        "both channels were lost: %r" % result.stdout)
+
+
+def test_the_stdout_line_points_at_the_guidance_and_does_not_carry_it(shim_env):
+    """Adding a channel is the design; moving the text is not (ADR-0024). One
+    line on stdout, and every piece of guidance still on stderr -- so a
+    later change that relocates the refusal instead of duplicating a pointer
+    to it fails here rather than in a user's pipeline."""
+    # Both reasons: `-xdev` is offered only where it can help, so a single
+    # refusal would not cover the device bound.
+    for argv, extra in ((["find", "/scratch", "-name", "x"], "components below"),
+                        (["find", "/", "-name", "x"], "-xdev")):
+        result = run_shim(shim_env, argv)
+        out = result.stdout.decode()
+        err = result.stderr.decode()
+        assert result.returncode == R.EXIT_REFUSED, argv
+        assert len(out.splitlines()) == 1, "stdout is one line, not a screenful"
+        assert out.startswith("walk-blocker: REFUSED")
+        assert "2>/dev/null" in out, "it has to name what swallowed the text"
+        for guidance in ("walk-job", "WALK_BLOCKER_UNSCOPED", "Guide:", extra):
+            assert guidance in err, (argv, guidance, err)
+            assert guidance not in out, (
+                "%s moved to stdout; the guidance belongs on stderr" % guidance)
 
 
 def test_refusal_names_tool_root_mount_and_filesystem(shim_env):
@@ -282,7 +354,7 @@ def test_refusal_names_both_sacct_and_scontrol_for_a_scheduler_pattern(shim_env)
         shim_env,
         ["find", "/", "/home", "-type", "f", "-name", "slurm-4242_*.out", "-print"])
     stderr = result.stderr.decode()
-    assert result.returncode == 2
+    assert result.returncode == R.EXIT_REFUSED
     assert "sacct -j 4242" in stderr
     assert "scontrol show job 4242" in stderr
     assert "StdOut" in stderr
@@ -451,13 +523,13 @@ def test_refusal_does_not_recommend_locate(shim_env):
 
 def test_refusal_offers_the_device_bound_only_where_it_can_help(shim_env):
     descends = run_shim(shim_env, ["find", "/", "-name", "x"])
-    assert descends.returncode == 2
+    assert descends.returncode == R.EXIT_REFUSED
     assert "-xdev" in descends.stderr.decode()
     on_mount = run_shim(shim_env, ["find", "/scratch", "-name", "x"])
-    assert on_mount.returncode == 2
+    assert on_mount.returncode == R.EXIT_REFUSED
     assert "-xdev" not in on_mount.stderr.decode()
     grep = run_shim(shim_env, ["grep", "-r", "pat", "/"])
-    assert grep.returncode == 2
+    assert grep.returncode == R.EXIT_REFUSED
     assert "keep the walk on the filesystem" not in grep.stderr.decode()
 
 
@@ -494,9 +566,9 @@ def test_shim_honours_a_per_mount_depth_allowance(shim_env):
     """The compiled `/home` override at 4, from the fixture policy."""
     assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "4"]).returncode == 0
     assert run_shim(shim_env, ["tree", "-L", "4", "/home/me"]).returncode == 0
-    assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "5"]).returncode == 2
-    assert run_shim(shim_env, ["find", "/scratch", "-maxdepth", "4"]).returncode == 2
-    assert run_shim(shim_env, ["find", "/home/me"]).returncode == 2
+    assert run_shim(shim_env, ["find", "/home/me", "-maxdepth", "5"]).returncode == R.EXIT_REFUSED
+    assert run_shim(shim_env, ["find", "/scratch", "-maxdepth", "4"]).returncode == R.EXIT_REFUSED
+    assert run_shim(shim_env, ["find", "/home/me"]).returncode == R.EXIT_REFUSED
 
 
 def test_shim_allows_a_depth_flag_with_nothing_left_in_argv(shim_env):
@@ -531,7 +603,7 @@ def test_shim_and_table_agree_under_a_populated_depth_map(shim_env, mounts, poli
     )
     for argv in cases:
         table_refuses = R.check(argv, "/", mounts, live) is not None
-        shim_refuses = run_shim(shim_env, argv, env=env).returncode == 2
+        shim_refuses = run_shim(shim_env, argv, env=env).returncode == R.EXIT_REFUSED
         assert table_refuses == shim_refuses, argv
 
 
@@ -553,7 +625,7 @@ def test_the_descending_verdict_does_not_depend_on_mount_order(tmp_path, shim_en
             result = run_shim(shim_env, argv, env={"WALK_BLOCKER_MOUNTS": str(path)})
             stderr = result.stderr.decode()
             assert hit is not None, (label, argv)
-            assert result.returncode == 2, (label, argv, stderr)
+            assert result.returncode == R.EXIT_REFUSED, (label, argv, stderr)
             named = stderr.split(" would walk ", 1)[1].split(" ", 1)[0]
             assert named == hit.mount, (label, argv)
             seen.setdefault(tuple(argv), set()).add(named)
@@ -1268,6 +1340,11 @@ def test_a_refusal_runs_exactly_the_programs_the_audit_path_documents(
         cwd="/home/someone", label="%s-refused" % shell, env=env)
     assert "RAN " not in stdout, (
         "the walk was allowed, so this is not the refusal path: %r" % stdout)
+    # The sentinel is asserted HERE, in the counting test, and not only in a
+    # text test: a stdout line that cost a fork would be legible and wrong,
+    # and the program count below is what says this one is a builtin.
+    assert "walk-blocker: REFUSED" in stdout, (
+        "the refusal printed no stdout line under %s: %r" % (shell, stdout))
 
     guard = rendered_shim["guard_text"]
     awk = _sg_var(guard, "SG_AWK")

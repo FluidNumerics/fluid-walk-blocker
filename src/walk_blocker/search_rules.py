@@ -47,9 +47,17 @@ import re
 # Fixed constants -- properties of the design, not of any site
 # --------------------------------------------------------------------------
 
-# Refusals exit 2, never 1: grep uses 1 for "no match", and a caller must never
-# read a block as an empty result.
-EXIT_REFUSED = 2
+# Refusals exit 77, and the code is chosen to be one no wrapped tool can claim.
+# 1 is grep's "no match" and 2 is grep's own "an error occurred", so the old 2
+# told a caller only that SOMETHING went wrong -- indistinguishable from the
+# tool failing by itself, which is the answer this guard exists to prevent. 77
+# is EX_NOPERM from sysexits.h: "was not allowed to look", which is exactly
+# what a refusal is. It also sits outside every band a caller could confuse it
+# with -- 0/1/2 (search outcomes), 126/127 (the shell, and this shim's own
+# not-found exit), 128+ (signals) and 255 (ssh's own error, which matters
+# because the founding incident arrives over ssh). See ADR-0024; the stdout
+# sentinel is the other half, because a pipeline hides any exit code.
+EXIT_REFUSED = 77
 
 # Environment variable that turns a refusal into an audited allow. A block with
 # no override gets routed around with `\find`, and then nothing is measurable.
@@ -460,7 +468,7 @@ class Profile(object):
                    False for fzf/sk: fzf judges the cwd on every interactive
                    invocation (`always=True`, `root_mode="stdin"`), which is
                    usually reached through a shell keybinding or an editor
-                   plugin, where an `exit 2` refusal is an invisible no-op
+                   plugin, where a refusal is an invisible no-op
                    rather than a teaching moment -- unlike a refusal typed at
                    a prompt. This is the table's default; the site's
                    `[shim].unwrapped` list is what wrapped_names() actually
@@ -989,7 +997,7 @@ PROFILES = (
     #
     # wrapped=False: fzf is normally reached through a shell keybinding
     # (Ctrl-R/Ctrl-T) or an editor plugin, not typed at a prompt, so Layer
-    # 1's `exit 2` refusal is an invisible no-op there rather than the
+    # 1's refusal is an invisible no-op there rather than the
     # teaching moment it is for `find`/`grep`. The Profile stays in PROFILES
     # either way -- this only drops it from the default wrapped set, so Layer
     # 2 (the reaper, keyed on PROFILE_BY_NAME) still sees it exactly as
