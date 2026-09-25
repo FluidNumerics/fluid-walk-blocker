@@ -33,7 +33,7 @@
 
 set -eu
 
-WJ_VERSION='0.1.0'  # GENERATED from VERSION
+WJ_VERSION='0.2.0'  # GENERATED from VERSION
 
 WJ_SITE_PARTITION='datamover'  # GENERATED from site.toml:slurm.partition
 WJ_SITE_QOS='low'  # GENERATED from site.toml:slurm.qos

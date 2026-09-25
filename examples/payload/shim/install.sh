@@ -38,7 +38,7 @@
 
 set -eu
 
-VERSION='0.1.0'  # GENERATED from VERSION
+VERSION='0.2.0'  # GENERATED from VERSION
 # One payload, one number -- see deploy.py. A literal because this script
 # runs on the node with nothing to read it from.
 

@@ -132,7 +132,7 @@ SG_FSTYPES_RE_TRUSTED='^lustre$ ^wekafs$ ^beegfs$ ^gpfs$ ^ceph$ ^nfs4$ ^nfs$ ^ci
 SG_PROXY=1
 SG_MOUNT_OVERRIDES_TRUSTED='/home=expensive=4 /opt/site-tools=cheap'
 SG_MOUNTS_TRUSTED='/proc/mounts'
-SG_VERSION='0.1.0'
+SG_VERSION='0.2.0'
 SG_MAXDEPTH=2
 SG_DEPTH_ALLOWANCE_MAX=8
 SG_UNSCOPED_DEPTH=2

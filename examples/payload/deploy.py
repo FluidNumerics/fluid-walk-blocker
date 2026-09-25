@@ -99,7 +99,7 @@ import tempfile
 # by `walk-blocker build`; the values in the tree are sentinels, and a
 # payload carries the site's. `walk-blocker build --check` reports a stale
 # or missing one. Nothing on the node reads configuration.
-__version__ = '0.1.0'  # GENERATED from VERSION
+__version__ = '0.2.0'  # GENERATED from VERSION
 # One payload, one number: installer, reaper, shim and walk-job ship together
 # and carry one version, because they are deployed as one and a per-file
 # version would invite mixing them. A literal, NOT read at run time: this

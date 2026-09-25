@@ -71,7 +71,7 @@ import search_rules as R  # noqa: E402
 # schema defaults, where one exists) so the module imports on its own.
 # --------------------------------------------------------------------------
 
-__version__ = '0.1.0'  # GENERATED from VERSION
+__version__ = '0.2.0'  # GENERATED from VERSION
 # Same number as deploy.py and the shim: one payload, one version. Stamped,
 # not read from a file. append_audit() adds it to every record it writes,
 # including the blind-state ones no Finding builds, which is what makes a row
