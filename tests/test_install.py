@@ -1702,17 +1702,19 @@ def test_a_blocked_audit_dir_reaches_the_journal_by_name(tmp_path):
         "the correction must reach journalctl -t walk-blocker: %s" % records)
 
 
-def test_a_first_time_audit_dir_is_recorded_as_created_not_corrected(tmp_path):
-    """`created` and `mode-corrected` are different events: one is a deploy,
-    the other is somebody having changed it since."""
+def test_a_missing_spool_is_reported_absent_and_not_created(tmp_path):
+    """The spool, and the marker inside it, are deploy.py's to create
+    (ADR-0025). A root relink that finds none says so and makes nothing:
+    a directory it made would carry no marker, so every later write would
+    refuse it anyway."""
     installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     shutil.rmtree(str(layout.spool))
     result, records = relink_with_a_recording_logger(tmp_path, layout, fake_uid=0, script=layout.script)
     assert result.returncode == 0, result.stderr
     states = [r["state"] for r in records if r["action"] == "audit_dir"]
-    assert "created" in states, records
-    assert "mode-corrected" not in states, records
+    assert "absent" in states, records
+    assert not layout.spool.exists(), "the relink created the spool"
 
 
 def test_the_stub_shells_and_sink_are_what_the_harness_says(tmp_path):
@@ -1877,6 +1879,7 @@ def test_the_install_forgets_what_an_earlier_install_reported(tmp_path):
 
 def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
     layout = _stateful_layout(tmp_path)
+    H.stage_spool(layout)
     layout.bin.mkdir(parents=True)
     state = layout.spool / STATE_NAME
     state.write_text("boot x\n/archive nfs4\n")
@@ -2009,7 +2012,7 @@ def _sentinel_state(sentinel):
     return (sentinel.read_bytes(), stat.S_IMODE(info.st_mode), info.st_gid)
 
 
-def _swap_in_a_trap(layout, sentinel):
+def _swap_in_a_trap(layout, sentinel, marker=True):
     """The attack: rename the spool aside and put a directory in its place
     holding links named like everything a writer writes, each at the
     sentinel. The replacement is the test user's, which under the fake root
@@ -2017,6 +2020,11 @@ def _swap_in_a_trap(layout, sentinel):
     it follows a link."""
     layout.spool.rename(str(layout.spool) + ".aside")
     layout.spool.mkdir()
+    if marker:
+        # The marker a real attacker cannot plant -- it is root's, in a
+        # directory only root writes -- standing in here so that the NEXT
+        # layer down, no write following a link, is what this test proves.
+        H.stage_spool(layout)
     for name in (H.AUDIT_FILENAME, STATE_NAME, STATE_NAME + ".new",
                  "reaper-audit.jsonl", "reaper-state.json",
                  "reaper-state.json.tmp"):
@@ -2057,3 +2065,53 @@ def test_a_spool_that_is_a_link_to_a_directory_leaves_the_target_alone(tmp_path)
     assert "symlink" in _states(records), records
     assert (stat.S_IMODE(target.stat().st_mode), target.stat().st_gid) == before
     assert not (target / STATE_NAME).exists(), "the memory was written through the link"
+
+
+def test_a_root_owned_sibling_renamed_into_the_spools_name_is_left_alone(tmp_path):
+    """The rename ADR-0025 closes: a group that can write the spool's parent
+    moves the real spool aside and renames another root-owned directory
+    into its name. That directory is root's and a directory, so it passes
+    every check but one -- it carries no marker, which stayed with the real
+    spool. Its mode, group and contents are unchanged after the relink, and
+    the refusal is journalled as `unmarked`. (In CI the sibling is the test
+    user's, standing in for root through the fake `id` and stat.) Mutation:
+    skip the marker test in in_spool() and the sibling becomes 2750."""
+    layout = _installed(tmp_path)
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (sibling / "somebody-elses.log").write_text("not the walk-blocker's\n")
+    sibling.chmod(0o700)
+    layout.spool.rename(str(tmp_path / "spool.aside"))
+    sibling.rename(str(layout.spool))
+    before = (stat.S_IMODE(layout.spool.stat().st_mode), layout.spool.stat().st_gid,
+              sorted(os.listdir(str(layout.spool))),
+              (layout.spool / "somebody-elses.log").read_bytes())
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert "unmarked" in _states(records), records
+    after = (stat.S_IMODE(layout.spool.stat().st_mode), layout.spool.stat().st_gid,
+             sorted(os.listdir(str(layout.spool))),
+             (layout.spool / "somebody-elses.log").read_bytes())
+    assert after == before
+    assert ("/archive", "nfs4", "expensive") in uncovered(records), (
+        "an unmarked spool has no memory, not no report: %s" % records)
+
+
+def test_the_real_spool_renamed_aside_keeps_its_marker(tmp_path):
+    """The other half of why the marker works: it moves with the directory,
+    so the real spool is still recognisable wherever it went, and the name
+    it left is not."""
+    layout = _installed(tmp_path)
+    aside = tmp_path / "spool.aside"
+    layout.spool.rename(str(aside))
+    assert (aside / H.SPOOL_MARKER).is_file()
+
+
+def test_the_three_spool_marker_literals_agree():
+    """deploy.py writes it, install.sh and reaper.py require it: one name."""
+    text = open(os.path.join(ROOT, "node", "shim", "install.sh")).read()
+    assert "\nSG_SPOOL_MARKER=%s\n" % H.SPOOL_MARKER in text
+    for name in ("deploy.py", "reaper.py"):
+        src = open(os.path.join(ROOT, "node", name)).read()
+        assert '\nSPOOL_MARKER = "%s"\n' % H.SPOOL_MARKER in src, name

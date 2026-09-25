@@ -115,7 +115,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
 | 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
 | 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
-| 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link (narrows 0012, clarifies 0004) |
+| 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link, and go only into a spool carrying deploy.py's marker (narrows 0012 and 0019, clarifies 0004) |
 
 ## Non-negotiables a prompt must restate
 

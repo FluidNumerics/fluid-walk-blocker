@@ -150,6 +150,11 @@ AUDIT=$SG_SPOOL_DIR/$SG_AUDIT_FILENAME
 # resolves it: the only lookup this file makes, and only on the root relink
 # and the install.
 SG_SPOOL_GROUP='wbaudit'  # GENERATED from site.toml:install.spool_group
+# The spool's identity (ADR-0025): the root-owned file deploy.py writes inside
+# the spool it made. A root relink writes into, chmods or chgrps a spool only
+# when it carries one, and never creates it. Not a site value: the same
+# literal as deploy.py's and reaper.py's, pinned by a test.
+SG_SPOOL_MARKER=.walk-blocker-spool
 
 # link_farm() wraps a name only if it already resolves somewhere -- and
 # "somewhere" used to mean the CALLER's $PATH, so what got linked depended on
@@ -1088,7 +1093,16 @@ in_spool() {
     # root-owned 02750 directory nobody but root can create an entry, so a
     # `./name` there is one only root put there.
     #
-    # Returns 1 when the pin fails and CMD never ran; otherwise CMD's status.
+    # Run as root, the pinned directory must also carry $SG_SPOOL_MARKER,
+    # a regular file root owns, lstat'd by its relative name. A root-owned
+    # directory renamed into the spool's name by a group that can write the
+    # parent passes every test above -- it is root's and a directory -- and
+    # fails this one, because the marker stayed with the real spool. The
+    # unprivileged debug relink can only write where its own uid may, so it
+    # is not asked.
+    #
+    # Returns 1 when the pin fails and CMD never ran, 3 when the marker is
+    # missing or wrong and CMD never ran; otherwise CMD's status.
     _is_want=$sg_sl_id
     (
         cd -P -- "$SG_SPOOL_DIR" 2>/dev/null || exit 1
@@ -1096,6 +1110,16 @@ in_spool() {
         [ "$sg_sl_id" = "$_is_want" ] || exit 1
         [ "$sg_sl_type" = directory ] || exit 1
         [ "$sg_sl_uid" = "$(id -u)" ] || exit 1
+        if is_root; then
+            spool_lstat "./$SG_SPOOL_MARKER" || exit 3
+            case $sg_sl_type in
+                'regular file'|'regular empty file') ;;
+                *) exit 3 ;;
+            esac
+            [ "$sg_sl_uid" = 0 ] || exit 3
+            # Back to the directory's own answers, which CMD reads.
+            spool_lstat . || exit 1
+        fi
         "$@"
     )
 }
@@ -1119,9 +1143,6 @@ spool_assert_here() {
     chgrp -- "$SG_SPOOL_GROUP" . 2>/dev/null || sg_report audit_dir group-failed
     chmod 2750 . 2>/dev/null || sg_report audit_dir mode-failed
     spool_lstat . || return 0
-    # A directory this call created is `created`, not a correction:
-    # everything about it was set just now.
-    [ "${_aad_created:-0}" -eq 1 ] && return 0
     if [ "$sg_sl_gid" != "$_sa_gid" ]; then
         sg_report audit_dir group-corrected
     fi
@@ -1136,8 +1157,9 @@ spool_assert_here() {
 }
 
 assert_audit_dir() {
-    # assert_audit_dir -- create the audit directory, $SG_SPOOL_DIR, or put
-    # its group and mode back, and say so in the journal if it had to. The
+    # assert_audit_dir -- put the audit directory's ($SG_SPOOL_DIR's) group
+    # and mode back, and say so in the journal if it had to. It never
+    # creates the directory: that, and its marker, are deploy.py's. The
     # spool itself, not the audit file's dirname: every pinned write below
     # enters $SG_SPOOL_DIR, and a check made on any other spelling would be
     # a check on a directory nothing then writes into.
@@ -1175,21 +1197,13 @@ assert_audit_dir() {
     case $_aad_dir in
         ''|.|/) return 0 ;;
     esac
-    _aad_created=0
     if ! spool_lstat "$_aad_dir"; then
-        # Nothing there: lstat sees a dangling link, so this is genuinely
-        # absent. `mkdir`, not `install -d`: GNU install follows a symlinked
-        # leaf and chmods its target, while mkdir fails on any entry that
-        # appeared in the meantime -- and spool_fit() below judges that
-        # entry as what it is. The parents first, separately, because
-        # `mkdir -p -m` applies the mode to the last component only.
-        mkdir -p -- "$(dirname "$_aad_dir")" 2>/dev/null || :
-        if mkdir -m 0700 -- "$_aad_dir" 2>/dev/null; then
-            _aad_created=1
-        elif [ ! -e "$_aad_dir" ] && [ ! -L "$_aad_dir" ]; then
-            sg_report audit_dir create-failed
-            return 1
-        fi
+        # Absent. NOT created here: the spool is deploy.py's to create and
+        # to mark (ADR-0025), and a directory this made would carry no
+        # marker, so every later write would refuse it anyway. Reported, and
+        # the reaper exits 4 until a deploy puts it back.
+        sg_report audit_dir absent
+        return 0
     fi
     if ! spool_fit "$_aad_dir"; then
         # Ownership is reported, never seized. A directory owned by someone
@@ -1200,10 +1214,13 @@ assert_audit_dir() {
         sg_report audit_dir "$sg_spool_why"
         return 0
     fi
-    in_spool spool_assert_here || sg_report audit_dir moved
-    if [ "$_aad_created" -eq 1 ]; then
-        sg_report audit_dir created
-    fi
+    _aad_rc=0
+    in_spool spool_assert_here || _aad_rc=$?
+    case $_aad_rc in
+        0) ;;
+        3) sg_report audit_dir unmarked ;;
+        *) sg_report audit_dir moved ;;
+    esac
     return 0
 }
 

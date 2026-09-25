@@ -3034,3 +3034,85 @@ def test_a_trail_file_owned_by_someone_else_is_not_appended_to(
     monkeypatch.undo()
     assert "not a regular file owned by this process" in str(exc.value)
     assert trail.read_text() == ""
+
+
+# --- the spool marker (ADR-0025) ------------------------------------------
+#
+# The marker is asked for when the reaper runs as root. The suite is not
+# root, so `_needs_marker` is driven the way deploy.py's `_is_root` is: a
+# function the test replaces, never an environment variable.
+
+def _marked(spool):
+    spool.mkdir(exist_ok=True)
+    marker = spool / reaper.SPOOL_MARKER
+    marker.write_text("walk-blocker spool\n")
+    marker.chmod(0o640)
+    return spool
+
+
+def test_a_root_run_writes_into_a_marked_spool(tmp_path, procfs, mounts_path,
+                                               monkeypatch):
+    monkeypatch.setattr(reaper, "_needs_marker", lambda: True)
+    cg = _one_finding(tmp_path, procfs)
+    spool = _marked(tmp_path / "spool")
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path),
+                    out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
+    assert rc != reaper.EXIT_UNRECORDED
+    assert (spool / "reaper-audit.jsonl").exists()
+
+
+def test_a_root_owned_sibling_renamed_into_the_spools_name_is_not_written(
+        tmp_path, procfs, mounts_path, monkeypatch):
+    """The rename ADR-0025 closes, against the reaper: the real spool moved
+    aside, another directory of root's renamed into its name. It is a
+    directory this process owns and nobody else can write, so only the
+    marker tells it apart. Nothing is written into it, its mode, group and
+    contents are unchanged, the findings still reach stdout, and the exit
+    is 4. Mutation: skip `_marker_missing()` in open_spool() and the trail
+    lands in the sibling."""
+    monkeypatch.setattr(reaper, "_needs_marker", lambda: True)
+    cg = _one_finding(tmp_path, procfs)
+    spool = _marked(tmp_path / "spool")
+    spool.rename(str(tmp_path / "spool.aside"))
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (sibling / "somebody-elses.log").write_text("theirs\n")
+    sibling.chmod(0o700)
+    sibling.rename(str(spool))
+    before = (os.stat(str(spool)).st_mode, os.stat(str(spool)).st_gid,
+              sorted(os.listdir(str(spool))))
+    out, err = io.StringIO(), io.StringIO()
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path), out=out,
+                    err=err, sleep=lambda _s: None)
+    assert rc == reaper.EXIT_UNRECORDED
+    assert (os.stat(str(spool)).st_mode, os.stat(str(spool)).st_gid,
+            sorted(os.listdir(str(spool)))) == before
+    assert (spool / "somebody-elses.log").read_text() == "theirs\n"
+    assert "spool marker" in err.getvalue(), err.getvalue()
+    assert "find /scratch/z" in out.getvalue()
+    assert sorted(os.listdir(str(tmp_path / "spool.aside"))) == [reaper.SPOOL_MARKER], (
+        "nothing is written to the real spool either: its name is elsewhere")
+
+
+def test_a_marker_that_is_a_link_does_not_mark_the_spool(tmp_path, monkeypatch):
+    monkeypatch.setattr(reaper, "_needs_marker", lambda: True)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    target = tmp_path / "elsewhere"
+    target.write_text("x")
+    os.symlink(str(target), str(spool / reaper.SPOOL_MARKER))
+    with pytest.raises(reaper.SpoolUnfit):
+        os.close(reaper.open_spool(str(spool)))
+
+
+def test_a_root_run_does_not_create_a_missing_spool(tmp_path, procfs,
+                                                    mounts_path, monkeypatch):
+    """Root's spool is deploy.py's to create and mark; an unmarked one the
+    reaper made would only refuse its own writes."""
+    monkeypatch.setattr(reaper, "_needs_marker", lambda: True)
+    cg = _one_finding(tmp_path, procfs)
+    spool = tmp_path / "gone"
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path),
+                    out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
+    assert rc == reaper.EXIT_UNRECORDED
+    assert not spool.exists()

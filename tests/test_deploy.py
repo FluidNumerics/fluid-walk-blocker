@@ -4316,3 +4316,43 @@ def test_an_unreadable_login_defs_is_unknown_to_the_dry_run_and_a_refusal_as_roo
     out = io.StringIO()
     rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=out)
     assert rc == 6 and "could not be made even as root" in out.getvalue()
+
+
+# --- the spool marker (ADR-0025) ------------------------------------------
+
+def test_create_spool_writes_the_marker_root_reads_for(tmp_path):
+    spool = str(tmp_path / "var-log")
+    deploy.create_spool(spool, os.getgid())
+    marker = os.path.join(spool, deploy.SPOOL_MARKER)
+    info = os.lstat(marker)
+    assert stat.S_ISREG(info.st_mode)
+    assert stat.S_IMODE(info.st_mode) == 0o640 and info.st_gid == os.getgid()
+    assert deploy.SPOOL_MARKER in deploy.INSTALLER_OWNED_SPOOL_NAMES
+
+
+def test_a_spool_that_predates_the_marker_gets_one_from_the_install(
+        tmp_path, monkeypatch):
+    """The migration: an existing, owned spool with a trail and no marker.
+    Mutation: drop write_spool_marker() from create_spool() and the relink
+    and the root reaper refuse every node's first poll after the upgrade."""
+    spool = _old_spool(tmp_path)
+    assert not os.path.exists(os.path.join(spool, deploy.SPOOL_MARKER))
+    _real_spool_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(_args(tmp_path)) == 0
+    assert os.path.isfile(os.path.join(spool, deploy.SPOOL_MARKER))
+
+
+def test_a_marker_name_that_is_a_link_is_refused_not_followed(tmp_path):
+    spool = str(tmp_path / "var-log")
+    os.makedirs(spool)
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("not the walk-blocker's\n")
+    sentinel.chmod(0o600)
+    os.symlink(str(sentinel), os.path.join(spool, deploy.SPOOL_MARKER))
+    with pytest.raises(deploy.SpoolRefused):
+        deploy.create_spool(spool, os.getgid())
+    assert sentinel.read_text() == "not the walk-blocker's\n"
+    assert stat.S_IMODE(sentinel.stat().st_mode) == 0o600

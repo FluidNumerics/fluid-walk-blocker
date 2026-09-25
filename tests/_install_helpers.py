@@ -356,6 +356,22 @@ def stamped_install(tmp_path, dest=None, layout=None, mount_table_text=None,
     return layout
 
 
+SPOOL_MARKER = ".walk-blocker-spool"
+
+
+def stage_spool(layout):
+    """The spool as deploy.py leaves it before it runs install.sh: the
+    directory, and the marker inside it that the root relink requires and
+    never creates (ADR-0025). Owned by the test user, which the stat stub
+    reports as whoever `id -u` says -- the fake root included."""
+    layout.spool.mkdir(parents=True, exist_ok=True)
+    marker = layout.spool / SPOOL_MARKER
+    if not marker.exists():
+        marker.write_text("walk-blocker spool, staged by the test harness\n")
+        marker.chmod(0o640)
+    return marker
+
+
 def stage_walk_job(prefix):
     """A `walk-job` at $PREFIX/walk-job, the way deploy.py puts it there.
 
@@ -450,7 +466,7 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
                 fish_ignores_conf=False, fish_absent=False, zsh_absent=False,
                 fake_uid=None, layout=None, script=None, real_stat=False,
                 stat_body=None, timeout=60, walk_job=True, env=None,
-                shell=None, cwd=None, **site_overrides):
+                shell=None, cwd=None, spool=True, **site_overrides):
     """Stamp, stage and run the installer once. Returns `(result, layout)`.
 
     An APPROVED install must run from $PREFIX/shim, because link_farm points
@@ -469,6 +485,10 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
         fish=None if fish_absent else (
             FISH_STUB_IGNORES_HOOK if fish_ignores_conf else FISH_STUB_SOURCES_HOOK))
 
+    # deploy.py creates and marks the spool before a writing install runs
+    # install.sh; `spool=False` models a spool it never made.
+    if spool and "--system" in args and "--dry-run" not in args:
+        stage_spool(layout)
     # Before the payload check, which reads $PREFIX/walk-job.
     if walk_job:
         stage_walk_job(layout.prefix)

@@ -996,6 +996,24 @@ def terminate(proc, grace_s=None, sleep=time.sleep, killer=os.kill,
 # State, latching, output
 # --------------------------------------------------------------------------
 
+# The spool's identity (ADR-0025): the root-owned file deploy.py writes
+# inside the spool it created. The same literal as deploy.py's and
+# install.sh's; a test pins that the three agree.
+SPOOL_MARKER = ".walk-blocker-spool"
+
+
+def _needs_marker():
+    """Whether this run's writes are ROOT's, which is when the spool has to
+    prove it is the one deploy.py made. The attack the marker answers is a
+    group that can write a spool ancestor renaming a root-owned directory
+    into the spool's name, so that root writes there; a non-root hand run
+    can only write where its own uid already may, and its `/var/tmp` spool
+    has no deployer to mark it. A function rather than an inline test, so
+    the suite can drive the root branch as `_is_root` is driven in
+    deploy.py -- not an environment variable (ADR-0004, ADR-0013)."""
+    return os.geteuid() == 0
+
+
 class SpoolUnfit(Exception):
     """The directory a record would be written into is not one this process
     may write through, or a write into it failed."""
@@ -1021,6 +1039,12 @@ def open_spool(directory):
     No seam and none needed: a hand run's spool under /var/tmp is the
     caller's own `0755` directory and passes; the deployed spool is root's
     `02750`, and the reaper runs as root. A setgid bit is not a write bit.
+
+    Run as root, the spool must ALSO carry SPOOL_MARKER: a regular file root
+    owns, opened relative to this fd without following a link. A root-owned
+    directory renamed into the spool's name passes every other test here --
+    it is root's, a directory, not group-writable -- and fails this one,
+    because the marker stayed with the real spool.
     """
     try:
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -1038,19 +1062,46 @@ def open_spool(directory):
     elif info.st_mode & 0o022:
         why = ("is mode %04o, writable by group or other, so its entries can "
                "be replaced" % (info.st_mode & 0o7777))
+    if why is None and _needs_marker():
+        why = _marker_missing(fd)
     if why:
         os.close(fd)
         raise SpoolUnfit("%s %s" % (directory, why))
     return fd
 
 
+def _marker_missing(fd):
+    """Why the directory `fd` does not carry a valid SPOOL_MARKER, or None."""
+    try:
+        entry = os.open(SPOOL_MARKER, os.O_RDONLY | os.O_NOFOLLOW
+                        | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+    except OSError as exc:
+        return ("carries no usable spool marker %s (%s): it is not the spool "
+                "deploy.py made, and only deploy.py makes one"
+                % (SPOOL_MARKER, exc.strerror))
+    try:
+        info = os.fstat(entry)
+    finally:
+        os.close(entry)
+    if not S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        return ("has a spool marker %s that is not a regular file owned by "
+                "this process: it is not the spool deploy.py made"
+                % SPOOL_MARKER)
+    return None
+
+
 def _ensure_spool(directory):
     """Create a missing spool, `0755` so no umask can make it group-writable,
     and hand back its checked fd. A spool that exists is judged as it is:
     `makedirs` is never asked to "fix" one. The deployed spool is the
-    installer's; this is for a hand run, and for the poll after somebody
-    removed the deployed one, which the next relink puts back to 02750."""
+    installer's; this is for a hand run. Run as root, a missing spool is
+    refused instead: root's spool is deploy.py's to create and mark."""
     if not os.path.lexists(directory):
+        if _needs_marker():
+            # Root does not make the spool: an unmarked one would refuse its
+            # own writes, and a marked one is deploy.py's to make.
+            raise SpoolUnfit("%s does not exist, and only deploy.py creates "
+                             "the spool root writes into" % directory)
         os.makedirs(directory, 0o755, exist_ok=True)
     return open_spool(directory)
 

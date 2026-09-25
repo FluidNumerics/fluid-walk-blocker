@@ -1,6 +1,7 @@
 # ADR-0019: The reconcile reports an uncovered mount when its state changes, not on every poll
 
 **Status:** accepted, 2026-09-17
+The Consequences clause "**One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change." is narrowed by ADR-0025: the memory is `0640`, readable by the spool's one reader group, and the superseded wording is recorded under "Superseded wording" below.
 **Narrows:** ADR-0016, "The reconcile logs one journald line per mount in the live table that no override covers"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0019 — see `docs/evidence.md`
 
@@ -93,8 +94,8 @@ every poll, but it is never a source of evidence. The audit trail is. A
 lost or corrupted memory costs one repeated round of `expensive` lines and
 nothing else.
 
-**One root-owned file more in the spool**, world-readable like the rest of
-the directory (ADR-0012), so the person reading the journal can also read
+**One root-owned file more in the spool**, `0640` like the rest of the
+directory (ADR-0025), so a member of the spool's reader group can also read
 what the relink currently believes is uncovered without waiting for the
 next change.
 
@@ -117,3 +118,12 @@ change to this mechanism.
 - `[install].spool_dir` — where `uncovered-mounts.state` lives.
 - `[[filesystems.mounts]]` — the rows that turn an `expensive` line into a
   `covered` one.
+
+## Superseded wording
+
+Narrowed by ADR-0025. The Consequences above read:
+
+> **One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change.
+
+The memory is `0640`, readable by root and the spool's reader group, and by
+nobody else.

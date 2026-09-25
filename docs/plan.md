@@ -168,8 +168,9 @@ copies from the snapshot. The audit directory is `root:<spool_group>
 02750` and its files `0640` (ADR-0012, ADR-0025): root-writable, readable by
 the one group the site names, so the people who make the `--kill` decision
 can read the evidence and nobody else on the node can. A listed, human-free
-service group may hold write on a spool ancestor, never on the spool, and
-root's writes into the spool never follow a link. Hooks are verified, not assumed (ADR-0008):
+service group may hold write on a spool ancestor, never on the spool;
+root's writes into the spool never follow a link, and go only into a spool
+carrying the marker `deploy.py` writes into it. Hooks are verified, not assumed (ADR-0008):
 a `required` shell's hook must be proven to fire under remote-command
 conditions or the install fails; a `best-effort` hook never gates; the
 reconcile reports and never repairs.

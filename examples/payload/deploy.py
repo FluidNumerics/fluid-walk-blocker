@@ -650,6 +650,10 @@ def system_preview(args, env=None):
     print("#   then, on an fd opened O_NOFOLLOW|O_DIRECTORY and checked to be")
     print("#   root's directory: fchown 0:%s, fchmod %05o"
           % (gid if gid is not None else "<unresolved>", SPOOL_DIR_MODE))
+    print("#   and write %s inside it, root:%s %04o: the relink and the"
+          % (SPOOL_MARKER, DEFAULT_SPOOL_GROUP, SPOOL_FILE_MODE))
+    print("#   reaper write only into a spool that carries it, and never")
+    print("#   create it -- that is this installer's alone (ADR-0025).")
     print("# Not `install -d`: GNU install follows a symlinked leaf. Nobody")
     print("# outside the group reads the trail -- including a user whose own")
     print("# process is in a record -- and a monitored account still cannot")
@@ -1146,7 +1150,20 @@ SPOOL_FILE_MODE = 0o640
 # defence -- but an older build's file keeps whatever it was given. The
 # `.tmp`, the `.1` rotation and the relink's `.new` are on the list for that
 # reason: each can be orphaned at the wrong mode.
+# The spool's identity (ADR-0025), named in the style of PAYLOAD_MARKER. A
+# root-owned regular file INSIDE the spool, written by this installer and by
+# nothing else: the relink and the root reaper write into a spool, or chmod
+# and chgrp it, only when it carries one. It travels with the real spool
+# when somebody renames the spool aside, and a root-owned directory renamed
+# into the spool's name does not have it -- which is what stops a group that
+# can write a spool ancestor from pointing root's writes at a sibling. The
+# relink never creates it; this installer creates it, on a fresh spool and
+# on one that predates it. install.sh and reaper.py carry the same literal,
+# and a test pins that the three agree.
+SPOOL_MARKER = ".walk-blocker-spool"
+
 INSTALLER_OWNED_SPOOL_NAMES = (
+    SPOOL_MARKER,                   # the spool's identity, above
     "reaper-state.json",            # Layer 2's latch
     "reaper-state.json.tmp",        # ...and the latch's write-and-rename
     "reaper-audit.jsonl",           # Layer 2's trail
@@ -1339,8 +1356,42 @@ def create_spool(spool, gid, uid=0):
         # kernel treats a setgid directory on a group change.
         os.fchown(fd, uid, gid)
         os.fchmod(fd, SPOOL_DIR_MODE)
+        write_spool_marker(fd, gid, uid)
     finally:
         os.close(fd)
+
+
+def write_spool_marker(fd, gid, uid=0):
+    """Create or re-assert SPOOL_MARKER inside the spool whose fd is `fd`.
+
+    Relative to the fd and O_NOFOLLOW, so a link at the marker's name is
+    refused rather than followed, and fstat-ed, so a fifo or a file somebody
+    else owns under that name refuses too (SpoolRefused). This is the
+    migration for a spool that predates the marker, as well as the first
+    creation: the entry at the spool's name has just been proven to be a
+    directory owned by `uid`, which is the only judgement this installer can
+    make of an existing spool, and the operator reading the dry run is the
+    other half of it.
+    """
+    try:
+        entry = os.open(SPOOL_MARKER, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+                        | os.O_NONBLOCK | os.O_CLOEXEC, SPOOL_FILE_MODE,
+                        dir_fd=fd)
+    except OSError as exc:
+        raise SpoolRefused("the spool marker %s could not be written without "
+                           "following a link: %s" % (SPOOL_MARKER, exc.strerror))
+    try:
+        info = os.fstat(entry)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+            raise SpoolRefused("the spool marker %s is not a regular file owned "
+                               "by uid %d" % (SPOOL_MARKER, uid))
+        os.fchown(entry, uid, gid)
+        os.fchmod(entry, SPOOL_FILE_MODE)
+        os.ftruncate(entry, 0)
+        os.write(entry, ("walk-blocker spool, written by deploy.py %s\n"
+                         % __version__).encode("ascii"))
+    finally:
+        os.close(entry)
 
 
 # `stat`'s type predicates, in the order a spool is plausibly wrong: named
@@ -2439,6 +2490,9 @@ def system_execute(args, env=None):
     if args.dry_run:
         print("would create if absent, then assert through a no-follow fd: "
               "%s 0:%d %05o" % (spool, args.spool_gid, SPOOL_DIR_MODE))
+        print("would write the spool marker through the same fd: %s 0:%d %04o"
+              % (os.path.join(spool, SPOOL_MARKER), args.spool_gid,
+                 SPOOL_FILE_MODE))
     else:
         try:
             create_spool(spool, args.spool_gid)

@@ -3,6 +3,7 @@
 **Status:** accepted, 2026-09-25
 **Narrows:** ADR-0012, "**`[install].spool_dir` is `0755`, root-owned: writable by root alone, readable by everyone.**"
 **Narrows:** ADR-0004, "none of it writable by the account being monitored"
+**Narrows:** ADR-0019, "**One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change."
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0025 — see `docs/evidence.md`
 
 ## Context
@@ -84,6 +85,16 @@ spool's descriptor, `O_NOFOLLOW`, and renames with directory descriptors;
 the relink enters the spool with `cd -P`, checks it is the inode it
 examined, and writes only relative names inside it.
 
+The spool carries its identity inside it. `deploy.py` writes
+`.walk-blocker-spool`, a root-owned `0640` regular file, into the spool it
+creates, and into an existing root-owned spool that predates it. Run as
+root, the relink and the reaper write into a spool — or chmod or chgrp it —
+only when that marker is there: a regular file root owns, reached by its
+relative name inside the pinned working directory or opened `O_NOFOLLOW`
+relative to the spool's descriptor. A spool without it is journalled
+(`unmarked`), nothing is written, and the reaper exits `4`. Neither of them
+creates the spool or the marker; both are `deploy.py`'s.
+
 ADR-0004's clause "none of it writable by the account being monitored" is
 kept in full, and this record clarifies how it reads: the account being
 monitored is a human login account. A listed, human-free service group may
@@ -98,15 +109,29 @@ hold write on a spool ancestor, never on the spool.
   The journal is unchanged: an ordinary user still reads their own Layer 1
   records there.
 - **A listed group can hide or replace the trail, but it cannot redirect a
-  root write through a link.** Holding write on an ancestor lets it rename
-  the spool away and put another directory in its place; every writer then
-  refuses to follow a link, refuses a directory it does not own, and the
-  reaper exits `4` (unrecorded) with its findings in the unit's journal. What
-  such a group CAN do is rename a root-owned directory that already sits
-  beside the spool into the spool's name: that entry is root's, so the
-  relink's pin accepts it and asserts the spool's group and mode on it, and
-  the reaper writes its records there. This follows from accepting the group
-  on the ancestor and is not closed by this record.
+  root write.** Holding write on an ancestor lets it rename entries in that
+  ancestor, and each way of using that is answered:
+  - a link at the spool's name, or at any name inside it: every writer
+    refuses to follow one;
+  - a directory of its own at the spool's name: it is not root's, and root
+    writes nothing into it;
+  - a root-owned directory that already sat beside the spool, renamed into
+    the spool's name: root's and a directory, it passes every test but the
+    marker's. The marker stayed with the real spool, so the relink leaves
+    the sibling's mode, group and contents alone and journals `unmarked`,
+    and the reaper writes nothing and exits `4`.
+
+  What remains possible is what write on the ancestor always gave: the group
+  can delete or replace the trail, and it can move the real spool aside,
+  which stops the writes rather than redirecting them — the relink journals
+  `absent` or `unmarked`, and the reaper exits `4` with its findings in the
+  unit's journal until a deploy puts the spool back.
+- **`deploy.py` trusts the directory at the spool's name when it adds the
+  marker to a spool that predates it.** It proves that entry is a directory
+  root owns, reached without a link, and no more; a sibling renamed into the
+  name at the moment an operator deploys would be marked. The dry run lists
+  what it will repair, and the operator runs the deploy; the unattended
+  paths never mark anything.
 - **The member check claims only what NSS enumerates at deploy time.** A
   directory-service account that `getpwall()` does not list is not seen, and
   membership can change after the deploy. `GID_MIN` narrows that gap — a
@@ -133,6 +158,13 @@ hold write on a spool ancestor, never on the spool.
 - **The reaper has a fifth exit code.** `4` means the spool failed its check
   or a write into it failed: the poll scanned, printed every finding to the
   unit's journal, wrote nothing and sent no signal.
+- **The relink no longer creates a missing spool.** It journals `absent`;
+  the `created` record is gone with the creating. A non-root hand run of
+  the reaper still makes its own `/var/tmp` spool, and neither it nor the
+  unprivileged debug relink asks for the marker: neither writes as root.
+- **The relink's memory is `0640` like the rest of the spool.** ADR-0019
+  called it world-readable; that clause is narrowed here and moves to its
+  superseded wording.
 
 ## Re-measure when
 

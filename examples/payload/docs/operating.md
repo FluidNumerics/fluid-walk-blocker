@@ -304,7 +304,9 @@ account (ADR-0004):
   writable by root alone, readable by the one group `[install].spool_group`
   names, so the people who make the `--kill` decision can read the trail and
   nobody else can (ADR-0025). It is created with `mkdir` and set through a
-  descriptor opened without following a link, never `install -d`. The relink
+  descriptor opened without following a link, never `install -d`, and it
+  carries `.walk-blocker-spool`, the root-owned marker that the relink and the
+  reaper require before they write into it as root. The relink
   keeps `uncovered-mounts.state` there too, its memory of which mounts it has
   reported (ADR-0019);
 - a hook block in each enabled shell's startup file named by
@@ -479,10 +481,13 @@ It carries three kinds of record:
   recorded the same way, and only when they changed the outcome;
 - the **reconcile's reports**: `hook_check` when a hook block is missing or
   no longer fires, naming `[hooks.<shell>].package` as the likely conffile
-  actor; `audit_dir` when the spool had to be created, or its mode or group
-  corrected (`created`, `mode-corrected`, `group-corrected`), or when it was
-  left alone because it is a `symlink`, `not-a-directory` or
-  `owner-not-root` — nothing is written into such a spool;
+  actor; `audit_dir` when the spool's mode or group had to be corrected
+  (`mode-corrected`, `group-corrected`), or when it was left alone because
+  it is `absent`, a `symlink`, `not-a-directory`, `owner-not-root`, or
+  `unmarked` — it lacks the `.walk-blocker-spool` marker `deploy.py` writes,
+  so it is not the spool `deploy.py` made (ADR-0025). Nothing is written into
+  such a spool, the reaper exits 4 until a deploy puts it right, and the
+  relink never creates the spool or its marker;
   `coverage_change` when the set of wrapped names changed; `relink_refused`
   when the relink stopped at one of its own checks;
 - one **`refused`** record per refusal, from the shim itself, carrying the
