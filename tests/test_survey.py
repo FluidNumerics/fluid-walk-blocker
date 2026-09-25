@@ -180,6 +180,7 @@ def test_proposed_block_parses_and_validates(mount_table):
 
     # And appended to a minimal site as text, the way an administrator would.
     minimal = ('schema_version = 1\n[site]\ndisplay_name = "Minimal"\n'
+               '[install]\nspool_group = "wbaudit"\ntrusted_groups = []\n'
                '[slurm]\npartition = "p"\n[timer]\non_calendar = "*:00:30"\n')
     config.from_dict(tomllib.loads(minimal + "\n" + block))
 

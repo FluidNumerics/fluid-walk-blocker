@@ -7,7 +7,7 @@ not obvious from the code, so this file is short and worth reading first.
 
 1. `README.md` — what it is, and what is deliberately out of scope
 2. `docs/plan.md` — the architecture on one page
-3. `docs/adr/0001` … `0024`, in order — the decisions and why alternatives lost
+3. `docs/adr/0001` … `0025`, in order — the decisions and why alternatives lost
 4. `CLAUDE.md` — the non-negotiables and the parts that are easy to get wrong
 
 A change that contradicts an ADR is not refused, but it needs a new ADR that

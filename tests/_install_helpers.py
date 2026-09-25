@@ -23,6 +23,7 @@ would be exactly the kind of unprivileged bypass surface this installer
 exists to close off (ADR-0004).
 """
 
+import grp
 import json
 import os
 import pathlib
@@ -54,6 +55,12 @@ NO_LOGGER = "/nonexistent/logger"
 TEST_LOGGER = "walk-blocker-test-logger"
 
 AUDIT_FILENAME = "walk-blocker-audit.jsonl"
+
+# The reader group the stamped copy chgrps the spool to. CI is not root, so
+# it is the test user's own primary group -- the one group a non-root
+# `chgrp` is always allowed to name -- and never a fixed name, which would
+# be a fact about one machine.
+SPOOL_GROUP = grp.getgrgid(os.getgid()).gr_name
 
 # The fixture mount table the reconcile's mount report reads, in
 # /proc/mounts field order. `/home` and `/opt/site-tools` are covered by the
@@ -95,7 +102,7 @@ export EDITOR=vim
 # it with fake_uid.
 UTILITIES = ("sh", "dirname", "pwd", "mkdir", "rm", "rmdir", "ln", "mv",
              "cat", "touch", "awk", "id", "install", "mktemp", "chmod", "sed",
-             "stat")
+             "stat", "chgrp")
 
 # Real bash's SSH_SOURCE_BASHRC feature reads a HARDCODED path -- never a file
 # named by configuration -- so it cannot be pointed at a sandboxed hook file.
@@ -174,7 +181,55 @@ exec /bin/sh -c "$@"
 """
 
 ID_STUB = '#!/bin/sh\nif [ "$1" = "-u" ]; then echo %d; else exit 1; fi\n'
-STAT_ROOT_755 = "#!/bin/sh\nprintf '0 755\\n'\n"
+# The format install.sh lstats the spool with (spool_lstat()). Named so the
+# stubs below can pass exactly that query through to the real stat.
+SPOOL_STAT_FORMAT = "%d:%i %u %g %a %F"
+REAL_STAT = next(p for p in ("/usr/bin/stat", "/bin/stat") if os.path.exists(p))
+
+
+# A gid no fixture group has, for modelling a spool whose group is not the
+# reader group -- which a non-root test cannot create for real without a
+# second group to chgrp to.
+STALE_GID = 54321
+
+
+def stat_stub(spool_owner=None, stale_gid_until=None):
+    """A `stat` that answers the ancestor walks as root-owned 0755 -- the
+    post-deploy state a tmp tree cannot have -- and passes the SPOOL query
+    through to the real stat, so the spool's true type, mode, group and
+    inode reach install.sh. Only the owner is rewritten: to whatever `id -u`
+    says on the same PATH (the fake root, or the test user), so "the spool is
+    ours" holds in the sandbox the way it does on a node -- or to
+    `spool_owner`, to model a spool somebody else owns.
+
+    `stale_gid_until` names a flag file: until it exists the spool query
+    reports STALE_GID as the group, modelling a spool with the wrong group.
+    Pair it with `populate_bin(chgrp_flag=...)`, whose `chgrp` creates the
+    flag before running the real one."""
+    owner = '"$(id -u)"' if spool_owner is None else str(int(spool_owner))
+    gid_swap = ""
+    if stale_gid_until is not None:
+        gid_swap = (
+            "    if [ ! -e '" + str(stale_gid_until) + "' ]; then\n"
+            "        rest=\"" + str(STALE_GID) + " ${rest#* }\"\n"
+            "    fi\n")
+    return (
+        "#!/bin/sh\n"
+        "if [ \"$1\" = -c ] && [ \"$2\" = '" + SPOOL_STAT_FORMAT + "' ]; then\n"
+        "    shift 2\n"
+        "    [ \"$1\" = -- ] && shift\n"
+        "    out=$(" + REAL_STAT + " -c '" + SPOOL_STAT_FORMAT + "' -- \"$1\") || exit 1\n"
+        "    first=${out%% *}\n"
+        "    rest=${out#* }\n"
+        "    rest=${rest#* }\n"
+        + gid_swap +
+        "    printf '%s %s %s\\n' \"$first\" " + owner + " \"$rest\"\n"
+        "    exit 0\n"
+        "fi\n"
+        "printf '0 755\\n'\n")
+
+
+STAT_ROOT_755 = stat_stub()
 TOOL_STUB = "#!/bin/sh\nexit 0\n"
 
 
@@ -237,6 +292,7 @@ def site_values(layout, **overrides):
         "site.toml:install.prefix": str(layout.prefix),
         "site.toml:install.spool_dir": str(layout.spool),
         "site.toml:install.audit_filename": AUDIT_FILENAME,
+        "site.toml:install.spool_group": SPOOL_GROUP,
         "site.toml:install.tool_search_path": [str(layout.toolbin)],
         "site.toml:hooks.bash.file": str(layout.bashrc),
         "site.toml:hooks.bash.package": "bash",
@@ -327,7 +383,7 @@ def stage_readme(prefix):
 def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
                  stat_body=STAT_ROOT_755, bash=BASH_STUB_SOURCES_HOOK,
                  zsh=ZSH_STUB_SOURCES_HOOK, fish=FISH_STUB_SOURCES_HOOK,
-                 logger_log=None):
+                 logger_log=None, chgrp_flag=None):
     """A closed PATH: the utilities install.sh needs, the shell stubs, the
     stub tools, and -- optionally -- a fake `id`, a fake `stat` and a
     recording logger under TEST_LOGGER. `stat_body=None` keeps the real
@@ -342,6 +398,8 @@ def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
         if name == "id" and fake_uid is not None:
             continue
         if name == "stat" and stat_body is not None:
+            continue
+        if name == "chgrp" and chgrp_flag is not None:
             continue
         real = _which(name)
         if real and name not in tools:
@@ -366,6 +424,9 @@ def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
         write_stub(fake_bin / tool, TOOL_STUB)
     if logger_log is not None:
         write_stub(fake_bin / TEST_LOGGER, recording_logger_stub(logger_log))
+    if chgrp_flag is not None:
+        write_stub(fake_bin / "chgrp", "#!/bin/sh\n: > '%s'\nexec %s \"$@\"\n"
+                   % (chgrp_flag, _which("chgrp")))
     return fake_bin
 
 
@@ -439,7 +500,8 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
 
 
 def relink_with_a_recording_logger(tmp_path, layout, tools=("find", "grep"),
-                                   fake_uid=None, script=None):
+                                   fake_uid=None, script=None, stat_body=None,
+                                   shell=None, chgrp_flag=None):
     """Run `--relink` with a logger stub on a closed PATH. Returns
     `(result, [records])`; the stub is the only observable sink, since the
     stamped copy points the trusted absolute path at nothing.
@@ -453,31 +515,15 @@ def relink_with_a_recording_logger(tmp_path, layout, tools=("find", "grep"),
     log = layout.tmp_path / "logger-calls.txt"
     if not log.exists():
         log.write_text("")
-    stat_body = STAT_ROOT_755
-    if fake_uid is not None:
-        # `stat` needs BOTH halves here, which the flat "0 755" stub cannot
-        # give. The ancestor walk must look root-owned and tight, exactly as
-        # elsewhere -- but assert_audit_dir compares the audit directory's
-        # mode before and after, so for THAT one path the real mode has to
-        # come through or the comparison can never see a change.
-        stat_body = (
-            '#!/bin/sh\n'
-            'if [ "$1" = "-c" ] && [ "$2" = "%u %a" ]; then\n'
-            '    if [ "$3" = "' + str(layout.spool) + '" ]; then\n'
-            '        m=$(' + _which("stat") + ' -c %a "$3" 2>/dev/null) || exit 1\n'
-            '        printf \'0 %s\\n\' "$m"\n'
-            '        exit 0\n'
-            '    fi\n'
-            "    printf '0 755\\n'\n"
-            '    exit 0\n'
-            'fi\n'
-            'exec ' + _which("stat") + ' "$@"\n')
+    # The spool query passes through with its real mode, group and inode, so
+    # assert_audit_dir() can see a change; see stat_stub().
+    stat_body = stat_body or STAT_ROOT_755
     populate_bin(bin_dir, tools=tools, fake_uid=fake_uid, stat_body=stat_body,
-                 logger_log=log)
+                 logger_log=log, chgrp_flag=chgrp_flag)
     before = len(log.read_text().splitlines())
 
     result = subprocess.run(
-        [SH, str(script), "--relink"],
+        [shell or SH, str(script), "--relink"],
         capture_output=True, text=True, timeout=60,
         env=sandbox_env(layout, bin_dir))
     records = [json.loads(line.split("-- ", 1)[1])

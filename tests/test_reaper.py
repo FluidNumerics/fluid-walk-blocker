@@ -1096,8 +1096,10 @@ def test_append_audit_rotates_past_the_size_threshold(tmp_path, monkeypatch):
 
 
 def test_append_audit_does_not_trust_the_creating_umask(tmp_path):
-    """`open(path, 'a')` on a brand-new file is 0666 & ~umask; the trail is
-    world-readable by decision (ADR-0012), so the mode is set explicitly."""
+    """A brand-new file is created `0666 & ~umask`; the trail is `0640`,
+    readable by root and the spool's group, by decision (ADR-0025), so the
+    mode is set explicitly rather than left to whatever umask the writer
+    ran under."""
     old_umask = os.umask(0o077)
     try:
         path = str(tmp_path / "audit.jsonl")
@@ -1105,7 +1107,7 @@ def test_append_audit_does_not_trust_the_creating_umask(tmp_path):
     finally:
         os.umask(old_umask)
     mode = os.stat(path).st_mode & 0o777
-    assert mode == 0o644, oct(mode)
+    assert mode == 0o640, oct(mode)
 
 
 def test_save_state_does_not_trust_the_creating_umask_either(tmp_path):
@@ -1121,7 +1123,7 @@ def test_save_state_does_not_trust_the_creating_umask_either(tmp_path):
     finally:
         os.umask(old_umask)
     mode = os.stat(path).st_mode & 0o777
-    assert mode == 0o644, oct(mode)
+    assert mode == 0o640, oct(mode)
     assert not os.path.exists(path + ".tmp")
 
 
@@ -1297,7 +1299,7 @@ def test_the_state_temp_file_is_never_left_group_writable(tmp_path,
     behind under a different filename. save_state() sets the mode at CREATE
     time rather than before the rename. Driven by making os.replace raise,
     which is the one step that turns a completed write into an orphan."""
-    def explode(_src, _dst):
+    def explode(_src, _dst, **_dir_fds):
         raise OSError("interrupted")
     monkeypatch.setattr(os, "replace", explode)
 
@@ -1312,7 +1314,7 @@ def test_the_state_temp_file_is_never_left_group_writable(tmp_path,
     orphan = path + ".tmp"
     assert os.path.exists(orphan), "the orphan is the case under test"
     mode = os.stat(orphan).st_mode & 0o777
-    assert mode == 0o644, oct(mode)
+    assert mode == 0o640, oct(mode)
 
 
 def test_a_preexisting_temp_file_does_not_keep_its_old_mode(tmp_path):
@@ -1330,7 +1332,7 @@ def test_a_preexisting_temp_file_does_not_keep_its_old_mode(tmp_path):
     reaper.save_state(path, {"latched": []})
 
     mode = os.stat(path).st_mode & 0o777
-    assert mode == 0o644, oct(mode)
+    assert mode == 0o640, oct(mode)
 
 
 @pytest.mark.skipif(shutil.which("setfacl") is None,
@@ -2883,3 +2885,152 @@ def test_a_state_file_from_before_the_streak_is_read_as_no_streak(
     reaper.run(args, sleep=lambda _s: None)
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
     assert [(e["verdict"], e["d_polls"]) for e in entries] == [("opaque_traversal", 2)], entries
+
+
+# --------------------------------------------------------------------------
+# the spool is checked before anything is written into it (ADR-0025)
+# --------------------------------------------------------------------------
+
+def _one_finding(tmp_path, procfs, pid=4201):
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
+    write_proc(procfs, pid, "find",
+               ["find", "/scratch/z", "-type", "f", "-name", "x"],
+               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
+    return cg
+
+
+def _spool_args(spool, cg, procfs, mounts_path, extra=()):
+    """--spool alone, no --audit: every file the reaper writes is IN the
+    spool, so the spool check governs all of them."""
+    return reaper.build_parser().parse_args([
+        "--spool", str(spool), "--cgroup-root", str(cg),
+        "--proc-root", str(procfs), "--mounts", mounts_path,
+        "--min-interval", "0", "--settle", "0"] + list(extra))
+
+
+def test_a_spool_that_fails_the_check_scans_prints_and_writes_nothing(
+        tmp_path, procfs, mounts_path):
+    """Group-writable: its entries can be replaced with links, so nothing is
+    written through it -- and the poll is not wasted either. Findings reach
+    stdout (the journal), no file appears, and the exit fails the unit.
+    Mutation: delete the mode test in open_spool() and the trail is written."""
+    cg = _one_finding(tmp_path, procfs)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    spool.chmod(0o775)
+    out, err = io.StringIO(), io.StringIO()
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path), out=out,
+                    err=err, sleep=lambda _s: None)
+    assert rc == reaper.EXIT_UNRECORDED, err.getvalue()
+    assert "find /scratch/z" in out.getvalue(), out.getvalue()
+    assert os.listdir(str(spool)) == [], "wrote into an unfit spool"
+    assert "writable by group or other" in err.getvalue(), err.getvalue()
+
+
+def test_an_unfit_spool_sends_no_signal(tmp_path, procfs, mounts_path):
+    """A kill with no record is what the trail exists to prevent. Mutation:
+    drop `not unrecorded` from the kill arm and the killer is called."""
+    cg = _one_finding(tmp_path, procfs)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    spool.chmod(0o777)
+    sent = []
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path,
+                                extra=("--kill", "--kill-others")),
+                    out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None,
+                    killer=lambda pid, sig: sent.append((pid, sig)),
+                    alive=lambda pid: False)
+    assert rc == reaper.EXIT_UNRECORDED
+    assert sent == []
+
+
+def test_a_hand_run_spool_is_created_unwritable_by_group_whatever_the_umask(
+        tmp_path, procfs, mounts_path):
+    """The hand run's `/var/tmp` spool must pass the check it is about to be
+    held to: created 0755, which a umask can only narrow."""
+    cg = _one_finding(tmp_path, procfs)
+    spool = tmp_path / "fresh" / "spool"
+    before = os.umask(0o002)
+    try:
+        rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path),
+                        out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
+    finally:
+        os.umask(before)
+    assert rc != reaper.EXIT_UNRECORDED
+    assert not os.stat(str(spool)).st_mode & 0o022
+    assert os.path.exists(str(spool / "reaper-audit.jsonl"))
+
+
+def _sentinel(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("not the walk-blocker's\n")
+    sentinel.chmod(0o600)
+    return sentinel
+
+
+def _sentinel_state(sentinel):
+    return (sentinel.read_bytes(), os.lstat(str(sentinel)).st_mode)
+
+
+def test_the_reaper_writes_no_link_planted_in_a_swapped_spool(
+        tmp_path, procfs, mounts_path):
+    """The attack: the spool renamed aside and a directory put in its place
+    whose trail, state and temp names are links at a sentinel. The directory
+    is the caller's own, so it passes the spool check; what must hold is that
+    no write follows a link. Mutation: go back to `open(path, "a")` and
+    `os.chmod(path, ...)` in append_audit() and the sentinel changes."""
+    cg = _one_finding(tmp_path, procfs)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    reaper.save_state(str(spool / "reaper-state.json"), {})
+    spool.rename(str(tmp_path / "spool.aside"))
+    spool.mkdir()
+    sentinel = _sentinel(tmp_path)
+    for name in ("reaper-audit.jsonl", "reaper-audit.jsonl.1",
+                 "reaper-state.json", "reaper-state.json.tmp"):
+        os.symlink(str(sentinel), str(spool / name))
+    before = _sentinel_state(sentinel)
+    out = io.StringIO()
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path), out=out,
+                    err=io.StringIO(), sleep=lambda _s: None)
+    assert _sentinel_state(sentinel) == before
+    assert rc == reaper.EXIT_UNRECORDED
+    assert "find /scratch/z" in out.getvalue()
+
+
+def test_a_spool_that_is_a_link_to_a_directory_is_not_written_through(
+        tmp_path, procfs, mounts_path):
+    cg = _one_finding(tmp_path, procfs)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    target.chmod(0o755)
+    spool = tmp_path / "spool"
+    os.symlink(str(target), str(spool))
+    rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path),
+                    out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
+    assert rc == reaper.EXIT_UNRECORDED
+    assert os.listdir(str(target)) == []
+    assert os.stat(str(target)).st_mode & 0o7777 == 0o755
+
+
+def test_a_trail_file_owned_by_someone_else_is_not_appended_to(
+        tmp_path, monkeypatch):
+    """The fstat after the no-follow open: a regular file at the trail's
+    name that this process does not own is refused, not appended to. A test
+    cannot chown a file to another uid, so the directory check is bypassed
+    and the euid moved, which leaves the FILE check as the only thing that
+    can refuse. Mutation: drop the fstat and the record is appended."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    trail = spool / "reaper-audit.jsonl"
+    trail.write_text("")
+    monkeypatch.setattr(reaper, "_ensure_spool",
+                        lambda d: os.open(d, os.O_RDONLY | os.O_DIRECTORY))
+    real = os.geteuid
+    monkeypatch.setattr(reaper.os, "geteuid", lambda: real() + 1)
+    with pytest.raises(reaper.SpoolUnfit) as exc:
+        reaper.append_audit(str(trail), [{"a": 1}])
+    monkeypatch.undo()
+    assert "not a regular file owned by this process" in str(exc.value)
+    assert trail.read_text() == ""

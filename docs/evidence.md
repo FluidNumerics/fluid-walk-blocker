@@ -47,7 +47,7 @@ the ADR it bears on.
 | 0009 PSI corroborates, does not gate | Differenced PSI per uid against a live process table; counter-by-counter blindness table; full-table classification count; the trail reading behind the alerting split |
 | 0010 `opaque_traversal` names unmodelled tools | The first trail reading, by verdict and tool |
 | 0011 Layer 2 reads stdin from /proc | `ugrep` stdin behaviour by version; fd/0 device probes; per-process `stat` cost |
-| 0012 Audit trail root-writable-only, world-readable | Audit directory mode as deployed, and who could read it |
+| 0012 Audit trail root-writable-only, readable (narrowed by 0025: by one site-named group) | Audit directory mode as deployed, and who could read it |
 | 0013 Site configuration is compiled at build time, not read at run time | n/a: structural |
 | 0014 The generic tree carries decisions, not site evidence | n/a: structural |
 | 0015 Node code is POSIX `sh` or stdlib-only Python 3.9, and the shim is the `sh` part | `sh` versus `python3 -S` start cost; the budget history against load |
@@ -60,6 +60,7 @@ the ADR it bears on.
 | 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the collection request outstanding at publication |
 | 0023 A record states what holds now, and narrowed wording moves below it | n/a: structural |
 | 0024 A refusal is legible to a caller that reads neither stderr nor a pipeline's exit code | n/a: structural |
+| 0025 The audit trail is readable by a site-named group, and a listed service group may hold a spool ancestor | The spool ancestors' owner, group and mode before and after the package upgrade that changed them, and the membership of the group it left holding write |
 
 ## What this file is not
 

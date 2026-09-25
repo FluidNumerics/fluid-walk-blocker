@@ -13,8 +13,9 @@
 #                                      <file>.walk-blocker.orig, once, the
 #                                      first time this runs.
 #   install.sh --relink                reconcile: the symlink farm, the hook
-#                                      state, the audit directory's mode and
-#                                      the mount table. The reaper's timer
+#                                      state, the audit directory's group
+#                                      and mode, and the mount table. The
+#                                      reaper's timer
 #                                      runs this as root on every poll.
 #   install.sh --uninstall             as root, reverse a --system install
 #   install.sh --version
@@ -145,6 +146,10 @@ BIN=$PREFIX/bin
 SG_SPOOL_DIR='@@install.spool_dir@@'  # GENERATED from site.toml:install.spool_dir
 SG_AUDIT_FILENAME='@@install.audit_filename@@'  # GENERATED from site.toml:install.audit_filename
 AUDIT=$SG_SPOOL_DIR/$SG_AUDIT_FILENAME
+# The one group that may read the trail (ADR-0025). A NAME, and `chgrp`
+# resolves it: the only lookup this file makes, and only on the root relink
+# and the install.
+SG_SPOOL_GROUP='@@install.spool_group@@'  # GENERATED from site.toml:install.spool_group
 
 # link_farm() wraps a name only if it already resolves somewhere -- and
 # "somewhere" used to mean the CALLER's $PATH, so what got linked depended on
@@ -1021,9 +1026,121 @@ path_without_bin() {
     printf '%s' "$_out"
 }
 
+spool_lstat() {
+    # spool_lstat PATH -- lstat PATH into sg_sl_id (device:inode), sg_sl_uid,
+    # sg_sl_gid, sg_sl_mode and sg_sl_type (`directory`, `symbolic link`,
+    # ...). `stat -c` without `-L` never follows a link, so a symlink at the
+    # spool's name is described as the link it is. Returns 1 when PATH cannot
+    # be stat'd at all.
+    _sl=$(stat -c '%d:%i %u %g %a %F' -- "$1" 2>/dev/null) || return 1
+    case $_sl in
+        *' '*' '*' '*' '*) ;;
+        *) return 1 ;;
+    esac
+    sg_sl_id=${_sl%% *}
+    _sl=${_sl#* }
+    sg_sl_uid=${_sl%% *}
+    _sl=${_sl#* }
+    sg_sl_gid=${_sl%% *}
+    _sl=${_sl#* }
+    sg_sl_mode=${_sl%% *}
+    sg_sl_type=${_sl#* }
+    return 0
+}
+
+spool_fit() {
+    # spool_fit PATH -- 0 when PATH, NOT followed, is a directory owned by
+    # this process (root, on the relink the unit runs). Otherwise 1, with
+    # sg_spool_why set to the journal word for what it is instead:
+    # `symlink`, `not-a-directory`, `owner-not-root` or `unreadable`.
+    #
+    # The gate for every write this file makes into the spool. A spool that
+    # fails it gets nothing written into it and its mode is not touched:
+    # chmod follows a link, so "correcting" a symlinked spool would change
+    # the mode of whatever it points at.
+    sg_spool_why=''
+    if ! spool_lstat "$1"; then
+        sg_spool_why=unreadable
+        return 1
+    fi
+    case $sg_sl_type in
+        directory) ;;
+        'symbolic link') sg_spool_why=symlink; return 1 ;;
+        *) sg_spool_why=not-a-directory; return 1 ;;
+    esac
+    if [ "$sg_sl_uid" != "$(id -u)" ]; then
+        sg_spool_why=owner-not-root
+        return 1
+    fi
+    return 0
+}
+
+in_spool() {
+    # in_spool CMD... -- run CMD in a subshell whose working directory IS the
+    # spool entry spool_fit() just judged, and only if it still is.
+    #
+    # `cd -P` resolves the name once and the working directory then holds
+    # the INODE: renaming the parent's entry afterwards cannot redirect a
+    # write that uses `./name`. The re-check on `.` -- same device and inode
+    # as the lstat, a directory, still ours -- is what closes the gap
+    # between the lstat and the `cd`: an entry swapped for a link in between
+    # is followed by `cd -P` and then fails the inode comparison. Inside a
+    # root-owned 02750 directory nobody but root can create an entry, so a
+    # `./name` there is one only root put there.
+    #
+    # Returns 1 when the pin fails and CMD never ran; otherwise CMD's status.
+    _is_want=$sg_sl_id
+    (
+        cd -P -- "$SG_SPOOL_DIR" 2>/dev/null || exit 1
+        spool_lstat . || exit 1
+        [ "$sg_sl_id" = "$_is_want" ] || exit 1
+        [ "$sg_sl_type" = directory ] || exit 1
+        [ "$sg_sl_uid" = "$(id -u)" ] || exit 1
+        "$@"
+    )
+}
+
+spool_assert_here() {
+    # Inside in_spool: put the group and the mode back and journal each
+    # correction. `sg_sl_*` are the pinned `.`'s, from in_spool().
+    #
+    # Group first, then mode, the order that is right whichever way a
+    # platform treats a setgid directory on a group change. A group that
+    # does not resolve fails the chgrp cleanly under dash and bash alike;
+    # it is journalled and the relink carries on, since an unreadable trail
+    # must not take the relink -- and Layer 2 -- down with it.
+    #
+    # `chmod 2750`, numeric with four digits, is measured on GNU coreutils
+    # to SET the setgid bit on a directory. A three-digit `chmod 750` would
+    # PRESERVE whatever setgid state the directory had, which is the
+    # coreutils rule for directories and the reason this spells the digit.
+    _sa_gid=$sg_sl_gid
+    _sa_mode=$sg_sl_mode
+    chgrp -- "$SG_SPOOL_GROUP" . 2>/dev/null || sg_report audit_dir group-failed
+    chmod 2750 . 2>/dev/null || sg_report audit_dir mode-failed
+    spool_lstat . || return 0
+    # A directory this call created is `created`, not a correction:
+    # everything about it was set just now.
+    [ "${_aad_created:-0}" -eq 1 ] && return 0
+    if [ "$sg_sl_gid" != "$_sa_gid" ]; then
+        sg_report audit_dir group-corrected
+    fi
+    if [ "$sg_sl_mode" != "$_sa_mode" ]; then
+        # Somebody changed it between polls and the tool has just changed it
+        # back. Recorded rather than silent: a monitor that one chmod can
+        # blind, quietly, is not a monitor -- and the record is the only way
+        # anyone learns it was attempted.
+        sg_report audit_dir mode-corrected
+    fi
+    return 0
+}
+
 assert_audit_dir() {
-    # assert_audit_dir AUDIT_FILE -- create the audit directory, or put its
-    # mode back, and say so in the journal if it had to.
+    # assert_audit_dir -- create the audit directory, $SG_SPOOL_DIR, or put
+    # its group and mode back, and say so in the journal if it had to. The
+    # spool itself, not the audit file's dirname: every pinned write below
+    # enters $SG_SPOOL_DIR, and a check made on any other spelling would be
+    # a check on a directory nothing then writes into.
     #
     # This directory is THIS PROJECT'S. Nothing but the root-run reaper and
     # this installer writes it, and it exists at all only because deploy.py
@@ -1033,47 +1150,60 @@ assert_audit_dir() {
     # to it, so reporting is the honest limit there. Here, declining to fix
     # our own directory is not restraint; it is a monitor nobody can read.
     #
-    # 0755, not 0750 (ADR-0012). The invariant ADR-0004 records is that a
-    # MONITORED USER CANNOT WRITE here. Root ownership with no group/other `w`
-    # is what carries that, and 0755 carries it identically -- an append needs
-    # `w`, which 0755 still refuses. Layer 1's escape-hatch records go to
-    # journald for exactly that reason. What 0750 additionally did was hide
-    # the trail from the people who have to read it, including the account
-    # that has to decide --kill.
+    # root:<spool_group> 02750 (ADR-0025). The invariant ADR-0004 records is
+    # that a MONITORED USER CANNOT WRITE here, and root ownership with no
+    # group or other `w` carries it. Who may READ is one group the site
+    # names: the setgid bit makes every file the reaper creates here take
+    # that group, so the reaper never resolves a name on a poll. Everyone
+    # else, including a user whose own process is in a record, reads
+    # nothing. Layer 1's escape-hatch records go to journald because a
+    # monitored account cannot append here.
     #
-    # On a directory carrying an ACL the group bits ARE the mask. 0750 and
-    # 0755 both leave that mask at r-x, so every named grant keeps precisely
-    # the access it already has; what changes is `other`. This never reads or
-    # writes an ACL -- a named grant is someone else's decision, not ours.
-    _aad_dir=$(dirname "$1")
+    # Never through a link. The spool is lstat'd before anything is written,
+    # and a symlink, a non-directory or a spool owned by anyone else is
+    # reported and left exactly as it is: no chmod, no chgrp, no write. The
+    # corrections happen inside in_spool(), on the pinned working directory,
+    # never on the path. A spool ancestor may be writable by a listed
+    # service group (ADR-0025), which is what makes a planted link a case to
+    # design for rather than to assume away.
+    #
+    # On a directory carrying an ACL the group bits ARE the mask. This never
+    # reads or writes an ACL -- a named grant is someone else's decision --
+    # and 02750 leaves the mask at r-x, so a named grant keeps read and loses
+    # nothing it had under the old 0755 but `other`.
+    _aad_dir=$SG_SPOOL_DIR
     case $_aad_dir in
         ''|.|/) return 0 ;;
     esac
-    _aad_before=''
-    [ -d "$_aad_dir" ] && _aad_before=$(stat -c '%u %a' "$_aad_dir" 2>/dev/null)
-    install -d -m 0755 "$_aad_dir" || {
-        sg_report audit_dir create-failed
-        return 1
-    }
-    _aad_after=$(stat -c '%u %a' "$_aad_dir" 2>/dev/null) || _aad_after=''
-    if [ -z "$_aad_before" ]; then
-        sg_report audit_dir created
-    elif [ "$_aad_before" != "$_aad_after" ]; then
-        # Somebody changed it between polls and the tool has just changed it
-        # back. Recorded rather than silent: a monitor that one chmod can
-        # blind, quietly, is not a monitor -- and the record is the only way
-        # anyone learns it was attempted.
-        sg_report audit_dir mode-corrected
+    _aad_created=0
+    if ! spool_lstat "$_aad_dir"; then
+        # Nothing there: lstat sees a dangling link, so this is genuinely
+        # absent. `mkdir`, not `install -d`: GNU install follows a symlinked
+        # leaf and chmods its target, while mkdir fails on any entry that
+        # appeared in the meantime -- and spool_fit() below judges that
+        # entry as what it is. The parents first, separately, because
+        # `mkdir -p -m` applies the mode to the last component only.
+        mkdir -p -- "$(dirname "$_aad_dir")" 2>/dev/null || :
+        if mkdir -m 0700 -- "$_aad_dir" 2>/dev/null; then
+            _aad_created=1
+        elif [ ! -e "$_aad_dir" ] && [ ! -L "$_aad_dir" ]; then
+            sg_report audit_dir create-failed
+            return 1
+        fi
     fi
-    # Ownership is reported, never seized. A directory owned by someone else
-    # can still be replaced by its owner, so this matters -- but chowning it
-    # is the kind of action deploy.py refuses the install over rather than
-    # something an unattended poll should do on its own initiative.
-    case $_aad_after in
-        '0 '*) ;;
-        '') sg_report audit_dir unreadable ;;
-        *)  sg_report audit_dir owner-not-root ;;
-    esac
+    if ! spool_fit "$_aad_dir"; then
+        # Ownership is reported, never seized. A directory owned by someone
+        # else can still be replaced by its owner, so this matters -- but
+        # chowning it is the kind of action deploy.py refuses the install
+        # over rather than something an unattended poll should do on its
+        # own initiative.
+        sg_report audit_dir "$sg_spool_why"
+        return 0
+    fi
+    in_spool spool_assert_here || sg_report audit_dir moved
+    if [ "$_aad_created" -eq 1 ]; then
+        sg_report audit_dir created
+    fi
     return 0
 }
 
@@ -1557,7 +1687,10 @@ sg_default_class() {
 # asserted on every root relink and survives a reboot; the boot line is what
 # makes a reboot report every uncovered mount once more, since a journal on
 # volatile storage has forgotten the earlier line.
-UNCOVERED_STATE=$SG_SPOOL_DIR/uncovered-mounts.state
+# Its NAME, relative, and deliberately not a path: every read and write of
+# it happens in a working directory in_spool() pinned, so no absolute
+# spelling exists for a write to go through.
+UNCOVERED_NAME=uncovered-mounts.state
 
 uncovered_boot_id() {
     # Sets sg_boot to the kernel's boot id, or to empty where it cannot be
@@ -1611,11 +1744,13 @@ report_uncovered_mounts() {
     # produce a false refusal and is never reported: one line per
     # pseudo-filesystem would bury the line this record exists to surface.
     #
-    # The memory is $UNCOVERED_STATE. Where it can be written -- the root
-    # relink, whose spool assert_audit_dir() has just asserted -- the report
-    # is on change. Where it cannot -- the unprivileged debug relink, a spool
-    # not yet created -- every poll reports the whole set, as it did before
-    # the state existed, rather than say nothing. A state written under an
+    # The memory is $UNCOVERED_NAME in the spool. Where it can be written -- a spool
+    # spool_fit() accepts, which for the root relink is the one
+    # assert_audit_dir() has just asserted -- the report is on change, and
+    # the write happens inside in_spool(), never through a link. Where it
+    # cannot -- a spool not yet created, one owned by someone else, a link
+    # -- every poll reports the whole set, as it did before the state
+    # existed, rather than say nothing. A state written under an
     # earlier boot is read as no state: everything current is reported once
     # and nothing is reported as covered or unmounted, since the table has
     # changed for reasons of its own.
@@ -1626,20 +1761,44 @@ report_uncovered_mounts() {
     # would notice.
     [ -r "$SG_MOUNT_TABLE" ] || return 0
     uncovered_boot_id
-    _um_new=''
-    if [ -d "$SG_SPOOL_DIR" ] && : > "$UNCOVERED_STATE.new" 2>/dev/null; then
-        _um_new=$UNCOVERED_STATE.new
-        # World-readable like the spool around it (ADR-0012), whatever the
-        # caller's umask: systemd's default and a root shell's differ, and
-        # the person reading the journal should be able to read what the
-        # relink currently believes without being root.
-        chmod 0644 "$_um_new" 2>/dev/null || :
-        printf 'boot %s\n' "$sg_boot" > "$_um_new"
+    if spool_fit "$SG_SPOOL_DIR" && in_spool uncovered_report "$UNCOVERED_NAME"; then
+        return 0
     fi
-    # Fresh means: report everything current, compare against nothing.
+    # No pinned spool: no memory, and nothing written anywhere.
+    uncovered_report ''
+}
+
+uncovered_report() {
+    # uncovered_report STATE -- the report itself, with STATE the memory's
+    # name in the working directory in_spool() pinned, or empty for none.
+    # Always returns 0 once it runs, so a caller can tell "reported" from
+    # "the pin failed and nothing ran".
+    _um_state=$1
+    _um_new=''
+    if [ -n "$_um_state" ]; then
+        # A NEW inode, created here: `rm -f` removes whatever entry has the
+        # name -- a link included, never its target -- and noclobber makes
+        # the create exclusive, so the redirection cannot follow a link that
+        # appeared in between.
+        rm -f -- "./$_um_state.new" 2>/dev/null || :
+        if ( set -C; : > "./$_um_state.new" ) 2>/dev/null; then
+            _um_new=./$_um_state.new
+            # 0640 like the rest of the spool (ADR-0025), whatever the
+            # caller's umask: systemd's default and a root shell's differ.
+            # Set on the new file, before it is renamed over the old one,
+            # so no chmod is ever aimed at the final name.
+            chmod 0640 "$_um_new" 2>/dev/null || :
+            printf 'boot %s\n' "$sg_boot" > "$_um_new"
+        fi
+    fi
+    # Fresh means: report everything current, compare against nothing. A
+    # memory that is a link is no memory: it was not written by this code.
     _um_fresh=1
-    if [ -n "$_um_new" ] && [ -r "$UNCOVERED_STATE" ]; then
-        read -r _um_word _um_prev_boot _um_rest < "$UNCOVERED_STATE" || _um_word=''
+    _um_prev=''
+    if [ -n "$_um_new" ] && [ ! -L "./$_um_state" ] && [ -f "./$_um_state" ] \
+            && [ -r "./$_um_state" ]; then
+        _um_prev=./$_um_state
+        read -r _um_word _um_prev_boot _um_rest < "$_um_prev" || _um_word=''
         if [ "$_um_word" = boot ] && [ "$_um_prev_boot" = "$sg_boot" ]; then
             _um_fresh=0
         fi
@@ -1670,7 +1829,7 @@ report_uncovered_mounts() {
         [ "$sg_class" = expensive ] || continue
         [ -z "$_um_new" ] || printf '%s %s\n' "$_um_mnt" "$_um_fs" >> "$_um_new"
         if [ "$_um_fresh" -eq 1 ] \
-                || ! uncovered_listed_in "$UNCOVERED_STATE" "$_um_mnt" "$_um_fs"; then
+                || ! uncovered_listed_in "$_um_prev" "$_um_mnt" "$_um_fs"; then
             sg_report uncovered_mount "$_um_mnt" "$_um_fs" expensive
         fi
     done < "$SG_MOUNT_TABLE"
@@ -1688,10 +1847,12 @@ report_uncovered_mounts() {
             else
                 sg_report uncovered_mount "$_um_omnt" "$_um_ofs" unmounted
             fi
-        done < "$UNCOVERED_STATE"
+        done < "$_um_prev"
     fi
     if [ -n "$_um_new" ]; then
-        mv -f "$_um_new" "$UNCOVERED_STATE" 2>/dev/null || rm -f "$_um_new"
+        # `-T`: measured, a plain `mv -f new name` where `name` is a link to
+        # a directory moves `new` INTO that directory. -T replaces the entry.
+        mv -f -T "$_um_new" "./$_um_state" 2>/dev/null || rm -f -- "$_um_new"
     fi
     : "$_um_rest"
     return 0
@@ -1728,12 +1889,12 @@ case $MODE in
         fi
         # On every poll, not just at install. The hooks below are REPORTED
         # and never repaired because their files are the distribution's; the
-        # audit directory is ours, so a chmod that blocks the tool from its
-        # own records is corrected here and recorded in the same journal
-        # (ADR-0012). Non-fatal by construction: a failure to fix it must not
+        # audit directory is ours, so a chmod or chgrp that blinds its reader
+        # group is corrected here and recorded in the same journal
+        # (ADR-0025). Non-fatal by construction: a failure to fix it must not
         # take the relink -- or, through ExecStartPre, Layer 2 -- down with it.
         if is_root; then
-            assert_audit_dir "$AUDIT" || :
+            assert_audit_dir || :
         fi
         link_farm "$BIN"
         # The symlink farm is half of Layer 1; the hook blocks that put those
@@ -1785,13 +1946,17 @@ case $MODE in
             require_deployed_copy "--system"
         fi
         if [ "$WILL_WRITE" -eq 1 ] && is_root; then
-            # Root-owned and not user-writable, which is the invariant --
-            # NOT a particular mode. See assert_audit_dir().
-            assert_audit_dir "$AUDIT"
+            # Root-owned and not user-writable, which is the invariant, and
+            # readable by the site's one reader group. See
+            # assert_audit_dir().
+            assert_audit_dir
             # A fresh install forgets which mounts an earlier one reported,
             # so the first poll after it names every mount on its default
-            # once (ADR-0019). The audit trail beside it is left alone.
-            rm -f "$UNCOVERED_STATE"
+            # once (ADR-0019). The audit trail beside it is left alone. In
+            # the pinned spool, like every other write into it.
+            if spool_fit "$SG_SPOOL_DIR"; then
+                in_spool rm -f -- "./$UNCOVERED_NAME" || :
+            fi
             link_farm "$BIN"
             for _wh in $SG_HOOKS_REQUIRED; do
                 write_hook "$_wh"
@@ -1908,8 +2073,11 @@ SYS
         sweep_unclaimed "$BIN" ""
         rmdir "$BIN" 2>/dev/null || true
         # The report-on-change memory is upkeep state, not a record; the
-        # spool stays for the audit trail it holds.
-        rm -f "$UNCOVERED_STATE"
+        # spool stays for the audit trail it holds. Removed from the pinned
+        # spool, never through a link at its name.
+        if spool_fit "$SG_SPOOL_DIR"; then
+            in_spool rm -f -- "./$UNCOVERED_NAME" || :
+        fi
         echo "walk-blocker: removed from$_removed and $BIN"
         echo "walk-blocker: $SG_SPOOL_DIR left in place; it holds the audit trail"
         ;;

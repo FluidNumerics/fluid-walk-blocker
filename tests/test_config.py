@@ -174,6 +174,9 @@ def test_defaults_fill_a_minimal_site():
     site = config.from_dict({
         "schema_version": 1,
         "site": {"display_name": "Minimal"},
+        # The two keys with no default (ADR-0025): who reads the trail, and
+        # which service groups may hold a spool ancestor, are not guesses.
+        "install": {"spool_group": "wbaudit", "trusted_groups": []},
         "slurm": {"partition": "p"},
         "timer": {"on_calendar": "*:00:30"},
     })
@@ -272,6 +275,21 @@ BAD_SITES = [
     ("site.display_name", "Example 100% HPC", "pattern"),
     ("site.docs_url", "https://docs.example.org/hpc walk-blocker", "pattern"),
     ("schema_version", 2, "1"),
+    # ADR-0025: two keys with no default, both group NAMES.
+    ("install.spool_group", REMOVE, "required property"),
+    ("install.trusted_groups", REMOVE, "required property"),
+    ("install.spool_group", "", "pattern"),
+    ("install.spool_group", "123", "pattern"),
+    ("install.spool_group", "-g", "pattern"),
+    ("install.spool_group", "a b", "pattern"),
+    ("install.spool_group", "g" * 33, "pattern"),
+    ("install.spool_group", "root", "ADR-0012"),
+    ("install.trusted_groups", [""], "pattern"),
+    ("install.trusted_groups", ["123"], "pattern"),
+    ("install.trusted_groups", ["-g"], "pattern"),
+    ("install.trusted_groups", ["a b"], "pattern"),
+    ("install.trusted_groups", ["svc-log", "svc-log"], "unique"),
+    ("install.trusted_groups", "svc-log", "array"),
 ]
 
 
@@ -299,6 +317,28 @@ def test_bad_site_is_refused(tmp_path, capsys, dotted, value, fragment):
     # pointer for a shape fault.
     head = dotted.split(".")[0].split("[")[0]
     assert head in captured.err or dotted == "bogus", captured.err
+
+
+def test_an_empty_trusted_groups_list_is_allowed_and_names_are_kept():
+    data = load_example_dict()
+    assert data["install"]["trusted_groups"] == []
+    assert config.from_dict(data).lookup("install.trusted_groups") == []
+    data["install"]["trusted_groups"] = ["svc-log", "_svc.2"]
+    data["install"]["spool_group"] = "wb_read-1"
+    site = config.from_dict(data)
+    assert site.lookup("install.trusted_groups") == ["svc-log", "_svc.2"]
+    assert site.lookup("install.spool_group") == "wb_read-1"
+
+
+def test_neither_group_key_has_a_default():
+    """A default reader group would be a guess about who reads the trail,
+    and a default trusted list would be a guess about which ancestor is
+    safe; both are the site's to state (ADR-0025)."""
+    props = config.load_schema()["properties"]["install"]["properties"]
+    assert "default" not in props["spool_group"]
+    assert "default" not in props["trusted_groups"]
+    assert set(config.load_schema()["properties"]["install"]["required"]) == {
+        "spool_group", "trusted_groups"}
 
 
 def test_empty_remote_fstypes_is_allowed():

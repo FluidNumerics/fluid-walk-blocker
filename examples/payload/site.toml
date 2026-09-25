@@ -54,6 +54,17 @@ class = "cheap"
 prefix = "/usr/local/lib/walk-blocker"
 spool_dir = "/var/log/walk-blocker"
 audit_filename = "searchguard-audit.jsonl"
+# The one group that may read the trail: root:<spool_group> 02750, files
+# 0640 (ADR-0025). Name the group of the people who decide --kill; the
+# deployer refuses a name that does not resolve on the node.
+spool_group = "wbaudit"
+# Service groups whose WRITE bit is accepted on a strict ancestor of
+# spool_dir -- never on the spool, never other-write. A log daemon's package
+# upgrade can reset /var/log to root:syslog 0775, and a node that
+# installed cleanly then refuses to reinstall. List such a group only after
+# `getent group <group>` shows no human member; the deployer checks again,
+# against /etc/login.defs, and refuses one that has any.
+trusted_groups = []
 unit_dir = "/etc/systemd/system"
 staging_parent = "/run"
 tool_search_path = [

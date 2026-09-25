@@ -35,6 +35,8 @@ REQUIRED_SOURCES = (
     "site.toml:install.unit_dir",
     "site.toml:install.spool_dir",
     "site.toml:install.audit_filename",
+    "site.toml:install.spool_group",
+    "site.toml:install.trusted_groups",
     "site.toml:install.staging_parent",
     "site.toml:hooks.bash.file",
     "site.toml:hooks.bash.enabled",

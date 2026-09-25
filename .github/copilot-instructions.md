@@ -83,7 +83,8 @@ a round and gets the same answer. ADRs live under `docs/adr/`.
 | Let `opaque_traversal` fire on a single D observation, make the streak length a site key, or exclude interpreters by name | It needs D at two consecutive polls; one observation is a snapshot, and a name list hides a real `os.walk` | ADR-0020 |
 | Treat `fd --exec=CMD` or `-xCMD` as consuming the rest of argv | Only the **separate** `-x CMD` form does; measured with a positive control | matrix rows in `tests/argv_cases.py` |
 | Fold a best-effort hook into the hard gate, or soften a required one | The class is the site's call from a census, per shell, in `[hooks.<shell>].gate` | ADR-0008 |
-| Make the audit directory `0750` | Root-writable-only and world-readable is the decision | ADR-0012 |
+| Make the spool world-readable again, or drop the reader group | Root-writable-only, readable by one site-named group, is the decision | ADR-0025 |
+| Accept a group-writable ancestor on the prefix, staging, unit or hook chain, or a listed group with a human member | Only the spool's strict ancestors, only a listed group proven to hold no person, never other-write | ADR-0025 |
 
 ## Repository rules
 

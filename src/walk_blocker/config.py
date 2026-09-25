@@ -238,6 +238,17 @@ def check_semantics(schema, data):
                               "required (even when enabled = false, so uninstall "
                               "can remove a previously written hook)")
 
+    # The pattern admits `root`, and `root` is the reader set ADR-0012's
+    # incident was: a trail nobody but root could read, so the account that
+    # has to decide `--kill` could not. A reader group of root is that state
+    # spelled as configuration.
+    if data["install"]["spool_group"] == "root":
+        raise ConfigError("install.spool_group",
+                          "'root' is the reader set ADR-0012 recorded as the "
+                          "incident: a trail only root can read hides it from "
+                          "the account that has to decide --kill. Name the "
+                          "group of the people who read the trail (ADR-0025)")
+
     timer = data["timer"]
     floor = timer_floor(data)
     if timer["timeout_start_sec"] < floor:

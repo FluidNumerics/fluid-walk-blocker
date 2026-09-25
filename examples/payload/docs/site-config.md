@@ -220,6 +220,41 @@ it. The slot in the example is fictional; copying it is the failure mode.
 
 Re-survey the schedule when a timer or cron entry is added to the node.
 
+## Name the trail's readers and the spool's ancestors
+
+Keys: `[install].spool_group`, `[install].trusted_groups`. Decision record:
+ADR-0025. Neither has a default: both are facts about this node's groups.
+
+**`spool_group`** is the one group that may read the audit trail. The
+spool is `root:<spool_group> 02750` and its files `0640`; nobody outside the
+group reads them, including a user whose own process is in a record.
+
+1. Decide who has to read the trail to make the `--kill` decision. That is
+   the group's membership; `deploy.py` does not audit it, and `validate`
+   refuses `root`.
+2. `getent group <group>` on the node. It must resolve there, not only on
+   the workstation that builds the payload; the deployer refuses a name
+   that does not.
+
+**`trusted_groups`** is empty unless a spool ancestor is group-writable,
+and it is a list of service groups, never of people.
+
+1. On each ancestor of `[install].spool_dir`, `stat -c '%U:%G %a'`. Every
+   one must be root-owned. One that is group-writable by a service group —
+   a log daemon's package upgrade can leave `/var/log` so — is a candidate;
+   one that is other-writable is not, and no entry here makes it one.
+2. For each candidate group, `getent group <group>` for its supplementary
+   members, and `getent passwd` for accounts whose primary gid it is. Read
+   `UID_MIN`, `UID_MAX` and `GID_MIN` from `/etc/login.defs`. List the group
+   only if its gid is below `GID_MIN` and no member of either kind has a uid
+   in `[UID_MIN, UID_MAX]`.
+3. `python3 deploy.py --system --dry-run` as an ordinary user makes the same
+   check and names any refusal. It sees what NSS enumerates and no more: a
+   directory-service account that is not enumerable is not seen.
+
+Re-measure when a package upgrade touches a spool ancestor, or a listed
+group's membership changes.
+
 ## Measure the shim budgets from local disk
 
 Decision record: ADR-0015. No `site.toml` key: the budgets are arguments to

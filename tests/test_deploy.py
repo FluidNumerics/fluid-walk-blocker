@@ -17,6 +17,8 @@ read is the example site's (ADR-0014).
 
 import argparse
 import contextlib
+import functools
+import grp
 import io
 import json
 import os
@@ -39,6 +41,9 @@ from walk_blocker import build, stamp
 
 VALUES = site_values()
 deploy = load_stamped_deploy(VALUES)
+
+# The test user's primary group: what the suite's spools are chgrp'd to.
+SPOOL_GROUP = grp.getgrgid(os.getgid()).gr_name
 
 # The interpreter the node actually has (ADR-0015), where this machine has
 # one; the test interpreter otherwise, so the check still runs.
@@ -84,7 +89,7 @@ def pass_uninstall_checks(monkeypatch, prefix):
     that check is about what is on disk.
     """
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     os.makedirs(prefix, exist_ok=True)
     open(os.path.join(prefix, deploy.PAYLOAD_MARKER), "w").close()
@@ -110,7 +115,7 @@ def pass_prefix_checks(monkeypatch):
     """
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     # pytest's tmp_path parent is 0700, so it is genuinely not traversable
     # by other users -- the check is right and the fixture is not the shape
     # it judges.
@@ -127,7 +132,7 @@ def pass_ownership_checks(monkeypatch):
     traversable (`traversable_root`), and leaving it real is the point."""
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
 
 
 def unowned_by_here(tree):
@@ -160,6 +165,19 @@ def _test_paths(tmp_path, monkeypatch):
     staging_parent = tmp_path / "run"
     staging_parent.mkdir(exist_ok=True)
     monkeypatch.setattr(deploy, "STAGING_PARENT", str(staging_parent))
+    # The reader group (ADR-0025) must resolve on the machine running the
+    # suite, so it is the test user's own primary group -- the one a non-root
+    # `fchown` may always name -- and the listed service groups are none.
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_GROUP", SPOOL_GROUP)
+    monkeypatch.setattr(deploy, "TRUSTED_GROUPS", ())
+    # The spool's owner is root in production and a function argument
+    # everywhere, like `unowned_by`'s `uid=`: a test cannot create a
+    # root-owned directory, so the spool writers are driven against the
+    # test user's own uid. The logic under test -- no-follow opens, the
+    # fstat, the group and mode -- is the same.
+    for name in ("create_spool", "repair_spool", "spool_mode_repairs"):
+        monkeypatch.setattr(deploy, name,
+                            functools.partial(getattr(deploy, name), uid=os.getuid()))
 
 
 @pytest.fixture
@@ -486,6 +504,7 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
     values = site_values(**{
         "install.prefix": str(layout.prefix),
         "install.spool_dir": str(layout.spool),
+        "install.spool_group": SPOOL_GROUP,
         "install.unit_dir": os.path.join(traversable_root, "unit-dir"),
         "install.staging_parent": os.path.join(traversable_root, "run"),
         "hooks.bash.file": str(layout.bashrc),
@@ -853,7 +872,7 @@ def test_a_symlinked_installed_entry_is_rejected_before_any_chmod(
 def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     monkeypatch.setattr(
         deploy, "unowned_by",
@@ -881,7 +900,7 @@ def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     monkeypatch.setattr(
         deploy, "unowned_by",
@@ -937,7 +956,7 @@ def test_the_ownership_check_covers_the_prefix_directory_itself(tmp_path,
     does not."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     checked = []
     monkeypatch.setattr(
@@ -956,7 +975,7 @@ def test_the_ownership_check_runs_again_after_the_installer(tmp_path,
     -- after the first assertion."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     checked = []
     calls = []
@@ -1087,7 +1106,7 @@ def test_untraversable_check_covers_the_prefix_and_the_spool(
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     checked = []
     monkeypatch.setattr(
         deploy, "untraversable_for_users",
@@ -1244,7 +1263,7 @@ def test_deploy_refuses_an_untrusted_path_before_touching_anything(
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(
         deploy, "untrusted_prefix_chain",
-        lambda prefix, trusted_uids=(0,): [("/tmp", "mode 0777 is writable by group or "
+        lambda prefix, trusted_uids=(0,), trusted_gids=(): [("/tmp", "mode 0777 is writable by group or "
                                         "other without the sticky bit")])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
@@ -1272,8 +1291,8 @@ def test_the_spool_and_unit_dir_get_the_prefix_treatment(tmp_path, monkeypatch):
         real = deploy.untrusted_prefix_chain
         monkeypatch.setattr(
             deploy, "untrusted_prefix_chain",
-            lambda path, trusted_uids=(0,): real(
-                path, trusted_uids=(0, os.getuid())))
+            lambda path, trusted_uids=(0,), trusted_gids=(): real(
+                path, trusted_uids=(0, os.getuid()), trusted_gids=trusted_gids))
 
         monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(loose / "spool"))
         assert deploy.system_execute(_args(tmp_path)) == 6
@@ -1293,7 +1312,7 @@ def test_deploy_refuses_a_populated_directory_that_is_not_its_own(
         tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     calls = []
@@ -1581,7 +1600,7 @@ def test_an_untrusted_snapshot_parent_is_refused_not_worked_around(
         tmp_path, monkeypatch):
     monkeypatch.setattr(
         deploy, "untrusted_prefix_chain",
-        lambda p, trusted_uids=(0,): [(p, "owned by uid 1000")])
+        lambda p, trusted_uids=(0,), trusted_gids=(): [(p, "owned by uid 1000")])
     monkeypatch.setattr(deploy, "run", recording_run([]))
     try:
         deploy.stage_payload()
@@ -1813,7 +1832,7 @@ def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
     """Both files, because install.sh SOURCES wrapped_names.sh into its own
     shell -- so a swap of either is root execution."""
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     staged = tmp_path / "prefix" / "shim"
     staged.mkdir(parents=True)
     for name in ("install.sh", "wrapped_names.sh"):
@@ -1862,8 +1881,8 @@ def _uninstall_with_a_planted_link(tmp_path, monkeypatch, attr):
     real = deploy.untrusted_prefix_chain
     monkeypatch.setattr(
         deploy, "untrusted_prefix_chain",
-        lambda path, trusted_uids=(0,): real(path,
-                                             trusted_uids=(0, os.getuid())))
+        lambda path, trusted_uids=(0,), trusted_gids=(): real(
+            path, trusted_uids=(0, os.getuid()), trusted_gids=trusted_gids))
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
@@ -1905,7 +1924,7 @@ def test_a_disabled_hooks_file_is_still_validated_as_a_path(tmp_path, monkeypatc
     assert os.path.islink(str(link))
 
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     fifo = tmp_path / "fifo"
     os.mkfifo(str(fifo))
     assert deploy.validate_root_write_paths(
@@ -1958,7 +1977,7 @@ def test_uninstall_reports_a_teardown_it_did_not_achieve(tmp_path,
 def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
@@ -2253,7 +2272,7 @@ def test_the_preview_prints_the_rendered_units_the_install_writes(
 def test_a_symlinked_bashrc_file_is_refused_before_it_is_read(tmp_path,
                                                               monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     secret = tmp_path / "secret"
     secret.write_text("PRIVATE\n")
     secret.chmod(0o600)
@@ -2269,7 +2288,7 @@ def test_a_symlinked_bashrc_file_is_refused_before_it_is_read(tmp_path,
 
 def test_a_dangling_bashrc_symlink_is_refused_too(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     link = tmp_path / "dangling"
     os.symlink(str(tmp_path / "nope"), str(link))
     args = _args(tmp_path, bashrc_file=str(link))
@@ -2278,7 +2297,7 @@ def test_a_dangling_bashrc_symlink_is_refused_too(tmp_path, monkeypatch):
 
 def test_a_bashrc_that_is_not_a_regular_file_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     fifo = tmp_path / "fifo"
     os.mkfifo(str(fifo))
     args = _args(tmp_path, bashrc_file=str(fifo))
@@ -2287,7 +2306,7 @@ def test_a_bashrc_that_is_not_a_regular_file_is_refused(tmp_path, monkeypatch):
 
 def test_a_regular_or_absent_bashrc_file_is_accepted(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     plain = tmp_path / "bashrc"
     plain.write_text("# existing\n")
@@ -2304,7 +2323,7 @@ def test_a_bashrc_file_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
     user-owned or group-writable hook file lets its owner choose what runs
     during the deploy."""
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     bashrc = tmp_path / "bashrc"
     bashrc.write_text("# somebody else's\n")
 
@@ -2320,7 +2339,7 @@ def test_a_bashrc_file_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
 
 def test_an_absent_bashrc_file_needs_no_owner(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     calls = []
     monkeypatch.setattr(deploy, "unowned_by",
                         lambda root, uid=0: calls.append(root) or [])
@@ -2331,7 +2350,7 @@ def test_an_absent_bashrc_file_needs_no_owner(tmp_path, monkeypatch):
 
 def test_irregular_target_ignores_a_directory_kind(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda p, trusted_uids=(0,): [])
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
     unit_dir = tmp_path / "units"
     unit_dir.mkdir()
     assert deploy.validate_root_write_paths(
@@ -2539,40 +2558,64 @@ def test_a_refusing_child_preview_is_relayed_not_swallowed(tmp_path, capsys,
 # the audit directory: one direction of refusal (ADR-0012)
 # --------------------------------------------------------------------------
 
-def test_the_audit_directory_is_created_at_0755_before_the_installer_runs(
+def _record_spool_creation(monkeypatch, calls):
+    """Log `create_spool()` into the same list `recording_run` fills, so a
+    test can see where in the command sequence the spool is made. It is not
+    a command -- it is fds -- which is why it needs its own marker."""
+    real = deploy.create_spool
+
+    def create(spool, gid, **kw):
+        calls.append(["<create_spool>", spool, str(gid)])
+        return real(spool, gid, **kw)
+    monkeypatch.setattr(deploy, "create_spool", create)
+
+
+def test_the_audit_directory_is_created_02750_with_its_group_before_the_installer_runs(
         tmp_path, monkeypatch):
+    """ADR-0025: root:<spool_group> 02750, made before install.sh runs, and
+    through `create_spool()` -- never `install -d`, which follows a symlinked
+    leaf. Mutation: drop the fchmod, or go back to `install -d -m 0755`, and
+    the mode or the call list says so."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _record_spool_creation(monkeypatch, calls)
     pass_prefix_checks(monkeypatch)
 
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 0
 
     created = [i for i, c in enumerate(calls)
-               if c[:4] == ["install", "-d", "-m", "0755"] and c[-1] == args.spool_dir]
+               if c[0] == "<create_spool>" and c[1] == args.spool_dir]
     assert len(created) == 1, calls
-
+    assert not [c for c in calls if c[:2] == ["install", "-d"]
+                and c[-1] == args.spool_dir], calls
     installer = next(i for i, c in enumerate(calls)
                      if any("install.sh" in a for a in c))
     assert created[0] < installer, calls
 
+    info = os.lstat(args.spool_dir)
+    assert stat.S_IMODE(info.st_mode) == 0o2750, oct(info.st_mode)
+    assert info.st_gid == os.getgid()
 
-def test_0755_still_refuses_the_write_adr_0004_forbids(tmp_path, monkeypatch):
-    """The mode changed; the invariant did not. An append needs `w`."""
+
+def test_the_spool_mode_still_refuses_the_write_adr_0004_forbids(
+        tmp_path, monkeypatch):
+    """The mode changed; the invariant did not. An append needs `w`, and
+    neither group nor other has it. What changed is who READS: the group
+    has r-x, other has nothing (ADR-0025)."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
-    calls = []
-    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
     pass_prefix_checks(monkeypatch)
 
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 0
 
-    mode = next(c[3] for c in calls
-                if c[:2] == ["install", "-d"] and c[-1] == args.spool_dir)
-    bits = int(mode, 8)
-    assert not bits & 0o022, "group/other must never gain w: %s" % mode
-    assert bits & 0o005 == 0o005, "other must keep r-x to read the trail: %s" % mode
+    bits = stat.S_IMODE(os.lstat(args.spool_dir).st_mode)
+    assert not bits & 0o022, "group/other must never gain w: %04o" % bits
+    assert bits & 0o050 == 0o050, "the reader group keeps r-x: %04o" % bits
+    assert not bits & 0o007, "other reads nothing: %04o" % bits
+    assert bits & stat.S_ISGID, "files take the group from setgid: %04o" % bits
 
 
 def test_an_audit_directory_owned_by_someone_else_refuses_before_any_command(
@@ -2580,7 +2623,7 @@ def test_an_audit_directory_owned_by_someone_else_refuses_before_any_command(
     """The mode is ours to assert; the OWNER is not ours to take."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
@@ -2602,7 +2645,7 @@ def test_an_untraversable_audit_ancestor_refuses_before_any_command(
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
@@ -2624,8 +2667,11 @@ def test_the_preview_names_the_audit_directory_it_will_create(
     args = _args(tmp_path)
     deploy.system_preview(args)
     out = capsys.readouterr().out
-    assert "install -d -m 0755 %s" % args.spool_dir in out, out
-    assert "0755, not 0750" in out, out
+    assert "mkdir %s" % args.spool_dir in out, out
+    assert "fchmod 02750" in out, out
+    assert "fchown 0:%d" % os.getgid() in out, out
+    assert "Not `install -d`" in out, out
+    assert "install -d -m 0755 %s" % args.spool_dir not in out, out
 
 
 def _spool_with(tmp_path, monkeypatch, name, mode):
@@ -2653,7 +2699,8 @@ def test_a_group_writable_state_file_is_repaired_not_refused(
     would stop over a mode it is about to assert."""
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
 
-    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    assert [r[0] for r in deploy.spool_mode_repairs(args.spool_dir)
+            if r[0] != args.spool_dir] == [victim]
     permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
                   if b[0] == "permissive"]
     assert permissive == [], permissive
@@ -2664,7 +2711,8 @@ def test_the_exemption_does_not_cover_a_file_this_install_never_wrote(
     """The narrowness IS the property."""
     args, victim = _spool_with(tmp_path, monkeypatch, "someone-elses.json", 0o664)
 
-    assert deploy.spool_mode_repairs(args.spool_dir) == []
+    assert [r for r in deploy.spool_mode_repairs(args.spool_dir)
+            if r[0] != args.spool_dir] == []
     permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
                   if b[0] == "permissive"]
     assert [b[1] for b in permissive] == [victim]
@@ -2675,13 +2723,18 @@ def test_the_install_actually_tightens_what_it_declined_to_refuse(
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
     assert deploy.system_execute(args) == 0
-    assert ["chmod", "go-w", victim] in calls
+    # Through an fd, so there is no command to find in `calls`: the proof
+    # is the file itself.
+    info = os.lstat(victim)
+    assert stat.S_IMODE(info.st_mode) == 0o640, oct(info.st_mode)
+    assert info.st_gid == os.getgid()
+    assert not [c for c in calls if c[:1] == ["chmod"] and victim in c], calls
 
 
 def test_the_preview_advertises_the_chmod_the_install_will_run(
@@ -2692,7 +2745,7 @@ def test_the_preview_advertises_the_chmod_the_install_will_run(
     # does, and a tmp tree's ancestors are this user's -- the same stub the
     # install-side sibling of this test has carried all along.
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "run", recording_run([]))
 
     out = io.StringIO()
@@ -2700,7 +2753,8 @@ def test_the_preview_advertises_the_chmod_the_install_will_run(
     rc = deploy.system_preview(args)
     monkeypatch.undo()
     assert rc == 0, out.getvalue()
-    assert "chmod go-w %s" % victim in out.getvalue(), out.getvalue()
+    assert "%s: gid %d mode 0664 -> gid %d mode 0640" % (
+        victim, os.getgid(), os.getgid()) in out.getvalue(), out.getvalue()
 
 
 def test_an_orphaned_state_temp_file_is_repaired_not_refused(
@@ -2708,7 +2762,8 @@ def test_an_orphaned_state_temp_file_is_repaired_not_refused(
     args, victim = _spool_with(
         tmp_path, monkeypatch, "reaper-state.json.tmp", 0o664)
 
-    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    assert [r[0] for r in deploy.spool_mode_repairs(args.spool_dir)
+            if r[0] != args.spool_dir] == [victim]
     permissive = [b for b in deploy.audit_dir_blockers(args.spool_dir)
                   if b[0] == "permissive"]
     assert permissive == [], permissive
@@ -2721,7 +2776,8 @@ def test_layer_1s_trail_is_installer_owned_under_its_compiled_name(
     its own -- so a site that renames the trail still gets it tightened."""
     args, victim = _spool_with(
         tmp_path, monkeypatch, deploy.DEFAULT_AUDIT_FILENAME, 0o664)
-    assert [p for p, _m in deploy.spool_mode_repairs(args.spool_dir)] == [victim]
+    assert [r[0] for r in deploy.spool_mode_repairs(args.spool_dir)
+            if r[0] != args.spool_dir] == [victim]
     assert deploy.audit_path(args.spool_dir) == victim
 
 
@@ -2729,7 +2785,7 @@ def test_the_preview_refuses_where_the_install_would(tmp_path, monkeypatch):
     """Both callers go through `audit_dir_blockers()`, so the preview
     refuses on exactly the condition the install refuses on."""
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users",
                         lambda prefix: [])
     args = _args(tmp_path)
@@ -2893,7 +2949,7 @@ def test_both_callers_refuse_on_every_ownership_reason(
     """The class x caller matrix: every class against both callers."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
@@ -2917,7 +2973,7 @@ def test_the_traversal_class_refuses_in_the_preview_too(
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
-                        lambda prefix, trusted_uids=(0,): [])
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
 
@@ -2953,8 +3009,8 @@ def test_the_refusal_head_says_which_problem_it_is(tmp_path):
 
 def test_a_0750_spool_is_not_a_blocker_because_it_is_what_gets_fixed(tmp_path):
     """The REAL `untraversable_for_users`: the spool's own mode is what
-    `install -d -m 0755` asserts, so refusing on it is refusing to run the
-    fix (ADR-0012)."""
+    `create_spool()` asserts (02750, ADR-0025), so refusing on it is refusing
+    to run the fix."""
     spool = tmp_path / "var-log"
     spool.mkdir()
     spool.chmod(0o750)
@@ -3275,7 +3331,7 @@ def _only_the_staging_parent_is_untrusted(monkeypatch):
     the staging parent alone and clean for every other path -- the shape the
     prefix-traversal parity case already uses.
     """
-    def by_subject(prefix, trusted_uids=(0,)):
+    def by_subject(prefix, trusted_uids=(0,), trusted_gids=()):
         if deploy.canonical_prefix(prefix) == deploy.canonical_prefix(
                 deploy.STAGING_PARENT):
             return [(deploy.STAGING_PARENT,
@@ -3751,3 +3807,512 @@ def test_a_record_whose_keys_are_not_strings_is_refused(installed):
     # actually receive. This pins that the refusal does not overreach.
     code, _out = _verify(installed)
     assert code in (deploy.VERIFY_DRIFT, deploy.VERIFY_UNKNOWN)
+
+
+# --------------------------------------------------------------------------
+# ADR-0025: the spool chain's one loosening, and the groups it rests on
+# --------------------------------------------------------------------------
+#
+# The chain tests drive the REAL `untrusted_prefix_chain()` with the test
+# user trusted as an owner (`trusted_uids=(0, me)`), because every ancestor
+# of a tmp tree is the test user's. What is under test is the GROUP rule, and
+# every one of these has a case the seam must reject: a test that passed only
+# because the CI user owns everything would pass with the rule deleted.
+
+ME = (0, os.getuid())
+
+
+def _group_writable(path, mode=0o775):
+    os.makedirs(path, exist_ok=True)
+    os.chmod(path, mode)
+    assert os.lstat(path).st_gid == os.getgid()
+    return path
+
+
+def test_a_group_writable_spool_ancestor_with_a_trusted_gid_passes(tmp_path):
+    """The loosening, and its converse in the same test: the identical
+    directory refuses the moment its gid is not trusted."""
+    ancestor = _group_writable(str(tmp_path / "log"))
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    assert deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),)) == []
+    refused = deploy.untrusted_prefix_chain(spool, trusted_uids=ME)
+    assert [p for p, _why in refused] == [ancestor], refused
+
+
+def test_a_group_writable_ancestor_with_an_untrusted_gid_refuses_with_todays_message(
+        tmp_path):
+    ancestor = _group_writable(str(tmp_path / "log"))
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid() + 1,))
+    assert refused == [(ancestor, "mode 0775 is writable by group or other, "
+                                  "so its entries can be replaced")], refused
+
+
+def test_an_other_writable_ancestor_refuses_whatever_gid_is_trusted(tmp_path):
+    """Other-write is never accepted on a group's strength. Mutation: test
+    `st_mode & 0o020` instead of `== 0o020` and this passes the 0777."""
+    ancestor = _group_writable(str(tmp_path / "log"), mode=0o777)
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
+    assert [p for p, _why in refused] == [ancestor], refused
+
+
+def test_the_spool_itself_is_never_loosened_only_its_strict_ancestors(tmp_path):
+    """A group-writable SPOOL refuses even with its gid trusted: the listed
+    group may hold an ancestor, never the directory the trail is in."""
+    spool = _group_writable(str(tmp_path / "walk-blocker"))
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
+    assert [p for p, _why in refused] == [spool], refused
+
+
+def _trusting_me(monkeypatch):
+    real = deploy.untrusted_prefix_chain
+    monkeypatch.setattr(
+        deploy, "untrusted_prefix_chain",
+        lambda path, trusted_uids=(0,), trusted_gids=(): real(
+            path, trusted_uids=ME, trusted_gids=trusted_gids))
+
+
+@pytest.mark.parametrize("attr", ["prefix", "unit_dir", "bashrc_file"])
+def test_the_same_directory_refuses_on_every_chain_but_the_spools(
+        tmp_path, monkeypatch, attr):
+    """One group-writable directory, trusted gid and all: under the spool it
+    passes, under the prefix, the unit directory or a hook file it refuses.
+    Mutation: pass `spool_trusted_gids` from every PATH_KINDS entry in
+    validate_root_write_paths() and the non-spool cases pass."""
+    _trusting_me(monkeypatch)
+    shared = _group_writable(str(tmp_path / "shared"))
+    spool_args = _args(tmp_path, spool_dir=os.path.join(shared, "spool"))
+    assert deploy.validate_root_write_paths(
+        spool_args, attrs=("spool_dir",),
+        spool_trusted_gids=(os.getgid(),)) == 0
+    # One level down, so `shared` is a STRICT ancestor on every chain -- a
+    # hook file directly in it would make `shared` the judged leaf, which is
+    # refused for the leaf rule's reason rather than this test's.
+    sub = os.path.join(shared, "sub")
+    os.mkdir(sub, 0o755)
+    below = os.path.join(sub, "file" if attr.endswith("_file") else "dir")
+    other_args = _args(tmp_path, **{attr: below})
+    err = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", err)
+    rc = deploy.validate_root_write_paths(
+        other_args, attrs=(attr,), spool_trusted_gids=(os.getgid(),))
+    monkeypatch.undo()
+    assert rc == 6, err.getvalue()
+    assert shared in err.getvalue(), err.getvalue()
+
+
+def test_the_staging_chain_is_not_loosened_either(tmp_path, monkeypatch):
+    """The staging parent is judged in preflight() and again where the
+    snapshot is made, both with root alone, whatever the site lists."""
+    _trusting_me(monkeypatch)
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    shared = _group_writable(str(tmp_path / "shared"))
+    staging = os.path.join(shared, "run")
+    os.makedirs(staging)
+    monkeypatch.setattr(deploy, "STAGING_PARENT", staging)
+    _stub_groups(monkeypatch, tmp_path, {"svc-log": _Group(os.getgid(), [])},
+                 trusted=("svc-log",))
+    err = io.StringIO()
+    rc, checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
+    assert rc == 6, err.getvalue()
+    assert "refusing to stage the payload" in err.getvalue(), err.getvalue()
+
+
+# --- the human-member check ------------------------------------------------
+
+class _Group(object):
+    def __init__(self, gid, members, name=None):
+        self.gr_gid = gid
+        self.gr_mem = list(members)
+        self.gr_name = name
+
+
+class _Account(object):
+    def __init__(self, name, uid, gid):
+        self.pw_name = name
+        self.pw_uid = uid
+        self.pw_gid = gid
+
+
+LOGIN_DEFS_TEXT = "# fictional\nUID_MIN 1000\nUID_MAX 60000\nGID_MIN 1000\n"
+
+# Fictional accounts. `nobody` is the one real-shaped name, above UID_MAX as
+# it is on the distributions this runs on.
+ACCOUNTS = {
+    "svc-d": _Account("svc-d", 105, 110),
+    "nobody": _Account("nobody", 65534, 65534),
+    "user-a": _Account("user-a", 1500, 1500),
+    "user-b": _Account("user-b", 1501, 110),
+}
+
+
+def _login_defs(tmp_path, text=LOGIN_DEFS_TEXT):
+    path = tmp_path / "login.defs"
+    path.write_text(text)
+    return str(path)
+
+
+def _resolve(tmp_path, groups, names, accounts=None, text=LOGIN_DEFS_TEXT):
+    accounts = ACCOUNTS if accounts is None else accounts
+
+    def getgrnam(name):
+        return groups[name]
+
+    def getpwnam(name):
+        return accounts[name]
+
+    return deploy.resolve_trusted_groups(
+        names, login_defs=_login_defs(tmp_path, text), getgrnam=getgrnam,
+        getpwnam=getpwnam, getpwall=lambda: list(accounts.values()))
+
+
+def test_a_service_group_with_no_person_is_accepted(tmp_path):
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, ["svc-d"])},
+                              ["svc-log"],
+                              accounts={"svc-d": ACCOUNTS["svc-d"]})
+    assert (gids, refusals) == ((110,), [])
+
+
+def test_a_supplementary_human_member_refuses(tmp_path):
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, ["user-a"])},
+                              ["svc-log"],
+                              accounts={"user-a": ACCOUNTS["user-a"]})
+    assert gids == ()
+    assert [n for n, _r in refusals] == ["svc-log"]
+    assert "member 'user-a' has uid 1500" in refusals[0][1], refusals
+
+
+def test_a_primary_gid_human_member_refuses(tmp_path):
+    """`gr_mem` does not list accounts whose PRIMARY group it is. Mutation:
+    drop the getpwall() pass and this group is accepted."""
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, [])},
+                              ["svc-log"])
+    assert gids == ()
+    assert any("'user-b' has it as its primary group" in r for _n, r in refusals), refusals
+
+
+def test_an_unresolvable_member_name_refuses(tmp_path):
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, ["ghost"])},
+                              ["svc-log"],
+                              accounts={"svc-d": ACCOUNTS["svc-d"]})
+    assert gids == ()
+    assert "member 'ghost' does not resolve" in refusals[0][1], refusals
+
+
+def test_nobody_above_uid_max_is_not_a_person(tmp_path):
+    """Mutation: drop the UID_MAX bound in `human()` and `nobody` refuses
+    the group."""
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, ["nobody"])},
+                              ["svc-log"],
+                              accounts={"nobody": ACCOUNTS["nobody"]})
+    assert (gids, refusals) == ((110,), [])
+
+
+@pytest.mark.parametrize("missing", ["UID_MIN", "UID_MAX", "GID_MIN"])
+def test_a_missing_login_defs_bound_fails_closed(tmp_path, missing):
+    """No default: a guess about the node's allocation policy is what the
+    check replaces. Mutation: default UID_MIN or UID_MAX to 1000/60000 and
+    the service group is accepted."""
+    text = "".join(l + "\n" for l in LOGIN_DEFS_TEXT.splitlines()
+                   if not l.startswith(missing))
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, [])},
+                              ["svc-log"],
+                              accounts={"svc-d": ACCOUNTS["svc-d"]}, text=text)
+    assert gids == ()
+    assert missing in refusals[0][1], refusals
+
+
+def test_an_unparsable_last_word_fails_closed_and_octal_reads_like_strtol(tmp_path):
+    text = LOGIN_DEFS_TEXT + "UID_MAX sixty\n"
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(110, [])},
+                              ["svc-log"], accounts={}, text=text)
+    assert gids == () and "UID_MAX" in refusals[0][1], refusals
+    defs = deploy.read_login_defs(_login_defs(tmp_path, "UID_MIN 01750\nUID_MAX 0xEA60\n"))
+    assert defs == {"UID_MIN": 1000, "UID_MAX": 60000}
+
+
+def test_a_gid_at_or_above_gid_min_refuses(tmp_path):
+    gids, refusals = _resolve(tmp_path, {"svc-log": _Group(1000, [])},
+                              ["svc-log"], accounts={})
+    assert gids == ()
+    assert "at or above GID_MIN 1000" in refusals[0][1], refusals
+
+
+def test_a_listed_group_that_does_not_resolve_refuses(tmp_path):
+    gids, refusals = _resolve(tmp_path, {}, ["svc-log"], accounts={})
+    assert gids == () and "does not resolve" in refusals[0][1], refusals
+
+
+def test_no_listed_group_reads_nothing_at_all(tmp_path):
+    assert deploy.resolve_trusted_groups(
+        (), login_defs=str(tmp_path / "absent")) == ((), [])
+
+
+def test_the_refusal_states_what_the_member_check_cannot_see():
+    out = io.StringIO()
+    deploy.write_trusted_groups_refusal([("svc-log", "a reason")], out=out)
+    text = out.getvalue()
+    assert "refusing trusted_groups" in text
+    assert "does not enumerate" in text and "not seen" in text, text
+    assert "GID_MIN narrows that gap" in text, text
+    out = io.StringIO()
+    deploy.write_spool_group_refusal("wbread", "it does not resolve", out=out)
+    assert "does not enumerate" in out.getvalue(), out.getvalue()
+
+
+# --- the dry run makes the same check --------------------------------------
+
+def _stub_groups(monkeypatch, tmp_path, groups, trusted, accounts=None):
+    """Put fictional groups in front of the node's NSS for deploy.py alone,
+    falling through to the real lookup for any other name -- the reader
+    group is the test user's real primary group."""
+    accounts = ACCOUNTS if accounts is None else accounts
+    real_getgrnam = deploy.grp.getgrnam
+    monkeypatch.setattr(deploy.grp, "getgrnam",
+                        lambda name: groups[name] if name in groups
+                        else real_getgrnam(name))
+    monkeypatch.setattr(deploy.pwd, "getpwnam", lambda name: accounts[name])
+    monkeypatch.setattr(deploy.pwd, "getpwall", lambda: list(accounts.values()))
+    # GID_MIN above the test user's own gid, which is what a group-writable
+    # tmp directory really carries -- whatever that gid is on the machine
+    # running the suite.
+    monkeypatch.setattr(deploy, "LOGIN_DEFS", _login_defs(
+        tmp_path, "UID_MIN 1000\nUID_MAX 60000\nGID_MIN %d\n"
+        % max(1000, os.getgid() + 1)))
+    monkeypatch.setattr(deploy, "TRUSTED_GROUPS", tuple(trusted))
+
+
+def test_the_dry_run_makes_the_member_check_and_refuses_as_the_install_does(
+        tmp_path, monkeypatch):
+    """As an ordinary user: NSS and login.defs are readable by anyone, so
+    the dry run does not report the check as unknown -- it makes it, and
+    refuses with the install's own words. Mutation: skip the groups step
+    when not privileged and the dry run returns 0."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    _stub_groups(monkeypatch, tmp_path, {"svc-log": _Group(110, ["user-a"])},
+                 trusted=("svc-log",))
+
+    def refusal(dry_run, root):
+        monkeypatch.setattr(deploy, "_is_root", lambda: root)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = deploy.system_execute(_args(tmp_path, dry_run=dry_run))
+        return rc, [l for l in err.getvalue().splitlines()
+                    if l.startswith("deploy.py: refusing trusted_groups")]
+
+    dry = refusal(dry_run=True, root=False)
+    real = refusal(dry_run=False, root=True)
+    assert dry[0] == real[0] == 6, (dry, real)
+    assert dry[1] == real[1] and dry[1], (dry, real)
+
+
+def test_a_reader_group_that_does_not_resolve_refuses_both_callers(
+        tmp_path, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_GROUP", "no-such-group-wbtest")
+    for dry_run, root in ((True, False), (False, True)):
+        monkeypatch.setattr(deploy, "_is_root", lambda root=root: root)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = deploy.system_execute(_args(tmp_path, dry_run=dry_run))
+        assert rc == 6, err.getvalue()
+        assert "refusing spool_group=no-such-group-wbtest" in err.getvalue()
+
+
+def test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it(
+        tmp_path, monkeypatch):
+    """End to end through preflight(): a group-writable spool ancestor whose
+    gid a clean listed group holds is accepted; take the group off the list
+    and the same tree refuses."""
+    _trusting_me(monkeypatch)
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    shared = _group_writable(str(tmp_path / "log"))
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", os.path.join(shared, "wb"))
+    _stub_groups(monkeypatch, tmp_path,
+                 {"svc-log": _Group(os.getgid(), ["svc-d"])}, trusted=("svc-log",),
+                 accounts={"svc-d": ACCOUNTS["svc-d"]})
+    rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=io.StringIO())
+    assert rc == 0
+    monkeypatch.setattr(deploy, "TRUSTED_GROUPS", ())
+    err = io.StringIO()
+    # validate_root_write_paths() writes to sys.stderr, not to `out`.
+    with contextlib.redirect_stderr(err):
+        rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
+    assert rc == 6 and shared in err.getvalue(), err.getvalue()
+
+
+# --- the migration ---------------------------------------------------------
+
+def _old_spool(tmp_path, mode=0o755, files=("reaper-audit.jsonl", "reaper-state.json"),
+               file_mode=0o644):
+    spool = str(tmp_path / "var-log")
+    os.makedirs(spool, exist_ok=True)
+    os.chmod(spool, mode)
+    for name in files:
+        path = os.path.join(spool, name)
+        with open(path, "w") as fh:
+            fh.write("{}\n")
+        os.chmod(path, file_mode)
+    return spool
+
+
+def _real_spool_checks(monkeypatch):
+    """The prefix-side checks stubbed as usual, the SPOOL's ownership check
+    real and driven at this user's uid."""
+    real = deploy.unowned_by
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: real(root, uid=os.getuid())
+        if os.path.abspath(root) == os.path.abspath(deploy.DEFAULT_SPOOL_DIR) else [])
+
+
+def test_an_old_0755_spool_with_0644_files_previews_as_repairs_and_installs_as_02750(
+        tmp_path, monkeypatch):
+    """The state every node that installed before ADR-0025 is in. The
+    preview lists repairs and still advertises the install; the install
+    leaves 02750, the reader group and 0640 files. Mutation: make
+    spool_mode_repairs() return nothing, and the files stay 0644."""
+    spool = _old_spool(tmp_path)
+    _real_spool_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert deploy.system_preview(_args(tmp_path)) == 0
+    assert "will REPAIR rather than refuse" in out.getvalue(), out.getvalue()
+    for name in (spool, os.path.join(spool, "reaper-audit.jsonl")):
+        assert "%s: gid %d mode" % (name, os.getgid()) in out.getvalue()
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(_args(tmp_path)) == 0
+    info = os.lstat(spool)
+    assert stat.S_IMODE(info.st_mode) == 0o2750 and info.st_gid == os.getgid()
+    for name in ("reaper-audit.jsonl", "reaper-state.json"):
+        info = os.lstat(os.path.join(spool, name))
+        assert stat.S_IMODE(info.st_mode) == 0o640, (name, oct(info.st_mode))
+        assert info.st_gid == os.getgid()
+
+
+def test_a_group_writable_spool_still_refuses(tmp_path, monkeypatch):
+    _old_spool(tmp_path, mode=0o775)
+    _real_spool_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        assert deploy.system_execute(_args(tmp_path)) == 6
+    assert "writable beyond root" in err.getvalue(), err.getvalue()
+    assert calls == [], calls
+
+
+def test_setgid_on_a_spool_file_still_refuses(tmp_path, monkeypatch):
+    spool = _old_spool(tmp_path, files=("reaper-state.json",), file_mode=0o2644)
+    assert os.lstat(os.path.join(spool, "reaper-state.json")).st_mode & stat.S_ISGID
+    _real_spool_checks(monkeypatch)
+    bad = deploy.audit_dir_blockers(spool)
+    assert [(c, os.path.basename(p)) for c, p, _r in bad] == [
+        ("setuid", "reaper-state.json")], bad
+    assert [r for r in deploy.spool_mode_repairs(spool)
+            if r[0] != spool] == [], "a setid file is not a repair"
+
+
+def test_setgid_on_the_spool_directory_is_the_decision_not_a_finding(
+        tmp_path, monkeypatch):
+    """Mutation: drop `_is_spools_own_setgid()` from audit_dir_blockers()
+    and every installed spool refuses its own reinstall."""
+    spool = _old_spool(tmp_path, mode=0o2750, files=())
+    _real_spool_checks(monkeypatch)
+    assert deploy.audit_dir_blockers(spool) == []
+    os.chmod(spool, 0o4750)
+    assert [c for c, _p, _r in deploy.audit_dir_blockers(spool)] == ["setuid"]
+
+
+# --- no root write into the spool follows a link --------------------------
+
+def test_the_sweep_and_the_create_follow_no_link(tmp_path, monkeypatch):
+    """The spool swapped for a directory of links named like the trail and
+    the state, each at a sentinel: the sweep skips every one, and the
+    blockers refuse them by name. Mutation: `os.chmod(path, 0o640)` on the
+    listed paths instead of the no-follow fd, and the sentinel's mode moves."""
+    spool = str(tmp_path / "var-log")
+    os.makedirs(spool)
+    os.chmod(spool, 0o755)
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("not the walk-blocker's\n")
+    sentinel.chmod(0o600)
+    for name in ("reaper-audit.jsonl", "reaper-state.json",
+                 "uncovered-mounts.state.new", deploy.DEFAULT_AUDIT_FILENAME):
+        os.symlink(str(sentinel), os.path.join(spool, name))
+    before = (sentinel.read_bytes(), stat.S_IMODE(sentinel.stat().st_mode))
+
+    deploy.repair_spool(spool, os.getgid())
+    deploy.create_spool(spool, os.getgid())
+    assert (sentinel.read_bytes(), stat.S_IMODE(sentinel.stat().st_mode)) == before
+    _real_spool_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", spool)
+    refused = [os.path.basename(p) for c, p, _r in deploy.audit_dir_blockers(spool)
+               if c == "symlink"]
+    assert sorted(refused) == sorted(["reaper-audit.jsonl", "reaper-state.json",
+                                      "uncovered-mounts.state.new",
+                                      deploy.DEFAULT_AUDIT_FILENAME]), refused
+
+
+def test_a_spool_that_is_a_link_to_a_directory_is_not_created_through(tmp_path):
+    """`create_spool()` refuses a link at the spool's name and leaves the
+    target's mode and group as they were. Mutation: `install -d -m 2750`
+    (or `os.chmod` on the path) and the target becomes 2750."""
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    target.chmod(0o755)
+    spool = str(tmp_path / "var-log")
+    os.symlink(str(target), spool)
+    with pytest.raises(deploy.SpoolRefused):
+        deploy.create_spool(spool, os.getgid())
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+    deploy.repair_spool(spool, os.getgid())
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
+
+def test_an_unreadable_login_defs_is_unknown_to_the_dry_run_and_a_refusal_as_root(
+        tmp_path, monkeypatch):
+    """A check the reader may not make is reported as not made -- and the
+    spool chain, which depends on its answer, is not judged with a guess.
+    Root that cannot read it refuses. Mutation: judge the spool chain with
+    root alone instead, and the dry run refuses a group-writable ancestor
+    the install might accept."""
+    _trusting_me(monkeypatch)
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
+    shared = _group_writable(str(tmp_path / "log"))
+    monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", os.path.join(shared, "wb"))
+    monkeypatch.setattr(deploy, "TRUSTED_GROUPS", ("svc-log",))
+
+    def unreadable(_names, **_kw):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(deploy, "resolve_trusted_groups", unreadable)
+    with contextlib.redirect_stderr(io.StringIO()):
+        rc, checks = deploy.preflight(_args(tmp_path, dry_run=True),
+                                      privileged=False, out=io.StringIO())
+    assert rc == 0
+    unknown = [(c.name, c.subject) for c in checks if c.state == deploy.CHECK_UNKNOWN]
+    assert ("paths", os.path.join(shared, "wb")) in unknown, unknown
+    assert ("trusted_groups", deploy.LOGIN_DEFS) in unknown, unknown
+    out = io.StringIO()
+    rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=out)
+    assert rc == 6 and "could not be made even as root" in out.getvalue()

@@ -425,3 +425,34 @@ def test_the_committed_example_payload_is_current():
         pytest.skip("examples/payload has not been built")
     code, out, _e = _build(EXAMPLE, example, check=True)
     assert code == 0, out
+
+
+@pytest.mark.parametrize("edit,expected", [
+    (('spool_group = "wbaudit"', 'spool_group = "wbread"'),
+     {"deploy.py", "shim/install.sh", "site.toml", "site.lock.json"}),
+    (("trusted_groups = []", 'trusted_groups = ["svc-log"]'),
+     {"deploy.py", "site.toml", "site.lock.json"}),
+])
+def test_the_group_keys_reach_only_their_consumers(payload, tmp_path, edit, expected):
+    """ADR-0025's two keys are compiled into exactly the files that read
+    them. The reaper and the shim resolve no group, so `guard.sh`,
+    `reaper.py` and `wrapped_names.sh` come out byte-identical -- the shim
+    is untouched by this decision, and a key that leaked into it would put
+    a site value on every user's fast path. Mutation: stamp spool_group
+    into reaper.py (a marker and its CONSUMERS row) and reaper.py joins the
+    changed set."""
+    old, new = edit
+    text = open(EXAMPLE).read()
+    assert text.count(old) == 1, old
+    edited = tmp_path / "site.toml"
+    edited.write_text(text.replace(old, new))
+    out = tmp_path / "payload"
+    code, _o, err = _build(edited, out)
+    assert code == 0, err
+    changed = set(rel for rel in _walk(payload)
+                  if not filecmp.cmp(str(payload / rel), str(out / rel),
+                                     shallow=False))
+    assert changed == expected, changed
+    for untouched in ("shim/guard.sh", "reaper.py", "shim/wrapped_names.sh"):
+        assert filecmp.cmp(str(payload / untouched), str(out / untouched),
+                           shallow=False), untouched
