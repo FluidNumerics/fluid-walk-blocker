@@ -1641,18 +1641,21 @@ def test_a_clean_bashrc_gets_no_preview_note(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# the audit directory (ADR-0012)
+# the audit directory (ADR-0025)
 # --------------------------------------------------------------------------
 
-def test_the_system_install_creates_the_audit_dir_world_readable(tmp_path):
-    """0755, not 0750. ADR-0004's invariant is that a MONITORED ACCOUNT CANNOT
-    WRITE the audit trail; 0755 still refuses that. What 0750 did was hide
-    the trail from the people who have to read it."""
+def test_the_system_install_creates_the_audit_dir_for_its_reader_group(tmp_path):
+    """root:<spool_group> 02750 (ADR-0025). ADR-0004's invariant is that a
+    MONITORED ACCOUNT CANNOT WRITE the audit trail, and no group or other
+    `w` still carries it; what changed is that one group reads and nobody
+    else does. Mutation: drop the chgrp or the chmod in spool_assert_here()."""
     result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert result.returncode == 0, result.stderr
-    mode = layout.spool.stat().st_mode & 0o7777
-    assert mode == 0o755, oct(mode)
+    info = layout.spool.stat()
+    mode = info.st_mode & 0o7777
+    assert mode == 0o2750, oct(mode)
     assert not mode & 0o022, "never group/other writable"
+    assert info.st_gid == os.getgid(), "the reader group is the stamped one"
     assert layout.audit.parent == layout.spool
     assert layout.audit.name == H.AUDIT_FILENAME
 
@@ -1663,12 +1666,12 @@ def test_the_relink_puts_the_audit_dir_mode_back_every_poll(tmp_path):
     blinds the trail is corrected on the next poll."""
     installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
-    assert (layout.spool.stat().st_mode & 0o7777) == 0o755
-    layout.spool.chmod(0o750)
+    assert (layout.spool.stat().st_mode & 0o7777) == 0o2750
+    layout.spool.chmod(0o00750)
     result, layout = run_install(tmp_path, ["--relink"], fake_uid=0, layout=layout, script=layout.script)
     assert result.returncode == 0, result.stderr
     mode = layout.spool.stat().st_mode & 0o7777
-    assert mode == 0o755, "the relink must put its own directory back, not merely notice: %s" % oct(mode)
+    assert mode == 0o2750, "the relink must put its own directory back, not merely notice: %s" % oct(mode)
 
 
 def test_a_relink_that_cannot_fix_the_audit_dir_still_relinks(tmp_path):
@@ -1691,25 +1694,27 @@ def test_a_blocked_audit_dir_reaches_the_journal_by_name(tmp_path):
     assert healthy.returncode == 0, healthy.stderr
     assert not [r for r in records if r["action"] == "audit_dir" and r["state"] == "mode-corrected"], records
 
-    layout.spool.chmod(0o750)
+    layout.spool.chmod(0o755)
     result, records = relink_with_a_recording_logger(tmp_path, layout, fake_uid=0, script=layout.script)
     assert result.returncode == 0, result.stderr
-    assert (layout.spool.stat().st_mode & 0o7777) == 0o755
+    assert (layout.spool.stat().st_mode & 0o7777) == 0o2750
     assert [r for r in records if r["action"] == "audit_dir" and r["state"] == "mode-corrected"], (
         "the correction must reach journalctl -t walk-blocker: %s" % records)
 
 
-def test_a_first_time_audit_dir_is_recorded_as_created_not_corrected(tmp_path):
-    """`created` and `mode-corrected` are different events: one is a deploy,
-    the other is somebody having changed it since."""
+def test_a_missing_spool_is_reported_absent_and_not_created(tmp_path):
+    """The spool, and the marker inside it, are deploy.py's to create
+    (ADR-0025). A root relink that finds none says so and makes nothing:
+    a directory it made would carry no marker, so every later write would
+    refuse it anyway."""
     installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
     assert installed.returncode == 0, installed.stderr
     shutil.rmtree(str(layout.spool))
     result, records = relink_with_a_recording_logger(tmp_path, layout, fake_uid=0, script=layout.script)
     assert result.returncode == 0, result.stderr
     states = [r["state"] for r in records if r["action"] == "audit_dir"]
-    assert "created" in states, records
-    assert "mode-corrected" not in states, records
+    assert "absent" in states, records
+    assert not layout.spool.exists(), "the relink created the spool"
 
 
 def test_the_stub_shells_and_sink_are_what_the_harness_says(tmp_path):
@@ -1874,6 +1879,7 @@ def test_the_install_forgets_what_an_earlier_install_reported(tmp_path):
 
 def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
     layout = _stateful_layout(tmp_path)
+    H.stage_spool(layout)
     layout.bin.mkdir(parents=True)
     state = layout.spool / STATE_NAME
     state.write_text("boot x\n/archive nfs4\n")
@@ -1885,10 +1891,11 @@ def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
     assert "left in place" in result.stdout
 
 
-def test_the_memory_is_world_readable_whatever_the_umask(tmp_path):
-    """ADR-0019 says the memory is readable like the rest of the spool; a
-    root relink under a 077 umask would otherwise leave it 0600 and make
-    that sentence true only by the accident of a 022 default."""
+def test_the_memory_is_readable_like_the_spool_whatever_the_umask(tmp_path):
+    """ADR-0019 says the memory is readable like the rest of the spool, which
+    is 0640 for the reader group (ADR-0025); a root relink under a 077 umask
+    would otherwise leave it 0600 and make that sentence true only by the
+    accident of a 022 default."""
     layout = _stateful_layout(tmp_path)
     before = os.umask(0o077)
     try:
@@ -1897,4 +1904,214 @@ def test_the_memory_is_world_readable_whatever_the_umask(tmp_path):
         os.umask(before)
     assert result.returncode == 0, result.stderr
     mode = stat.S_IMODE((layout.spool / STATE_NAME).stat().st_mode)
-    assert mode == 0o644, oct(mode)
+    assert mode == 0o640, oct(mode)
+
+
+# --------------------------------------------------------------------------
+# the spool is pinned before anything is written into it (ADR-0025)
+# --------------------------------------------------------------------------
+
+def _installed(tmp_path):
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    return layout
+
+
+def _states(records):
+    return [r["state"] for r in records if r["action"] == "audit_dir"]
+
+
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+def test_the_relink_puts_a_0755_spool_back_to_2750_with_its_group(tmp_path, shell):
+    """The migration a node goes through at its next poll: an old spool at
+    0755 with some other group comes back root:<spool_group> 02750, and each
+    correction is journalled under its own word. Under both shells.
+
+    The wrong group is MODELLED -- a non-root test has no second group to
+    chgrp to -- by a stat that reports STALE_GID until the real chgrp has
+    run. Mutations: drop the chgrp line, or the `group-corrected` report, and
+    the group assertion or the record assertion fails."""
+    if not shutil.which(shell):
+        pytest.skip("%s is not installed" % shell)
+    layout = _installed(tmp_path)
+    layout.spool.chmod(0o00755)
+    flag = tmp_path / "chgrp-ran"
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script,
+        shell=shutil.which(shell), chgrp_flag=flag,
+        stat_body=H.stat_stub(stale_gid_until=flag))
+    assert result.returncode == 0, result.stderr
+    info = layout.spool.stat()
+    assert stat.S_IMODE(info.st_mode) == 0o2750, oct(info.st_mode)
+    assert info.st_gid == os.getgid()
+    assert flag.exists(), "the relink never ran chgrp"
+    states = _states(records)
+    assert "mode-corrected" in states, records
+    assert "group-corrected" in states, records
+
+
+def test_a_spool_whose_group_really_differs_is_chgrped_back(tmp_path):
+    """The same correction against a REAL group change, where the test user
+    has a second group to make it with; skipped, visibly, where not."""
+    others = [g for g in os.getgroups() if g != os.getgid()]
+    if not others:
+        pytest.skip("the test user has no supplementary group to chgrp to")
+    layout = _installed(tmp_path)
+    os.chown(str(layout.spool), -1, others[0])
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert layout.spool.stat().st_gid == os.getgid()
+    assert "group-corrected" in _states(records), records
+
+
+def test_a_reader_group_that_does_not_resolve_still_relinks(tmp_path):
+    """Measured: `chgrp` to a name NSS does not know exits 1 with "invalid
+    group" under dash and bash alike. The relink journals it and carries on
+    -- through ExecStartPre, a relink that stopped here would stop nothing,
+    but a Layer 1 reconcile that failed over its own directory's group would
+    still be a reconcile that did not happen."""
+    layout = _installed(tmp_path)
+    stamped_install(tmp_path, dest=layout.shim_dir, layout=layout,
+                    **{"install.spool_group": "no-such-group-wbtest"})
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert "group-failed" in _states(records), records
+    assert layout.shims() == {"find", "grep"}
+
+
+def test_a_spool_owned_by_someone_else_gets_no_write_and_no_chmod(tmp_path):
+    """`owner-not-root`: reported, and nothing else. No mode change, no
+    state file -- the memory is written only into a spool that is ours.
+    Mutation: write the state through the path again, ungated, and the
+    state file appears."""
+    layout = _installed(tmp_path)
+    layout.spool.chmod(0o00755)
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script,
+        stat_body=H.stat_stub(spool_owner=4242))
+    assert result.returncode == 0, result.stderr
+    assert "owner-not-root" in _states(records), records
+    assert stat.S_IMODE(layout.spool.stat().st_mode) == 0o755, "chmod'd a spool that is not ours"
+    assert not (layout.spool / STATE_NAME).exists(), "wrote into a spool that is not ours"
+    assert not (layout.spool / (STATE_NAME + ".new")).exists()
+    assert ("/archive", "nfs4", "expensive") in uncovered(records), (
+        "no memory is not no report: %s" % records)
+
+
+def _sentinel(tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("not the walk-blocker's\n")
+    sentinel.chmod(0o600)
+    return sentinel
+
+
+def _sentinel_state(sentinel):
+    info = os.lstat(str(sentinel))
+    return (sentinel.read_bytes(), stat.S_IMODE(info.st_mode), info.st_gid)
+
+
+def _swap_in_a_trap(layout, sentinel, marker=True):
+    """The attack: rename the spool aside and put a directory in its place
+    holding links named like everything a writer writes, each at the
+    sentinel. The replacement is the test user's, which under the fake root
+    is "ours" -- so the pin accepts it, and the proof is that no write into
+    it follows a link."""
+    layout.spool.rename(str(layout.spool) + ".aside")
+    layout.spool.mkdir()
+    if marker:
+        # The marker a real attacker cannot plant -- it is root's, in a
+        # directory only root writes -- standing in here so that the NEXT
+        # layer down, no write following a link, is what this test proves.
+        H.stage_spool(layout)
+    for name in (H.AUDIT_FILENAME, STATE_NAME, STATE_NAME + ".new",
+                 "reaper-audit.jsonl", "reaper-state.json",
+                 "reaper-state.json.tmp"):
+        os.symlink(str(sentinel), str(layout.spool / name))
+
+
+def test_the_relink_writes_no_link_planted_in_a_swapped_spool(tmp_path):
+    """Every name the relink writes is a link at a sentinel; the sentinel's
+    bytes, mode and group are unchanged afterwards. Mutation: replace the
+    `rm -f` and the noclobber create with `: > "./$_um_state.new"`, and
+    the sentinel is truncated (proved by hand in the worktree)."""
+    layout = _installed(tmp_path)
+    sentinel = _sentinel(tmp_path)
+    _swap_in_a_trap(layout, sentinel)
+    before = _sentinel_state(sentinel)
+    result, _records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert _sentinel_state(sentinel) == before
+    assert not (layout.spool / STATE_NAME).is_symlink(), "the memory went through the link"
+
+
+def test_a_spool_that_is_a_link_to_a_directory_leaves_the_target_alone(tmp_path):
+    """`symlink`: reported, and the target keeps its mode and group -- chmod
+    and chgrp follow a link, which is exactly why neither is aimed at a
+    spool that is one. Mutation: assert the mode through the path, the old
+    `install -d -m` way, and the target becomes 2750."""
+    layout = _installed(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    target.chmod(0o755)
+    shutil.rmtree(str(layout.spool))
+    os.symlink(str(target), str(layout.spool))
+    before = (stat.S_IMODE(target.stat().st_mode), target.stat().st_gid)
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert "symlink" in _states(records), records
+    assert (stat.S_IMODE(target.stat().st_mode), target.stat().st_gid) == before
+    assert not (target / STATE_NAME).exists(), "the memory was written through the link"
+
+
+def test_a_root_owned_sibling_renamed_into_the_spools_name_is_left_alone(tmp_path):
+    """The rename ADR-0025 closes: a group that can write the spool's parent
+    moves the real spool aside and renames another root-owned directory
+    into its name. That directory is root's and a directory, so it passes
+    every check but one -- it carries no marker, which stayed with the real
+    spool. Its mode, group and contents are unchanged after the relink, and
+    the refusal is journalled as `unmarked`. (In CI the sibling is the test
+    user's, standing in for root through the fake `id` and stat.) Mutation:
+    skip the marker test in in_spool() and the sibling becomes 2750."""
+    layout = _installed(tmp_path)
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (sibling / "somebody-elses.log").write_text("not the walk-blocker's\n")
+    sibling.chmod(0o700)
+    layout.spool.rename(str(tmp_path / "spool.aside"))
+    sibling.rename(str(layout.spool))
+    before = (stat.S_IMODE(layout.spool.stat().st_mode), layout.spool.stat().st_gid,
+              sorted(os.listdir(str(layout.spool))),
+              (layout.spool / "somebody-elses.log").read_bytes())
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, fake_uid=0, script=layout.script)
+    assert result.returncode == 0, result.stderr
+    assert "unmarked" in _states(records), records
+    after = (stat.S_IMODE(layout.spool.stat().st_mode), layout.spool.stat().st_gid,
+             sorted(os.listdir(str(layout.spool))),
+             (layout.spool / "somebody-elses.log").read_bytes())
+    assert after == before
+    assert ("/archive", "nfs4", "expensive") in uncovered(records), (
+        "an unmarked spool has no memory, not no report: %s" % records)
+
+
+def test_the_real_spool_renamed_aside_keeps_its_marker(tmp_path):
+    """The other half of why the marker works: it moves with the directory,
+    so the real spool is still recognisable wherever it went, and the name
+    it left is not."""
+    layout = _installed(tmp_path)
+    aside = tmp_path / "spool.aside"
+    layout.spool.rename(str(aside))
+    assert (aside / H.SPOOL_MARKER).is_file()
+
+
+def test_the_three_spool_marker_literals_agree():
+    """deploy.py writes it, install.sh and reaper.py require it: one name."""
+    text = open(os.path.join(ROOT, "node", "shim", "install.sh")).read()
+    assert "\nSG_SPOOL_MARKER=%s\n" % H.SPOOL_MARKER in text
+    for name in ("deploy.py", "reaper.py"):
+        src = open(os.path.join(ROOT, "node", name)).read()
+        assert '\nSPOOL_MARKER = "%s"\n' % H.SPOOL_MARKER in src, name

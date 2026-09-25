@@ -22,7 +22,7 @@ SETTLED_AGAINST_REVIEW = {"0005", "0006", "0007", "0009", "0013"}
 SUPERSEDED = "\n## Superseded wording\n"
 
 # ADR-0023: a `Narrows:` quote resolves inside the target's `## Superseded
-# wording` section, not merely somewhere in its body. These two narrowings are
+# wording` section, not merely somewhere in its body. These three narrowings are
 # exempt, each for a reason that has to be argued rather than absorbed by a
 # looser matcher -- which is why this is a list and not a weaker assertion.
 # An exempt pair still has to carry its clause somewhere; it just stays put.
@@ -35,6 +35,11 @@ NARROWS_EXEMPT = {
     # about readability that was never part of it. The clause still states what
     # holds, and filing it under superseded wording would call a live clause dead.
     ("0012", "0004"),
+    # ADR-0025 narrows the same clause the same way, as a clarification:
+    # account being monitored = a human login account; a listed human-free
+    # service group may hold write on a spool ancestor, never on the spool.
+    # The clause still states what holds, so it stays where it is.
+    ("0025", "0004"),
 }
 
 
@@ -73,10 +78,10 @@ def _by_number(number):
     return matches[0]
 
 
-def test_there_are_twenty_four_adrs_numbered_without_gaps():
+def test_there_are_twenty_five_adrs_numbered_without_gaps():
     numbers = [_number(p) for p in ADRS]
     assert numbers == ["%04d" % i for i in range(1, len(numbers) + 1)]
-    assert len(numbers) == 24
+    assert len(numbers) == 25
 
 
 @pytest.mark.parametrize("path", ADRS, ids=_number)
@@ -244,7 +249,8 @@ def test_each_narrows_exemption_still_has_the_reason_it_was_granted_for():
     structural precondition is asserted, so an exemption whose ground has gone
     stops being granted.
     """
-    assert NARROWS_EXEMPT == {("0016", "0007"), ("0012", "0004")}, (
+    assert NARROWS_EXEMPT == {("0016", "0007"), ("0012", "0004"),
+                              ("0025", "0004")}, (
         "the narrows exemption list changed. Each entry is a claim that has to "
         "be argued in ADR-0023 and checked below, not added silently")
 
@@ -261,6 +267,12 @@ def test_each_narrows_exemption_still_has_the_reason_it_was_granted_for():
     # saying so, the clause is superseded after all and has to move.
     assert "kept in full" in _read(_by_number("0012")), (
         "ADR-0012 no longer says it keeps ADR-0004's clause in full, so that "
+        "exemption has lost its ground")
+
+    # ("0025", "0004") has the same ground: ADR-0025 clarifies who "the
+    # account being monitored" is and keeps the clause in full.
+    assert "kept in full" in _read(_by_number("0025")), (
+        "ADR-0025 no longer says it keeps ADR-0004's clause in full, so that "
         "exemption has lost its ground")
 
 

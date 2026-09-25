@@ -85,7 +85,8 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Fold a best-effort hook shell into the hard gate, or soften a required one to match | ADR-0008 — the class is config, chosen from a census |
 | Read PSI per-scope instead of per-slice | ADR-0003 |
 | Feed `origin` into `classify()` | ADR-0003 — descriptive only |
-| Make the audit directory `0750` again | ADR-0012 |
+| Make the spool world-readable again, or drop the reader group | ADR-0025 |
+| Accept a group-writable ancestor on the prefix, staging, unit or hook chain, or a listed group with a human member | ADR-0025 |
 | Key a tool identity on `comm` | rule table docstring and its test — `argv[0]` first; `comm` is the wrapper's name |
 | List an optional-argument flag in `value_flags` | rule table `--color` rule; measured on the tool |
 | `always=True` beside a `dir_action_default` | asserted in `Profile.__init__`; table/shim diverge |
@@ -105,7 +106,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0009 | PSI corroborates; it does not gate (narrows 0002) |
 | 0010 | `opaque_traversal` names unmodelled tools |
 | 0011 | Layer 2 reads stdin from `/proc` |
-| 0012 | Audit trail root-writable-only, world-readable (narrows 0004) |
+| 0012 | Audit trail root-writable-only, readable (narrows 0004; narrowed by 0025) |
 | 0013 | Site config compiled at build time (narrows 0005) |
 | 0014 | Decisions, not site evidence |
 | 0015 | Node code is POSIX `sh` or stdlib Python 3.9; the shim is `sh` |
@@ -114,6 +115,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
 | 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
 | 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
+| 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link, and go only into a spool carrying deploy.py's marker (narrows 0012 and 0019, clarifies 0004) |
 
 ## Non-negotiables a prompt must restate
 

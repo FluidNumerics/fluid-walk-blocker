@@ -8,6 +8,7 @@
   "required": [
     "schema_version",
     "site",
+    "install",
     "slurm",
     "timer"
   ],
@@ -21,6 +22,11 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9 ._,()/:@+-]{1,80}$",
       "description": "Short human-facing text embedded in refusal messages and unit descriptions: printable, single-line, at most 80 characters, no quoting characters."
+    },
+    "group_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,31}$",
+      "description": "A group name as the node's NSS resolves it: a letter or `_` first, then letters, digits, `_`, `.` and `-`, at most 32 characters. Never a number: a gid means a different group on a different node."
     },
     "identifier": {
       "type": "string",
@@ -173,6 +179,10 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Where the payload lands on the node. Every value is a root-write target compiled into `deploy.py` as a literal (ADR-0005, ADR-0013); all of it must be on local disk, never on the filesystem under investigation.",
+      "required": [
+        "spool_group",
+        "trusted_groups"
+      ],
       "properties": {
         "prefix": {
           "$ref": "#/$defs/sink_path",
@@ -182,13 +192,25 @@
         "spool_dir": {
           "$ref": "#/$defs/sink_path",
           "default": "/var/log/walk-blocker",
-          "description": "Where the reaper's audit trail is written, and where the reconcile keeps its memory of which mounts it has reported (ADR-0019). Local disk: a monitor that lives on what it monitors is unavailable exactly when it is needed."
+          "description": "Where the reaper's audit trail is written, and where the reconcile keeps its memory of which mounts it has reported (ADR-0019). `root:<spool_group> 02750`: writable by root alone, readable by `spool_group` (ADR-0025). Local disk: a monitor that lives on what it monitors is unavailable exactly when it is needed."
         },
         "audit_filename": {
           "type": "string",
           "pattern": "^[A-Za-z0-9._-]+$",
           "default": "searchguard-audit.jsonl",
-          "description": "The audit file's name under `spool_dir`. One record per line; readable by the person whose process is in it (ADR-0012)."
+          "description": "The audit file's name under `spool_dir`. One record per line, `0640`, readable by root and by members of `spool_group` -- and by nobody else, including the person whose process is in a record unless they are in that group (ADR-0025)."
+        },
+        "spool_group": {
+          "$ref": "#/$defs/group_name",
+          "description": "The one group that may read the audit trail. The spool is `root:<spool_group> 02750` and its files `0640`, inheriting the group from the setgid bit; the deployer refuses a name that does not resolve on the node. Choose it for who has to decide `--kill`, never `root`, and never a group whose membership you have not read (ADR-0025)."
+        },
+        "trusted_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/group_name"
+          },
+          "uniqueItems": true,
+          "description": "Service groups whose write bit is accepted on a strict ANCESTOR of `spool_dir` -- never on the spool itself, never on the prefix, staging, unit or hook chains, and never with other-write. The deployer refuses a listed group that does not resolve, whose gid is at or above `GID_MIN`, or that has any member (supplementary or primary) with a uid in `[UID_MIN, UID_MAX]` from `/etc/login.defs`. Empty unless a package has made a spool ancestor group-writable (ADR-0025)."
         },
         "unit_dir": {
           "type": "string",

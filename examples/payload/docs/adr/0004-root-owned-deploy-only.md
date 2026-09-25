@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-16
 The Decision's clause "none of it writable by the account being monitored" is narrowed by ADR-0012: writable is excluded, readable is not.
+The same clause is narrowed by ADR-0025, as a clarification: the account being monitored is a human login account, and a listed, human-free service group may hold write on a spool ancestor, never on the spool.
 The Decision's clause "plus explicit authorization (`--i-have-approval`)" is narrowed by ADR-0021: the gate is root alone, and the flag is removed.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0004 — see `docs/evidence.md`
 
@@ -112,4 +113,6 @@ Narrowed by ADR-0021. The Decision above read, before the flag was removed:
 The gate is root alone. The clause narrowed by ADR-0012 — "none of it writable
 by the account being monitored" — is not recorded here: ADR-0012 keeps it in
 full and narrows only an inference about readability that was never part of it,
-so it still states what holds and stays in the Decision (ADR-0023).
+so it still states what holds and stays in the Decision (ADR-0023). ADR-0025
+clarifies the same clause without replacing it — the account being monitored
+is a human login account — so it stays for the same reason.

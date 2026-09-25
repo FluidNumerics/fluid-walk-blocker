@@ -71,6 +71,7 @@ CONSUMERS = {
         "VERSION",
         "site.toml:install.prefix", "site.toml:install.unit_dir",
         "site.toml:install.spool_dir", "site.toml:install.audit_filename",
+        "site.toml:install.spool_group", "site.toml:install.trusted_groups",
         "site.toml:install.staging_parent",
         "site.toml:hooks.bash.file", "site.toml:hooks.bash.enabled",
         "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.enabled",
@@ -107,7 +108,8 @@ CONSUMERS = {
     "shim/install.sh": (
         "VERSION",
         "site.toml:install.prefix", "site.toml:install.spool_dir",
-        "site.toml:install.audit_filename", "site.toml:install.tool_search_path[:]",
+        "site.toml:install.audit_filename", "site.toml:install.spool_group",
+        "site.toml:install.tool_search_path[:]",
         "site.toml:hooks.bash.file", "site.toml:hooks.bash.package",
         "site.toml:hooks.bash.enabled", "site.toml:hooks.bash.gate",
         "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.package",

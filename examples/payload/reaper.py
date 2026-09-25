@@ -57,7 +57,7 @@ import time
 # The NAME, not the module: read_proc() already has a local `stat` holding the
 # contents of /proc/<pid>/stat, and `import stat` shadows into an AttributeError
 # there rather than a NameError somewhere obvious.
-from stat import S_ISCHR
+from stat import S_ISCHR, S_ISDIR, S_ISREG
 
 # The payload is flat: search_rules.py sits beside this file.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -200,7 +200,7 @@ NEVER_KILL = frozenset((
 OPAQUE_D_POLLS = 2
 
 # What the process exit status means, and therefore what `systemctl --failed`
-# is tracking. Four codes, because meanings that once shared one were split:
+# is tracking. Five codes, because meanings that once shared one were split:
 #
 #   0  nothing new, or nothing new that anyone could act on
 #   1  a new ACTIONABLE finding -- a verdict outside NEVER_KILL
@@ -208,6 +208,11 @@ OPAQUE_D_POLLS = 2
 #   3  a kill was attempted this poll under --kill and the process is not
 #      known to be gone: `signalled_but_wedged`, `signal_failed` or
 #      `kill_error`. Every poll it recurs.
+#   4  UNRECORDED: the spool is not a directory this process may write
+#      through -- not a directory, not owned by it, or group- or
+#      other-writable -- or a write into it failed. The poll still scanned
+#      and printed every finding to stdout, which the unit's journal keeps;
+#      nothing was written and no kill was sent. Every poll it recurs.
 #
 # Measured at a reference deployment, unactionable findings outnumbered
 # actionable ones by a wide margin, and every one of them failed the unit,
@@ -249,6 +254,7 @@ EXIT_QUIET = 0
 EXIT_ACTIONABLE = 1
 EXIT_BLIND = 2
 EXIT_KILL_FAILED = 3
+EXIT_UNRECORDED = 4
 
 # The terminate() outcomes that mean a kill was attempted this poll and the
 # process is not known to be gone: the signals landed and it is still there
@@ -990,41 +996,171 @@ def terminate(proc, grace_s=None, sleep=time.sleep, killer=os.kill,
 # State, latching, output
 # --------------------------------------------------------------------------
 
-def load_state(path):
+# The spool's identity (ADR-0025): the root-owned file deploy.py writes
+# inside the spool it created. The same literal as deploy.py's and
+# install.sh's; a test pins that the three agree.
+SPOOL_MARKER = ".walk-blocker-spool"
+
+
+def _needs_marker():
+    """Whether this run's writes are ROOT's, which is when the spool has to
+    prove it is the one deploy.py made. The attack the marker answers is a
+    group that can write a spool ancestor renaming a root-owned directory
+    into the spool's name, so that root writes there; a non-root hand run
+    can only write where its own uid already may, and its `/var/tmp` spool
+    has no deployer to mark it. A function rather than an inline test, so
+    the suite can drive the root branch as `_is_root` is driven in
+    deploy.py -- not an environment variable (ADR-0004, ADR-0013)."""
+    return os.geteuid() == 0
+
+
+class SpoolUnfit(Exception):
+    """The directory a record would be written into is not one this process
+    may write through, or a write into it failed."""
+
+
+def _split(path):
+    """(directory, name). A bare name is in the working directory."""
+    return os.path.dirname(path) or ".", os.path.basename(path)
+
+
+def open_spool(directory):
+    """An fd on `directory`, opened O_DIRECTORY|O_NOFOLLOW and proven fit to
+    write through: a directory, owned by this process's euid, and neither
+    group- nor other-writable. Raises SpoolUnfit otherwise.
+
+    Every write below goes through this fd, never through a path, so what is
+    judged here is what is written into: a name swapped after the open
+    cannot redirect a write, because the fd holds the inode. The ownership
+    and mode rules are what make the fd worth holding -- a directory someone
+    else can write is one whose ENTRIES they can replace with links, which
+    O_NOFOLLOW refuses on the leaf and this refuses on the directory.
+
+    No seam and none needed: a hand run's spool under /var/tmp is the
+    caller's own `0755` directory and passes; the deployed spool is root's
+    `02750`, and the reaper runs as root. A setgid bit is not a write bit.
+
+    Run as root, the spool must ALSO carry SPOOL_MARKER: a regular file root
+    owns, opened relative to this fd without following a link. A root-owned
+    directory renamed into the spool's name passes every other test here --
+    it is root's, a directory, not group-writable -- and fails this one,
+    because the marker stayed with the real spool.
+    """
     try:
-        with open(path, "r") as fh:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                     | os.O_CLOEXEC)
+    except OSError as exc:
+        raise SpoolUnfit("%s could not be opened as a directory without "
+                         "following a link: %s" % (directory, exc.strerror))
+    info = os.fstat(fd)
+    why = None
+    if not S_ISDIR(info.st_mode):
+        why = "is not a directory"
+    elif info.st_uid != os.geteuid():
+        why = ("is owned by uid %d, not by this process (uid %d)"
+               % (info.st_uid, os.geteuid()))
+    elif info.st_mode & 0o022:
+        why = ("is mode %04o, writable by group or other, so its entries can "
+               "be replaced" % (info.st_mode & 0o7777))
+    if why is None and _needs_marker():
+        why = _marker_missing(fd)
+    if why:
+        os.close(fd)
+        raise SpoolUnfit("%s %s" % (directory, why))
+    return fd
+
+
+def _marker_missing(fd):
+    """Why the directory `fd` does not carry a valid SPOOL_MARKER, or None."""
+    try:
+        entry = os.open(SPOOL_MARKER, os.O_RDONLY | os.O_NOFOLLOW
+                        | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+    except OSError as exc:
+        return ("carries no usable spool marker %s (%s): it is not the spool "
+                "deploy.py made, and only deploy.py makes one"
+                % (SPOOL_MARKER, exc.strerror))
+    try:
+        info = os.fstat(entry)
+    finally:
+        os.close(entry)
+    if not S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        return ("has a spool marker %s that is not a regular file owned by "
+                "this process: it is not the spool deploy.py made"
+                % SPOOL_MARKER)
+    return None
+
+
+def _ensure_spool(directory):
+    """Create a missing spool, `0755` so no umask can make it group-writable,
+    and hand back its checked fd. A spool that exists is judged as it is:
+    `makedirs` is never asked to "fix" one. The deployed spool is the
+    installer's; this is for a hand run. Run as root, a missing spool is
+    refused instead: root's spool is deploy.py's to create and mark."""
+    if not os.path.lexists(directory):
+        if _needs_marker():
+            # Root does not make the spool: an unmarked one would refuse its
+            # own writes, and a marked one is deploy.py's to make.
+            raise SpoolUnfit("%s does not exist, and only deploy.py creates "
+                             "the spool root writes into" % directory)
+        os.makedirs(directory, 0o755, exist_ok=True)
+    return open_spool(directory)
+
+
+def load_state(path):
+    """The latch, or {} when there is none to trust. Read through a checked
+    spool fd and O_NOFOLLOW too: a state file is an input to what this poll
+    reports as new, so a link planted in its place is not one to follow."""
+    directory, name = _split(path)
+    try:
+        fd = open_spool(directory)
+    except SpoolUnfit:
+        return {}
+    try:
+        entry = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                        | os.O_CLOEXEC, dir_fd=fd)
+        with os.fdopen(entry, "r") as fh:
+            if not S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return {}
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+    finally:
+        os.close(fd)
 
 
 def save_state(path, state):
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    tmp = path + ".tmp"
-    # The same explicit mode append_audit() sets, for the OPPOSITE failure.
-    # That one guards against a umask STRICTER than root's 022 narrowing the
-    # file; this guards against the umask being ignored entirely. A directory
-    # carrying a POSIX DEFAULT ACL -- a named reader grant on the audit
-    # directory does this -- suppresses the umask at creation and intersects
-    # the create mode with the default entries instead. That is how this file
-    # once landed group-writable, after which the installer's own ownership
-    # check refused the next install for a group-writable file in the audit
-    # directory.
-    #
-    # Before the WRITE, not merely before the rename. A crash between the two
-    # leaves the temp file behind, and a group-writable leftover is the same
-    # refusal under a different name.
-    #
-    # fchmod as well as the create mode, and NOT redundant with it: O_CREAT's
-    # mode argument is IGNORED when the file already exists, so a .tmp left by
-    # a build older than this fix keeps its old mode straight through O_TRUNC.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    with os.fdopen(os.open(tmp, flags, 0o644), "w") as fh:
-        os.fchmod(fh.fileno(), 0o644)
-        json.dump(state, fh)
-    os.replace(tmp, path)
+    """Write the latch through the spool's fd: a fresh `.tmp` created
+    O_EXCL|O_NOFOLLOW, then renamed over the state with both directory fds.
+    Raises SpoolUnfit when the spool fails its check.
+
+    O_EXCL, so the temp file is always a NEW inode this call created: a
+    leftover `.tmp` -- a crash, an older build, or a link somebody planted
+    under the name -- is unlinked first, and `unlink` removes the entry and
+    never its target. The mode is set explicitly, as append_audit()'s is: a
+    POSIX DEFAULT ACL on the directory suppresses the umask at creation, which
+    is how this file once landed group-writable and the installer's own
+    check then refused the next install over it. `fchmod` as well as the
+    create mode because a stricter umask narrows the create mode. Before the
+    WRITE, so a crash between the write and the rename leaves a temp file at
+    the right mode.
+    """
+    directory, name = _split(path)
+    fd = _ensure_spool(directory)
+    try:
+        tmp = name + ".tmp"
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                 | os.O_CLOEXEC)
+        try:
+            entry = os.open(tmp, flags, 0o640, dir_fd=fd)
+        except FileExistsError:
+            os.unlink(tmp, dir_fd=fd)
+            entry = os.open(tmp, flags, 0o640, dir_fd=fd)
+        with os.fdopen(entry, "w") as fh:
+            os.fchmod(fh.fileno(), 0o640)
+            json.dump(state, fh)
+        os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        os.close(fd)
 
 
 # `logged_actions` in the state file is keyed by TWO shapes, deliberately,
@@ -1085,7 +1221,8 @@ def _finding_key(finding):
     return _latch_key("%s:%s" % (finding.verdict, finding.proc.key))
 
 
-def _latch_blind(logged_actions, audit_path, sentinel, state_word):
+def _latch_blind(logged_actions, audit_path, sentinel, state_word,
+                 append=None):
     """One blind record for `sentinel`, appended and latched -- unless the
     last poll already did, in which case nothing is written.
 
@@ -1093,10 +1230,13 @@ def _latch_blind(logged_actions, audit_path, sentinel, state_word):
     what the record's `state` says; the record's SHAPE is this function's,
     so the two cannot drift apart. Returns whether a record was written, so
     the caller can decide whether that alone is worth a state save.
+    `append` is the writer, `append_audit()` unless run() hands it the one
+    that stops at an unfit spool.
     """
+    append = append_audit if append is None else append
     if logged_actions.get(sentinel) == sentinel:
         return False
-    append_audit(audit_path, [{"ts": time.time(), "layer": "reaper",
+    append(audit_path, [{"ts": time.time(), "layer": "reaper",
                                "action": "blind", "state": state_word}])
     logged_actions[_latch_key(sentinel)] = sentinel
     return True
@@ -1127,41 +1267,65 @@ def latch(state, findings):
 
 
 def append_audit(path, entries):
+    """Append `entries`, one JSON record per line, through the spool's fd.
+    Raises SpoolUnfit when the spool fails its check, or when the name holds
+    anything but a regular file this process owns.
+
+    Opened O_APPEND|O_CREAT|O_NOFOLLOW relative to the checked directory fd,
+    then fstat-ed: a link at the trail's name is refused by the open, and a
+    fifo or a file somebody else owns is refused by the fstat -- O_NONBLOCK
+    so the fifo refuses rather than hangs the poll.
+    """
     if not path or not entries:
         return
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    # One rotation when the file crosses the threshold, not a check on every
-    # call: once rotated the fresh file this open() creates is tiny again,
-    # so the very next call finds nothing to rotate. A missing file -- the
-    # ordinary first-ever-write case -- is an OSError here and skips
-    # rotation the same way a file under the threshold does.
+    directory, name = _split(path)
+    fd = _ensure_spool(directory)
     try:
-        if os.path.getsize(path) >= AUDIT_MAX_BYTES:
-            os.replace(path, path + ".1")
-    except OSError:
-        pass
-    with open(path, "a") as fh:
-        for entry in entries:
-            # Stamped HERE and nowhere else. A record names the build that
-            # WROTE it, and this function is the writer -- so this is the
-            # truthful home for the field and the one choke point every call
-            # site passes through. Adding it at each builder instead left the
-            # two blind-state records (no-user-slices, no-processes) without
-            # it, which made "which build wrote the last row?" answer null in
-            # exactly the failure mode where the question is asked.
-            #
-            # dict(entry, ...) rather than entry[...] = : the caller's dict is
-            # not ours to mutate, and a test asserting on a built record would
-            # otherwise see a field its builder never put there.
-            fh.write(json.dumps(dict(entry, version=__version__),
-                                sort_keys=True) + "\n")
-    # Explicit, not trusted to umask: the trail is readable by everyone on
-    # the node by decision (ADR-0012). `open(path, "a")` on a brand-new file
-    # is 0666 & ~umask, which under a stricter umask than root's usual 022
-    # would silently narrow it.
-    os.chmod(path, 0o644)
+        # One rotation when the file crosses the threshold, not a check on
+        # every call: once rotated the fresh file this open creates is tiny
+        # again, so the very next call finds nothing to rotate. A missing
+        # file -- the ordinary first-ever-write case -- is an OSError here
+        # and skips rotation the same way a file under the threshold does.
+        # lstat and a rename with directory fds, so neither half follows a
+        # link: `rename` moves the entry, whatever it is.
+        try:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if S_ISREG(info.st_mode) and info.st_size >= AUDIT_MAX_BYTES:
+                os.replace(name, name + ".1", src_dir_fd=fd, dst_dir_fd=fd)
+        except OSError:
+            pass
+        entry = os.open(name, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                        | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                        0o640, dir_fd=fd)
+        with os.fdopen(entry, "a") as fh:
+            info = os.fstat(fh.fileno())
+            if not S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise SpoolUnfit("%s in %s is not a regular file owned by "
+                                 "this process" % (name, directory))
+            # Explicit, not trusted to umask or to the creator: 0640, root
+            # and the spool's group (ADR-0025). The group comes from the
+            # directory's setgid bit, never from a lookup here -- a chgrp
+            # per write would put NSS into Layer 2 on every poll. An existing
+            # file keeps no wider mode than this whoever made it.
+            os.fchmod(fh.fileno(), 0o640)
+            for record in entries:
+                # Stamped HERE and nowhere else. A record names the build
+                # that WROTE it, and this function is the writer -- so this
+                # is the truthful home for the field and the one choke point
+                # every call site passes through. Adding it at each builder
+                # instead left the two blind-state records (no-user-slices,
+                # no-processes) without it, which made "which build wrote the
+                # last row?" answer null in exactly the failure mode where
+                # the question is asked.
+                #
+                # dict(record, ...) rather than record[...] = : the caller's
+                # dict is not ours to mutate, and a test asserting on a built
+                # record would otherwise see a field its builder never put
+                # there.
+                fh.write(json.dumps(dict(record, version=__version__),
+                                    sort_keys=True) + "\n")
+    finally:
+        os.close(fd)
 
 
 def format_finding(entry, is_new):
@@ -1264,7 +1428,49 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     state_path = args.state or os.path.join(spool, "reaper-state.json")
     audit_path = args.audit or os.path.join(spool, "reaper-audit.jsonl")
 
-    state = load_state(state_path)
+    # The spool is checked BEFORE anything is read from it or written to it,
+    # and a spool that fails is not a reason to stop looking. The scan below
+    # runs either way and every finding reaches stdout -- the unit's journal
+    # -- but nothing is written, no kill is sent (a kill with no record is
+    # the thing the trail exists to prevent), and the exit is
+    # EXIT_UNRECORDED, so the unit fails rather than reading green over a
+    # trail that did not grow. Never a clean result it did not earn.
+    #
+    # A hand run's spool is created here when it is missing, `0755` so no
+    # umask can make it group-writable; the deployed one is the installer's.
+    unrecorded = []
+    for directory in sorted(set(_split(p)[0] for p in (state_path, audit_path))):
+        try:
+            os.close(_ensure_spool(directory))
+        except (SpoolUnfit, OSError) as exc:
+            unrecorded.append(str(exc))
+    if unrecorded:
+        err.write("spool unfit, so this poll writes nothing and sends no "
+                  "signal; its findings are on stdout only: %s\n"
+                  % "; ".join(unrecorded))
+
+    def record(writer, *writer_args):
+        # Every write this poll makes, through one door. The first failure
+        # closes it for the rest of the poll: a trail with a hole in the
+        # middle of a poll is worse than one that stopped, and the exit code
+        # says which happened.
+        if unrecorded:
+            return False
+        try:
+            writer(*writer_args)
+            return True
+        except (SpoolUnfit, OSError) as exc:
+            unrecorded.append(str(exc))
+            err.write("could not write %s: %s; nothing more is written this "
+                      "poll\n" % (writer_args[0], exc))
+            return False
+
+    def append(path, entries):
+        record(append_audit, path, entries)
+
+    # An unfit spool's state is not trusted either: a latch somebody else
+    # could have written decides what this poll calls new.
+    state = {} if unrecorded else load_state(state_path)
     previous = state.get("sample")
     # Fetched here, not lower down where the ordinary poll first needs it, so
     # the blind branch below can dedupe against it too -- otherwise a node
@@ -1287,8 +1493,8 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         err.write("no %s*%s found under %s\n"
                   % (SLICE_PREFIX, SLICE_SUFFIX, args.cgroup_root))
         if _latch_blind(logged_actions, audit_path, LATCH_BLIND_SLICES,
-                        "no-user-slices"):
-            save_state(state_path, state)
+                        "no-user-slices", append=append):
+            record(save_state, state_path, state)
         return EXIT_BLIND
     # Cleared unconditionally, not only when this poll goes on to save state
     # via the pruning near the end of this function. `stale` below can still
@@ -1363,11 +1569,11 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # dedup survives to the next poll.
         err.write("no processes readable under %s\n" % args.proc_root)
         _latch_blind(logged_actions, audit_path, LATCH_BLIND_PROCS,
-                     "no-processes")
+                     "no-processes", append=append)
         # state["sample"] was already set to `current` above and is saved here
         # deliberately: the PSI read succeeded, only /proc failed, so the next
         # poll should difference against THIS sample.
-        save_state(state_path, state)
+        record(save_state, state_path, state)
         return EXIT_BLIND
     # Redundant today and kept deliberately. The end-of-poll prune drops every
     # key that is not a finding key, and any poll that reaches THIS line also
@@ -1422,7 +1628,7 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # "claimed a kill that did not land" shape, inverted: real signals
         # sent, only the first ever shown on disk.
         real_kill_attempt = False
-        if args.kill and finding.verdict not in NEVER_KILL:
+        if args.kill and not unrecorded and finding.verdict not in NEVER_KILL:
             if finding.proc.uid != me and not args.kill_others:
                 # No signal sent -- a standing POLICY decision, same
                 # dedup-eligible shape as plain "reported". A finding capped
@@ -1479,7 +1685,7 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # single entry reached disk.
         key = _finding_key(finding)
         if real_kill_attempt or logged_actions.get(key) != finding.action:
-            append_audit(audit_path, [entry])
+            append(audit_path, [entry])
             logged_actions[key] = finding.action
 
     # Pruned when the PROCESS dies, not when the finding stops being current.
@@ -1510,7 +1716,7 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         k: v for k, v in logged_actions.items()
         if k in standing or k.split(":", 1)[-1] in alive_keys}
 
-    save_state(state_path, state)
+    record(save_state, state_path, state)
 
     if args.json:
         out.write(json.dumps(entries, sort_keys=True, indent=2) + "\n")
@@ -1532,6 +1738,10 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     # the second event more than the first. See EXIT_* above.
     if failed_kills:
         return EXIT_KILL_FAILED
+    # After a failed kill, which is the sharper fact, and before anything
+    # that would read as "the trail has this": it does not.
+    if unrecorded:
+        return EXIT_UNRECORDED
     # A new ACTIONABLE finding fails the unit so `systemctl --failed` surfaces
     # it. A standing one does not, or one months-old finding fails the unit
     # forever and the unit stops being a signal anyone reads -- and neither

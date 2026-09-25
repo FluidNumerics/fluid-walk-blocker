@@ -63,11 +63,12 @@ owned by whoever unpacked it -- that is the workflow, and refusing it was
 considered and rejected (ADR-0006).
 
 `--system` and `--system --dry-run` make the SAME checks, from the
-same `preflight()`: the arguments are the compiled literals, the six
-root-write locations sit in a trusted chain (and the hook files are plain
-root-owned regular files), the audit directory is usable and not writable
-beyond root, the prefix is reachable by the users Layer 1 exists for, the
-prefix is not somebody else's populated directory, and the parent the
+same `preflight()`: the arguments are the compiled literals, the reader
+group resolves and every listed service group is proven to hold no person
+(ADR-0025), the six root-write locations sit in a trusted chain (and the
+hook files are plain root-owned regular files), the audit directory is
+usable and not writable beyond root, the prefix is reachable by the users
+Layer 1 exists for, the prefix is not somebody else's populated directory, and the parent the
 payload snapshot is staged under is a directory in a trusted chain. The
 contract is that reading the dry run is enough -- the real install must
 not refuse what the dry run accepted. Where the dry run runs unprivileged
@@ -81,9 +82,11 @@ import argparse
 import atexit
 import collections
 import errno
+import grp
 import hashlib
 import json
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -122,6 +125,22 @@ DEFAULT_PREFIX = '/usr/local/lib/walk-blocker'  # GENERATED from site.toml:insta
 DEFAULT_UNIT_DIR = '/etc/systemd/system'  # GENERATED from site.toml:install.unit_dir
 DEFAULT_SPOOL_DIR = '/var/log/walk-blocker'  # GENERATED from site.toml:install.spool_dir
 DEFAULT_AUDIT_FILENAME = 'searchguard-audit.jsonl'  # GENERATED from site.toml:install.audit_filename
+
+# Who may read the trail, and which service groups may hold write on a spool
+# ANCESTOR (ADR-0025). NAMES, compiled: a gid means a different group on a
+# different node, so the numbers are read here, at deploy and in the dry run,
+# from the node's own NSS -- never by the reaper or the shim, and never on a
+# poll. That read is node state, like an `lstat`, not configuration
+# (ADR-0013): nothing on the node chooses which groups these are.
+DEFAULT_SPOOL_GROUP = 'wbaudit'  # GENERATED from site.toml:install.spool_group
+TRUSTED_GROUPS = ()  # GENERATED from site.toml:install.trusted_groups
+
+# Where "human" is defined. Not a site value and not an argument: it is the
+# file `useradd` and `groupadd` allocate from, so the ranges it names are the
+# node's own answer to which uids are people. A module constant, so a test
+# moves it the way it moves the path constants; `resolve_trusted_groups()`
+# also takes it as an argument.
+LOGIN_DEFS = "/etc/login.defs"
 
 # Where stage_payload() puts its snapshot. NOT tempfile's default, which
 # comes from TMPDIR: an environment variable would decide the parent, so a
@@ -303,7 +322,8 @@ Documentation=file://{prefix}/README.md
 Type=oneshot
 # Reconcile Layer 1 first, so a tool installed today is wrapped today, a
 # tool removed today stops being shadowed, a hook block a package upgrade
-# took is reported, and the audit directory's mode is re-asserted.
+# took is reported, and the audit directory's mode and group are
+# re-asserted.
 #
 # `-` and a bounded `timeout`, and neither is decoration. systemd runs
 # ExecStart only after every ExecStartPre WITHOUT a `-` exits successfully,
@@ -330,13 +350,16 @@ ExecStartPre=-{timeout} --kill-after={kill_after} {relink_timeout} {sh} {prefix}
 # NOT `-` prefixed, and that asymmetry is the point: the reaper's own exit
 # status has to reach the unit.
 ExecStart={python3} {prefix}/reaper.py --report --spool {spool}
-# FOUR exit codes, and three of them fail the unit:
+# FIVE exit codes, and four of them fail the unit:
 #
 #   0  nothing new, or nothing new that anyone could act on
 #   1  a new ACTIONABLE finding
 #   2  BLIND: no user slice, or /proc unreadable. The tool cannot see.
 #   3  under --kill only: a kill was attempted and the process is not
 #      known to be gone. Recurs every poll it recurs; never latched.
+#   4  UNRECORDED: the spool failed the reaper's check, or a write into it
+#      failed. The findings are in this unit's journal and nowhere else;
+#      no kill was sent. Recurs every poll it recurs.
 #
 # A non-zero exit already fails a Type=oneshot unit, and `SuccessExitStatus=`
 # is ADDITIVE to a success set that always contains 0 -- so the next line
@@ -615,22 +638,34 @@ def system_preview(args, env=None):
     print("# over a payload it could not make root-owned -- the systemd unit")
     print("# runs shim/install.sh as root on every poll. See ADR-0004.")
     print()
-    print("# The audit directory is created root-owned and world-READABLE,")
-    print("# before install.sh runs and again on every poll:")
-    print("#   install -d -m 0755 %s" % shlex.quote(spool))
-    print("# 0755, not 0750: ADR-0004 requires the trail not be WRITABLE by a")
-    print("# monitored account, which root ownership and no group/other w")
-    print("# carry. Unreadable was never the decision, and it would hide the")
-    print("# trail from the account that has to decide --kill (ADR-0012).")
-    repairs = spool_mode_repairs(spool)
+    gid, _why = resolve_spool_group(DEFAULT_SPOOL_GROUP)
+    print("# The audit directory is root:%s %05o -- writable by root alone,"
+          % (DEFAULT_SPOOL_GROUP, SPOOL_DIR_MODE))
+    print("# readable by that group and nobody else -- and its files %04o,"
+          % SPOOL_FILE_MODE)
+    print("# taking the group from the setgid bit (ADR-0025). Created before")
+    print("# install.sh runs, re-asserted by the relink on every poll:")
+    print("#   mkdir %s   # only if absent; mkdir never follows a link"
+          % shlex.quote(spool))
+    print("#   then, on an fd opened O_NOFOLLOW|O_DIRECTORY and checked to be")
+    print("#   root's directory: fchown 0:%s, fchmod %05o"
+          % (gid if gid is not None else "<unresolved>", SPOOL_DIR_MODE))
+    print("#   and write %s inside it, root:%s %04o: the relink and the"
+          % (SPOOL_MARKER, DEFAULT_SPOOL_GROUP, SPOOL_FILE_MODE))
+    print("#   reaper write only into a spool that carries it, and never")
+    print("#   create it -- that is this installer's alone (ADR-0025).")
+    print("# Not `install -d`: GNU install follows a symlinked leaf. Nobody")
+    print("# outside the group reads the trail -- including a user whose own")
+    print("# process is in a record -- and a monitored account still cannot")
+    print("# write it (ADR-0004).")
+    repairs = spool_mode_repairs(spool, gid)
     if repairs:
-        print("# Spool files this install will tighten -- a DEFAULT ACL on the")
-        print("# audit directory suppresses the umask at file creation, so a")
-        print("# file written there can land group-writable no matter what")
-        print("# umask the writer ran under:")
-        for path, mode in repairs:
-            print("#   chmod go-w %s   # currently %04o"
-                  % (shlex.quote(path), mode))
+        print("# Spool state this install will REPAIR rather than refuse --")
+        print("# read scope only, each through a no-follow open:")
+        for path, mode, have_gid, want in repairs:
+            print("#   %s: gid %d mode %04o -> gid %s mode %04o"
+                  % (shlex.quote(path), have_gid, mode,
+                     gid if gid is not None else "<unresolved>", want))
         print()
     print("# And the root-run reaper, as a system timer under %s. The two" % args.unit_dir)
     print("# units below are rendered from the same constants the install writes:")
@@ -699,7 +734,8 @@ def canonical_prefix(prefix):
                   os.path.normpath(os.path.abspath(prefix))) or "/"
 
 
-def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True):
+def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True,
+               trusted_gids=()):
     """Why `path` is not a trusted directory for root to execute out of, or None.
 
     `sticky_is_enough` is the difference between an ancestor and the prefix
@@ -708,6 +744,13 @@ def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True):
     the PREFIX it is not, because the danger there is others creating
     entries -- any user could plant a payload marker to authorize a root
     `rm -rf` of a sibling.
+
+    `trusted_gids` is ADR-0025's one loosening, and it is narrow on purpose:
+    a GROUP write bit is accepted when the directory's group is one the site
+    listed and `resolve_trusted_groups()` proved holds no human account. An
+    OTHER write bit is never accepted on its strength, and the default is
+    empty, so every caller but the spool chain's ancestors keeps ADR-0004's
+    rule unchanged. A seam like `trusted_uids`, not a gid substitution.
     """
     try:
         info = os.lstat(path)
@@ -718,6 +761,8 @@ def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True):
     if info.st_uid not in trusted_uids:
         return "owned by uid %d" % info.st_uid
     mode = info.st_mode & 0o7777
+    if (info.st_mode & 0o022) == 0o020 and info.st_gid in trusted_gids:
+        return None
     if info.st_mode & 0o022:
         if sticky_is_enough and (info.st_mode & stat.S_ISVTX):
             return None
@@ -731,7 +776,7 @@ def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True):
     return None
 
 
-def untrusted_prefix_chain(prefix, trusted_uids=(0,)):
+def untrusted_prefix_chain(prefix, trusted_uids=(0,), trusted_gids=()):
     """Every directory from `/` down to `prefix` that root should not trust.
 
     Checking the payload is not enough: if any ancestor of the prefix is
@@ -748,6 +793,11 @@ def untrusted_prefix_chain(prefix, trusted_uids=(0,)):
     `/` are legitimately root-owned, so swapping root for the test user the
     way `unowned_by`'s tests do would flag the whole chain. Tests pass "root
     or me"; production passes the default, root alone.
+
+    `trusted_gids` applies to STRICT ancestors only -- never to `prefix`
+    itself, whatever it names (ADR-0025). Production passes it from one
+    place, the spool entry of `validate_root_write_paths()`; the prefix,
+    staging, unit and hook chains keep the empty default.
     """
     bad = []
     target = canonical_prefix(prefix)
@@ -772,7 +822,8 @@ def untrusted_prefix_chain(prefix, trusted_uids=(0,)):
             # nobody else can write at all.
             if deepest_existing is not None:
                 why = _untrusted(deepest_existing, trusted_uids,
-                                 sticky_is_enough=False)
+                                 sticky_is_enough=False,
+                                 trusted_gids=trusted_gids)
                 if why:
                     bad.append((deepest_existing,
                                 "%s, and %s does not exist yet, so the name "
@@ -780,7 +831,9 @@ def untrusted_prefix_chain(prefix, trusted_uids=(0,)):
                                 % (why, walked)))
             break
         why = _untrusted(walked, trusted_uids,
-                         sticky_is_enough=(walked != target))
+                         sticky_is_enough=(walked != target),
+                         trusted_gids=(trusted_gids if walked != target
+                                       else ()))
         if why:
             # Keyed off the message, not a second stat: `walked` may be a
             # dangling symlink now that lexists() lets those through, and
@@ -791,6 +844,204 @@ def untrusted_prefix_chain(prefix, trusted_uids=(0,)):
             bad.append((walked, why))
         deepest_existing = walked
     return bad
+
+
+# --------------------------------------------------------------------------
+# groups: who reads the trail, and which service groups may hold a spool
+# ancestor (ADR-0025)
+# --------------------------------------------------------------------------
+
+# The three values "human" is decided from. All three or nothing: a default
+# for a missing one would be this script guessing the node's allocation
+# policy, and the guess is the thing the check exists to replace.
+LOGIN_DEFS_KEYS = ("UID_MIN", "UID_MAX", "GID_MIN")
+
+# What the member check can and cannot see, said the same way by every
+# refusal that rests on it. It is a claim about what NSS enumerated at the
+# moment this ran, and the refusal has to say so rather than let "no human
+# member" read as a property of the group for all time.
+MEMBER_CHECK_LIMIT = (
+    "  What the member check claims: no account NSS enumerates at deploy "
+    "time -- the\n  group's `gr_mem`, and every account `getpwall()` lists "
+    "with it as primary group --\n  has a uid in [UID_MIN, UID_MAX] from "
+    "%s, and the group's gid is below\n  GID_MIN. What it does not: a "
+    "directory-service account NSS does not enumerate is\n  not seen, and "
+    "membership can change after this runs. GID_MIN narrows that gap\n  "
+    "without closing it (ADR-0025).\n")
+
+
+def _login_defs_number(text):
+    """`text` read the way shadow-utils reads a login.defs number: C
+    `strtol` with base 0, so `0x` is hex and a leading `0` is octal. Python's
+    `int(text, 0)` rejects `010` outright, which would turn an octal value
+    into "missing" -- failing closed, but for the wrong reason."""
+    lowered = text.lower()
+    if lowered.startswith("0x"):
+        return int(text[2:], 16)
+    if len(text) > 1 and text.startswith("0"):
+        return int(text[1:], 8)
+    return int(text, 10)
+
+
+def read_login_defs(path):
+    """{key: int} for whichever of LOGIN_DEFS_KEYS `path` sets.
+
+    The last assignment wins, as it does for the tools that allocate from
+    this file. A value that does not parse REMOVES the key rather than
+    keeping an earlier one: the file's own final word is unreadable, so the
+    key is treated as unset and the caller fails closed. Raises OSError when
+    the file cannot be read.
+    """
+    found = {}
+    with open(path) as handle:
+        for line in handle:
+            fields = line.split("#", 1)[0].split()
+            if len(fields) < 2 or fields[0] not in LOGIN_DEFS_KEYS:
+                continue
+            try:
+                found[fields[0]] = _login_defs_number(fields[1])
+            except ValueError:
+                found.pop(fields[0], None)
+    return found
+
+
+def resolve_spool_group(name, getgrnam=None):
+    """(gid, None) for the reader group, or (None, reason).
+
+    The reader group is NOT member-checked: its members are the people who
+    read the trail, and who they are is the site's decision. It only has to
+    exist, because the spool is created with it and a name that does not
+    resolve would leave the trail with no reader group at all.
+    """
+    getgrnam = grp.getgrnam if getgrnam is None else getgrnam
+    try:
+        return getgrnam(name).gr_gid, None
+    except KeyError:
+        return None, "it does not resolve to a group on this node"
+
+
+def resolve_trusted_groups(names, login_defs=None, getgrnam=None,
+                           getpwnam=None, getpwall=None):
+    """(accepted gids, [(name, reason), ...]) for `[install].trusted_groups`.
+
+    A listed group's write bit is accepted on a spool ANCESTOR only when
+    this proves the group holds no person (ADR-0025). "Person" is a uid in
+    [UID_MIN, UID_MAX] from login.defs -- the range `useradd` allocates
+    ordinary accounts from -- and a group is refused when:
+
+    * it does not resolve;
+    * its gid is at or above GID_MIN, the range `groupadd` allocates to
+      ordinary groups: a service group is allocated below it;
+    * a name in its `gr_mem` does not resolve, since whether an account
+      nobody can look up is a person cannot be decided;
+    * a supplementary member (`gr_mem`) has a human uid;
+    * an account whose PRIMARY gid it is has a human uid -- `gr_mem` does
+      not list those, which is the easy half of the check to forget.
+
+    Every reason is collected, not the first, so one run names everything.
+    An empty `names` reads nothing at all: a site that lists no group does
+    not depend on login.defs being parseable.
+
+    PermissionError propagates, so the caller can tell "this user may not
+    read the file" (a check an unprivileged dry run could not make) from
+    "the file says nothing usable" (a refusal). Any other OSError is a
+    refusal of every name: without the file there is no definition of
+    human, and guessing one is the thing this replaces.
+
+    The login.defs path and the three NSS functions are arguments, and the
+    seam: `None` means the node's own.
+    """
+    names = tuple(names)
+    if not names:
+        return (), []
+    login_defs = LOGIN_DEFS if login_defs is None else login_defs
+    getgrnam = grp.getgrnam if getgrnam is None else getgrnam
+    getpwnam = pwd.getpwnam if getpwnam is None else getpwnam
+    getpwall = pwd.getpwall if getpwall is None else getpwall
+    try:
+        defs = read_login_defs(login_defs)
+    except PermissionError:
+        raise
+    except OSError as exc:
+        return (), [(name, "cannot decide who is a person: %s could not be "
+                           "read (%s)" % (login_defs, exc.strerror))
+                    for name in names]
+    missing = [key for key in LOGIN_DEFS_KEYS if key not in defs]
+    if missing:
+        return (), [(name, "cannot decide who is a person: %s sets no "
+                           "usable %s, and a default would be a guess about "
+                           "this node" % (login_defs, " or ".join(missing)))
+                    for name in names]
+    uid_min, uid_max, gid_min = (defs["UID_MIN"], defs["UID_MAX"],
+                                 defs["GID_MIN"])
+
+    def human(uid):
+        # BOTH bounds. `nobody` sits above UID_MAX on the distributions this
+        # runs on, and counting it as a person would refuse every service
+        # group that happens to list it.
+        return uid_min <= uid <= uid_max
+
+    accepted, refusals = [], []
+    accounts = None
+    for name in names:
+        try:
+            group = getgrnam(name)
+        except KeyError:
+            refusals.append((name, "does not resolve to a group on this node"))
+            continue
+        why = []
+        if group.gr_gid >= gid_min:
+            why.append("gid %d is at or above GID_MIN %d, the range ordinary "
+                       "groups are allocated from" % (group.gr_gid, gid_min))
+        for member in group.gr_mem:
+            try:
+                account = getpwnam(member)
+            except KeyError:
+                why.append("member %r does not resolve, so whether it is a "
+                           "person cannot be decided" % member)
+                continue
+            if human(account.pw_uid):
+                why.append("member %r has uid %d, inside [UID_MIN %d, "
+                           "UID_MAX %d]" % (member, account.pw_uid, uid_min,
+                                            uid_max))
+        if accounts is None:
+            accounts = list(getpwall())
+        for account in accounts:
+            if account.pw_gid == group.gr_gid and human(account.pw_uid):
+                why.append("account %r has it as its primary group and uid "
+                           "%d, inside [UID_MIN %d, UID_MAX %d]"
+                           % (account.pw_name, account.pw_uid, uid_min,
+                              uid_max))
+        if why:
+            refusals.extend((name, reason) for reason in why)
+        else:
+            accepted.append(group.gr_gid)
+    return tuple(accepted), refusals
+
+
+def write_spool_group_refusal(name, reason, out=None):
+    """The reader group does not resolve. Its own heading, so it is not
+    read as a path refusal: nothing about the filesystem is wrong yet."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing spool_group=%s: %s.\n"
+        "  The spool is created with this group as its one reader group, so "
+        "without it\n  the trail would have none. Who is in the group is the "
+        "site's decision and is\n  not audited here; the human-member check "
+        "applies to trusted_groups, not to\n  this group.\n" % (name, reason))
+    out.write(MEMBER_CHECK_LIMIT % LOGIN_DEFS)
+
+
+def write_trusted_groups_refusal(refusals, out=None):
+    """A listed service group that could not be proven free of people."""
+    out = sys.stderr if out is None else out
+    out.write(
+        "deploy.py: refusing trusted_groups: a listed group's write bit on "
+        "a spool ancestor\n  is accepted only for a group proven to hold no "
+        "person, and these were not:\n")
+    for name, reason in refusals:
+        out.write("  %s: %s\n" % (name, reason))
+    out.write(MEMBER_CHECK_LIMIT % LOGIN_DEFS)
 
 
 def ownership_commands(prefix):
@@ -832,10 +1083,14 @@ def untraversable_for_users(prefix):
     an unreachable directory on PATH and Layer 1 is silently absent for
     everyone it exists for. The same shape as a 0700 payload, one level up.
 
-    Applies to the prefix and to the SPOOL's chain: ADR-0012 records that
-    the audit trail must be readable by the people who have to decide
-    `--kill`. The unit directory stays out: it is the distribution's 0755
-    and this installer does not own it.
+    Applies to the prefix and to the SPOOL's ancestors. The trail's readers
+    are the members of `[install].spool_group` -- ordinary accounts, among
+    them whoever has to decide `--kill` -- and a group's read bit on the
+    spool is worth nothing to someone who cannot traverse the directories
+    above it, so every ancestor still needs `o+x` (ADR-0025). The spool
+    itself is `02750` by decision and is not judged here. The unit
+    directory stays out: it is the distribution's 0755 and this installer
+    does not own it.
     """
     bad = []
     walked = os.sep
@@ -876,61 +1131,267 @@ def _classify_unowned(code):
     return _UNOWNED_CLASSES.get(code, "unclassified")
 
 
-def installer_owned_spool_files(spool):
-    """The files in the spool that THIS INSTALLER writes, or whose writer it
-    installs. Their mode is the installer's to assert, exactly as the spool
-    directory's own mode is -- and for the identical reason
-    audit_dir_blockers() excludes the spool's own mode from the traversal
-    check: refusing to install because one of these is wrong turns the state
-    this code exists to correct into a refusal to correct it.
+# The spool's own mode and its files' (ADR-0025). The directory is setgid so
+# every file created in it takes the reader group without anybody choosing
+# it per write: a per-write `chgrp` would put an NSS lookup into Layer 2 on
+# every poll, and the reaper resolves no names by design.
+SPOOL_DIR_MODE = 0o2750
+SPOOL_FILE_MODE = 0o640
 
-    A spool carrying a DEFAULT ACL suppresses the umask at file creation, so
-    a file written there can land group-writable whatever umask the writer
-    ran under. reaper.py chmods both files it writes, so this is the second
-    line of defence, not the only one -- but the ACL applies to any file
-    created there, including one written by a build older than that fix. The
-    `.tmp` and the `.1` rotation are on the list for that reason: no call
-    writes either name deliberately, and either can be orphaned at the wrong
-    mode by an older build.
+# The files in the spool that THIS INSTALLER writes, or whose writer it
+# installs, by NAME. Their mode and group are the installer's to assert,
+# exactly as the spool directory's own are; nothing else in the directory is
+# -- a file somebody else put there is not this installer's to widen to a
+# group, and not its to narrow either.
+#
+# A spool carrying a DEFAULT ACL suppresses the umask at file creation, so a
+# file written there can land group-writable whatever umask the writer ran
+# under. The writers set their own modes, so this is the second line of
+# defence -- but an older build's file keeps whatever it was given. The
+# `.tmp`, the `.1` rotation and the relink's `.new` are on the list for that
+# reason: each can be orphaned at the wrong mode.
+# The spool's identity (ADR-0025), named in the style of PAYLOAD_MARKER. A
+# root-owned regular file INSIDE the spool, written by this installer and by
+# nothing else: the relink and the root reaper write into a spool, or chmod
+# and chgrp it, only when it carries one. It travels with the real spool
+# when somebody renames the spool aside, and a root-owned directory renamed
+# into the spool's name does not have it -- which is what stops a group that
+# can write a spool ancestor from pointing root's writes at a sibling. The
+# relink never creates it; this installer creates it, on a fresh spool and
+# on one that predates it. install.sh and reaper.py carry the same literal,
+# and a test pins that the three agree.
+SPOOL_MARKER = ".walk-blocker-spool"
+
+INSTALLER_OWNED_SPOOL_NAMES = (
+    SPOOL_MARKER,                   # the spool's identity, above
+    "reaper-state.json",            # Layer 2's latch
+    "reaper-state.json.tmp",        # ...and the latch's write-and-rename
+    "reaper-audit.jsonl",           # Layer 2's trail
+    "reaper-audit.jsonl.1",         # ...and its one rotation
+    "uncovered-mounts.state",       # the relink's memory (ADR-0019)
+    "uncovered-mounts.state.new",   # ...and its write-and-rename
+)
+
+
+def installer_owned_spool_files(spool):
+    """Every installer-owned name under `spool`, Layer 1's audit file first.
+
+    Refusing to install because one of these is wrong turns the state this
+    code exists to correct into a refusal to correct it, for the identical
+    reason audit_dir_blockers() excludes the spool's own mode from the
+    traversal check.
     """
     if not spool or spool == os.sep:
         return ()
-    return tuple(os.path.join(spool, name) for name in (
-        DEFAULT_AUDIT_FILENAME,       # Layer 1's trail
-        "reaper-state.json",          # Layer 2's latch
-        "reaper-state.json.tmp",      # ...and the latch's write-and-rename
-        "reaper-audit.jsonl",         # Layer 2's trail
-        "reaper-audit.jsonl.1",       # ...and its one rotation
-    ))
+    return tuple(os.path.join(spool, name) for name in
+                 (DEFAULT_AUDIT_FILENAME,) + INSTALLER_OWNED_SPOOL_NAMES)
 
 
-def spool_mode_repairs(spool):
-    """(path, mode) for installer-owned spool files that are too permissive.
+def _spool_dir_repairable(info, uid):
+    """Whether the spool directory's state is one the install REPAIRS.
+
+    Read scope only: the right owner, no group or other write, no setuid --
+    so what is wrong is the group, the read bits, or a missing setgid, and
+    `fchown` plus `fchmod` fixes it. Anything writable beyond its owner, or
+    setuid, is a refusal instead (`audit_dir_blockers()`), because repairing
+    it would hide that somebody could have rewritten the trail.
+    """
+    return (stat.S_ISDIR(info.st_mode) and info.st_uid == uid
+            and not info.st_mode & (0o022 | stat.S_ISUID))
+
+
+def _spool_file_repairable(info, uid):
+    """The same question for an installer-owned file: a regular file with
+    the right owner and no setuid or setgid bit. Its group, read bits and
+    group or other WRITE are all this installer's to set. Setid on a file is
+    still a refusal, and a link or a non-regular entry keeps its class."""
+    return (stat.S_ISREG(info.st_mode) and info.st_uid == uid
+            and not info.st_mode & (stat.S_ISUID | stat.S_ISGID))
+
+
+def spool_mode_repairs(spool, gid=None, uid=0):
+    """(path, mode, gid, wanted mode) for spool state the install repairs.
 
     ONE function, called by audit_dir_blockers() to decide what not to refuse
     over and by both install and preview to decide what to advertise -- so a
-    file cannot be a blocker in the preview and a chmod in the install. Not
+    path cannot be a blocker in the preview and a repair in the install. Not
     a keyword argument on audit_dir_blockers(): a caller that forgets the
     keyword gets the regression back silently.
 
-    Too permissive ONLY. A file that is too restrictive is not repaired here
-    and not refused either -- the same asymmetry the directory has.
+    The repairs are READ SCOPE (ADR-0025): the spool directory at `0755` or
+    `0750`, or with a group other than `gid`, becomes `02750` with the
+    group; an installer-owned file at `0644`, or group-writable, or with the
+    wrong group, becomes `0640` with the group. With `gid` None the group is
+    not compared, which is all audit_dir_blockers() needs.
+
+    lstat throughout, and a symlink is never a repair: the repair opens with
+    O_NOFOLLOW and would refuse it anyway, and `symlink` is its own refusal
+    class. `uid` is the owner the install asserts -- root, and a seam.
     """
     repairs = []
+    try:
+        info = os.lstat(spool)
+    except OSError:
+        return repairs
+    if not _spool_dir_repairable(info, uid):
+        return repairs
+    mode = stat.S_IMODE(info.st_mode)
+    if mode != SPOOL_DIR_MODE or (gid is not None and info.st_gid != gid):
+        repairs.append((spool, mode, info.st_gid, SPOOL_DIR_MODE))
     for path in installer_owned_spool_files(spool):
         try:
             info = os.lstat(path)
         except OSError:
             continue
-        # lstat, and skip a symlink: chmod would follow it and change the
-        # mode of whatever it points at. That case stays a blocker, and
-        # `symlink` is already its own refusal class with its own remedy.
-        if stat.S_ISLNK(info.st_mode):
+        if not _spool_file_repairable(info, uid):
             continue
         mode = stat.S_IMODE(info.st_mode)
-        if mode & (stat.S_IWGRP | stat.S_IWOTH):
-            repairs.append((path, mode))
+        if mode != SPOOL_FILE_MODE or (gid is not None and info.st_gid != gid):
+            repairs.append((path, mode, info.st_gid, SPOOL_FILE_MODE))
     return repairs
+
+
+class SpoolRefused(Exception):
+    """The spool is not the directory this install may write into."""
+
+
+def _open_spool_dir(spool, uid):
+    """An fd on the spool, opened WITHOUT following a link and proven to be
+    a directory owned by `uid`. Everything root writes into the spool goes
+    through this fd, so a name swapped after the check cannot redirect it:
+    the fd holds the inode, not the path."""
+    try:
+        fd = os.open(spool, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                     | os.O_CLOEXEC)
+    except OSError as exc:
+        # ELOOP for a symlink, ENOTDIR for anything else that is not a
+        # directory: either way there is no directory here to write into.
+        raise SpoolRefused("%s could not be opened as a directory without "
+                           "following a link: %s" % (spool, exc.strerror))
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+        os.close(fd)
+        raise SpoolRefused("%s is not a directory owned by uid %d (uid %d, "
+                           "mode %06o)" % (spool, uid, info.st_uid,
+                                           info.st_mode))
+    return fd
+
+
+def repair_spool(spool, gid, uid=0, dry_run=False, out=None):
+    """The one-time read-scope sweep, before the spool is judged.
+
+    Only what spool_mode_repairs() lists, and each entry is re-judged on the
+    fd it is repaired through: an entry that changed between the listing and
+    the open is skipped rather than repaired, and the blockers that run next
+    see it as whatever it now is. Every entry is opened relative to the
+    spool's fd, O_NOFOLLOW and O_NONBLOCK -- a link is refused by the open,
+    and a fifo planted under a trail's name cannot hang the install.
+    """
+    out = sys.stdout if out is None else out
+    repairs = spool_mode_repairs(spool, gid, uid=uid)
+    if dry_run:
+        for path, mode, have_gid, want in repairs:
+            out.write("would repair: %s from gid %d mode %04o to gid %d mode "
+                      "%04o, through a no-follow open\n"
+                      % (path, have_gid, mode, gid, want))
+        return
+    if not repairs:
+        return
+    try:
+        fd = _open_spool_dir(spool, uid)
+    except SpoolRefused:
+        # Nothing is written; audit_dir_blockers() is what names it.
+        return
+    try:
+        if _spool_dir_repairable(os.fstat(fd), uid):
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, SPOOL_DIR_MODE)
+        wanted = set(os.path.basename(p) for p in
+                     installer_owned_spool_files(spool))
+        for name in os.listdir(fd):
+            if name not in wanted:
+                continue
+            try:
+                entry = os.open(name, os.O_RDONLY | os.O_NOFOLLOW
+                                | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+            except OSError:
+                continue
+            try:
+                if _spool_file_repairable(os.fstat(entry), uid):
+                    os.fchown(entry, uid, gid)
+                    os.fchmod(entry, SPOOL_FILE_MODE)
+            finally:
+                os.close(entry)
+    finally:
+        os.close(fd)
+
+
+def create_spool(spool, gid, uid=0):
+    """Create the spool if it is absent, then assert `root:<gid> 02750`.
+
+    NOT `install -d`. GNU `install -d` follows a symlinked leaf, so a link
+    planted at the spool's name would have root create or chmod whatever it
+    points at. `mkdir` does not follow: an entry that appeared first makes
+    it fail with EEXIST, and the no-follow open below then judges that entry
+    as what it is. The mode and group are set on the fd, never on the path.
+
+    Raises SpoolRefused when the entry at the name is not a directory owned
+    by `uid`; nothing has been written to it.
+    """
+    if not os.path.lexists(spool):
+        previous_umask = os.umask(0o022)
+        try:
+            parent = os.path.dirname(spool)
+            if parent and not os.path.isdir(parent):
+                os.makedirs(parent, 0o755)
+            try:
+                os.mkdir(spool, 0o700)
+            except FileExistsError:
+                pass
+        finally:
+            os.umask(previous_umask)
+    fd = _open_spool_dir(spool, uid)
+    try:
+        # Group first, then mode: the order that is right whichever way the
+        # kernel treats a setgid directory on a group change.
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, SPOOL_DIR_MODE)
+        write_spool_marker(fd, gid, uid)
+    finally:
+        os.close(fd)
+
+
+def write_spool_marker(fd, gid, uid=0):
+    """Create or re-assert SPOOL_MARKER inside the spool whose fd is `fd`.
+
+    Relative to the fd and O_NOFOLLOW, so a link at the marker's name is
+    refused rather than followed, and fstat-ed, so a fifo or a file somebody
+    else owns under that name refuses too (SpoolRefused). This is the
+    migration for a spool that predates the marker, as well as the first
+    creation: the entry at the spool's name has just been proven to be a
+    directory owned by `uid`, which is the only judgement this installer can
+    make of an existing spool, and the operator reading the dry run is the
+    other half of it.
+    """
+    try:
+        entry = os.open(SPOOL_MARKER, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+                        | os.O_NONBLOCK | os.O_CLOEXEC, SPOOL_FILE_MODE,
+                        dir_fd=fd)
+    except OSError as exc:
+        raise SpoolRefused("the spool marker %s could not be written without "
+                           "following a link: %s" % (SPOOL_MARKER, exc.strerror))
+    try:
+        info = os.fstat(entry)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+            raise SpoolRefused("the spool marker %s is not a regular file owned "
+                               "by uid %d" % (SPOOL_MARKER, uid))
+        os.fchown(entry, uid, gid)
+        os.fchmod(entry, SPOOL_FILE_MODE)
+        os.ftruncate(entry, 0)
+        os.write(entry, ("walk-blocker spool, written by deploy.py %s\n"
+                         % __version__).encode("ascii"))
+    finally:
+        os.close(entry)
 
 
 # `stat`'s type predicates, in the order a spool is plausibly wrong: named
@@ -955,13 +1416,13 @@ def _not_a_directory_reason(path):
     if stat.S_ISLNK(info.st_mode):
         target = os.path.realpath(path)
         if not os.path.exists(path):
-            # Not "it would create the target": measured, GNU coreutils
-            # 8.32, `install -d` on a dangling link exits 1 with "cannot
-            # change permissions of ..." and creates nothing. The blocker is
-            # the same; what it costs is the install, mid-run.
-            return ("is a dangling symlink -> %s, and the install's "
-                    "`install -d` fails on it, which would abort the "
-                    "install after the timer had been stopped" % target)
+            # Not "it would create the target": the install creates the
+            # spool with `mkdir`, which fails on an existing link, and opens
+            # it O_NOFOLLOW, which refuses one. The blocker is the same;
+            # what it costs is the install, mid-run.
+            return ("is a dangling symlink -> %s, and the install never "
+                    "follows a link at the spool's name, so it would abort "
+                    "after the timer had been stopped" % target)
         return "is a symlink -> %s, which is not a directory" % target
     for predicate, name in _FILE_KINDS:
         if predicate(info.st_mode):
@@ -982,17 +1443,22 @@ def audit_dir_blockers(spool):
     -- carried in the data rather than re-derived from the path, because
     `unowned_by()` walks UNDER its root and can name a child of the spool.
 
-    THE MODE IS A REFUSAL GROUND IN ONE DIRECTION ONLY (ADR-0012):
+    THE MODE IS A REFUSAL GROUND IN ONE DIRECTION ONLY (ADR-0025):
 
-    * Too RESTRICTIVE -- 0750 -- is not a blocker. `install -d -m 0755`
-      asserts the mode and the relink re-asserts it every poll, so finding
-      it wrong is finding the thing about to be fixed. That is why the
-      traversal check runs over the spool's ANCESTORS and not the spool: an
-      ancestor is somebody else's directory and nothing here will fix it,
-      while the spool's own mode is this installer's to set.
-    * Too PERMISSIVE -- group- or other-writable, or setuid/setgid -- IS a
-      blocker, because ADR-0004's property is that the trail is not writable
-      by the account being monitored, and a 0777 directory plainly is.
+    * Wrong READ SCOPE -- `0755` or `0750`, the wrong group, a `0644`
+      trail -- is not a blocker. The install sets `root:<spool_group>
+      02750` and `0640` through a no-follow open, and the relink re-asserts
+      the directory every poll, so finding it wrong is finding the thing
+      about to be fixed (`spool_mode_repairs()` is the list). That is why
+      the traversal check runs over the spool's ANCESTORS and not the
+      spool: an ancestor is somebody else's directory and nothing here will
+      fix it, while the spool's own mode is this installer's to set.
+    * Too PERMISSIVE -- group- or other-writable, setuid, or setgid on
+      anything but the spool directory itself -- IS a blocker, because
+      ADR-0004's property is that the trail is not writable by the account
+      being monitored, and a 0777 directory plainly is. The spool's own
+      setgid bit is the decision, not a finding: it is how every file in it
+      takes the reader group.
 
     One class per reason `unowned_by()` can give, because they do not share
     a remedy: a `chown` does nothing for a mode, and a `chmod` does nothing
@@ -1017,14 +1483,14 @@ def audit_dir_blockers(spool):
     # the traversal arm drops the leaf on purpose (its mode is this
     # installer's to assert) and the ownership arm never runs unless the
     # leaf is a directory. So a spool that is a regular file, a fifo, or a
-    # link to either previewed CLEAN, and `install -d` in install.sh's
-    # assert_audit_dir then failed mid-install -- after the timer had
-    # already been disabled and stopped.
+    # link to either previewed CLEAN, and the spool's creation then failed
+    # mid-install -- after the timer had already been disabled and stopped.
     #
     # A dangling symlink is in this class deliberately rather than treated
-    # as absent: `install -d` follows it, so it would create the TARGET,
-    # somewhere this installer never judged and the reaper's trail is not
-    # where the units say it is. A symlink to a real DIRECTORY is not here,
+    # as absent. The `install -d` this used to be followed it and would have
+    # created the TARGET, somewhere this installer never judged; the
+    # no-follow create refuses it instead, which is the same abort one step
+    # later than this check. A symlink to a real DIRECTORY is not here,
     # because `unowned_by()` below already reports it as the `symlink`
     # class, with its own head and its own reason.
     if os.path.lexists(spool_canon) and not os.path.isdir(spool_canon):
@@ -1035,13 +1501,41 @@ def audit_dir_blockers(spool):
         # to run the installer. `permissive` only: every other class
         # (ownership, symlink, setuid, unreadable) still blocks on these
         # paths, because `chmod go-w` does not fix any of them.
-        repairable = set(path for path, _mode in spool_mode_repairs(spool))
+        repairable = set(path for path, _mode, _gid, _want
+                         in spool_mode_repairs(spool))
         for path, code, reason in unowned_by(spool):
             cls = _classify_unowned(code)
             if cls == "permissive" and path in repairable:
                 continue
+            if code == UNOWNED_SETUID and _is_spools_own_setgid(path,
+                                                                spool_canon):
+                continue
             bad.append((cls, path, reason))
+        # An installer-owned NAME that is a link is refused even when the
+        # link stays inside the spool, which `unowned_by()` accepts. Every
+        # writer opens these names O_NOFOLLOW, so such a link is not a
+        # redirect -- it is a trail that can never be written, and an
+        # install that left it would report into nothing on every poll.
+        for path in installer_owned_spool_files(spool):
+            if os.path.islink(path) and not any(
+                    bad_path == path for _c, bad_path, _r in bad):
+                bad.append(("symlink", path, "an installer-owned name is a "
+                            "symlink -> %s, which every writer refuses to "
+                            "follow" % os.path.realpath(path)))
     return bad
+
+
+def _is_spools_own_setgid(path, spool_canon):
+    """Whether a setid finding is exactly the spool directory's own setgid
+    bit -- setgid, a directory, the spool itself, and no setuid with it."""
+    if canonical_prefix(path) != spool_canon:
+        return False
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISGID
+            and not info.st_mode & stat.S_ISUID)
 
 
 # Per class: the sentence that says what went wrong, and the command that
@@ -1050,7 +1544,7 @@ def audit_dir_blockers(spool):
 _REFUSAL_HEADS = {
     "degenerate": "%r is not a usable spool for the reaper's state files",
     "not-a-directory": "it already exists and is not a directory, so "
-                       "`install -d` would fail and abort the install "
+                       "creating the spool would fail and abort the install "
                        "mid-way -- after the timer has already been "
                        "disabled and stopped",
     "traversal": "an ancestor of it cannot be traversed by an ordinary user, "
@@ -1061,8 +1555,9 @@ _REFUSAL_HEADS = {
     "permissive": "it is writable beyond root, so the account being "
                   "monitored could rewrite its own audit trail -- the one "
                   "property ADR-0004 rests on",
-    "setuid": "it carries a setuid or setgid bit, which has no business on "
-              "a trail root writes and everyone else only reads",
+    "setuid": "it carries a setuid or setgid bit -- setgid anywhere but on "
+              "the spool directory itself -- which has no business on a "
+              "trail root writes and one group only reads",
     "symlink": "it is reached through a symlink, so what root owns is the "
                "link and not what the reaper actually writes to -- neither "
                "chown nor chmod reaches through it",
@@ -1135,7 +1630,7 @@ PATH_KINDS = (
 )
 
 
-def validate_root_write_paths(args, attrs=None):
+def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
     """Check the filesystem STATE of every root-write path in `args`.
 
     Shared by install and uninstall, which is the point: the predecessor's
@@ -1148,6 +1643,13 @@ def validate_root_write_paths(args, attrs=None):
     is a symlink under a dotfile manager, is a fact about the machine at
     install time. A literal path is not a trusted path.
 
+    `spool_trusted_gids` reaches ONE chain, the spool's, and only its strict
+    ancestors (ADR-0025): a listed, human-free service group may hold write
+    on a directory above the spool. Every other entry here is judged with
+    root alone, which is what makes the loosening a narrowing rather than a
+    new default -- a caller that passed it everywhere would accept a
+    group-writable directory above the code root executes.
+
     Returns 0, or 6 to be returned by the caller.
     """
     for attr, kind in PATH_KINDS:
@@ -1157,7 +1659,9 @@ def validate_root_write_paths(args, attrs=None):
         setattr(args, attr, path)
 
         target = path if kind == "dir" else os.path.dirname(path)
-        chain = untrusted_prefix_chain(target)
+        chain = untrusted_prefix_chain(
+            target, trusted_gids=(spool_trusted_gids if attr == "spool_dir"
+                                  else ()))
         if chain:
             sys.stderr.write("deploy.py: refusing %s (%s): the path is not "
                              "trusted end to end.\n" % (attr, target))
@@ -1371,11 +1875,18 @@ def preflight(args, privileged, repair=None, out=None):
     manufactured out of the reader's uid -- and which the install refuses.
 
     `repair` is the install's one asymmetry, named here rather than
-    duplicated: it chmods its own spool files before judging them, because
-    their mode is the state this code exists to correct, where the preview
-    advertises the identical list from the identical function. It runs after
-    the paths are judged and before the audit directory is, exactly where
-    the install used to do it inline.
+    duplicated: it sets the read scope of the spool and its own files before
+    judging them, because that is the state this code exists to correct,
+    where the preview advertises the identical list from the identical
+    function. It runs after the paths are judged and before the audit
+    directory is, exactly where the install used to do it inline, and it is
+    handed the reader group's gid, resolved here.
+
+    The groups come first (ADR-0025): the reader group must resolve, and
+    every listed service group must be proven free of people, before the
+    spool chain can be judged with their gids. On success the two answers
+    are left on `args` as `spool_gid` and `spool_trusted_gids`, for the
+    install's own spool writes.
 
     Returns `(rc, checks)`: rc 0 to proceed, 6 to refuse, with any refusal
     already written to `out` by the same writer the other caller uses --
@@ -1404,6 +1915,41 @@ def preflight(args, privileged, repair=None, out=None):
         return 6, checks
     checks.append(Check("arguments", None, CHECK_OK))
 
+    # 0b. The groups (ADR-0025), before any path is judged, because the
+    #     spool chain's verdict depends on which gids are trusted. NSS and
+    #     login.defs are readable by anyone on an ordinary node, so this is
+    #     the SAME check in the dry run as in the install -- not an unknown
+    #     -- and a listed group with a person in it refuses both the same way.
+    #     Node state read at deploy, like an lstat; never on a poll.
+    spool_gid, why = resolve_spool_group(DEFAULT_SPOOL_GROUP)
+    if spool_gid is None:
+        write_spool_group_refusal(DEFAULT_SPOOL_GROUP, why, out=out)
+        checks.append(Check("spool_group", DEFAULT_SPOOL_GROUP,
+                            CHECK_BLOCKED, why))
+        return 6, checks
+    checks.append(Check("spool_group", DEFAULT_SPOOL_GROUP, CHECK_OK))
+    groups_unknown = False
+    try:
+        trusted_gids, refusals = resolve_trusted_groups(TRUSTED_GROUPS)
+    except PermissionError as exc:
+        checks.append(Check("trusted_groups", LOGIN_DEFS, CHECK_UNKNOWN,
+                            "%s: %s" % (LOGIN_DEFS, exc.strerror)))
+        if privileged:
+            return write_unknown_refusal(unknown_so_far(), out=out), checks
+        # Which gids are trusted is unknown, so the spool chain -- the one
+        # chain that depends on them -- is not judged below and is reported
+        # unknown instead. Judging it with root alone would refuse a tree
+        # the install might accept: a blocker made out of the reader's uid.
+        trusted_gids, refusals, groups_unknown = (), [], True
+    if refusals:
+        write_trusted_groups_refusal(refusals, out=out)
+        checks.append(Check("trusted_groups", None, CHECK_BLOCKED))
+        return 6, checks
+    if TRUSTED_GROUPS and not groups_unknown:
+        checks.append(Check("trusted_groups", None, CHECK_OK))
+    args.spool_gid = spool_gid
+    args.spool_trusted_gids = trusted_gids
+
     # 1. The six root-write locations: a trusted chain end to end, and for
     #    the three hook FILES the leaf's type and ownership as well. Scoped
     #    to the paths this process can actually inspect, so an unprivileged
@@ -1411,6 +1957,11 @@ def preflight(args, privileged, repair=None, out=None):
     #    all six.
     inspectable = []
     for attr, _kind in PATH_KINDS:
+        if attr == "spool_dir" and groups_unknown:
+            checks.append(Check("paths", getattr(args, attr), CHECK_UNKNOWN,
+                                "its chain depends on trusted_groups, which "
+                                "could not be resolved as this user"))
+            continue
         blind = unstattable_as_me(getattr(args, attr))
         if blind is None:
             inspectable.append(attr)
@@ -1419,7 +1970,8 @@ def preflight(args, privileged, repair=None, out=None):
                                 "%s: %s" % blind))
     if privileged and unknown_so_far():
         return write_unknown_refusal(unknown_so_far(), out=out), checks
-    if validate_root_write_paths(args, attrs=inspectable) != 0:
+    if validate_root_write_paths(args, attrs=inspectable,
+                                 spool_trusted_gids=trusted_gids) != 0:
         checks.append(Check("paths", None, CHECK_BLOCKED))
         return 6, checks
     checks.append(Check("paths", None, CHECK_OK))
@@ -1433,7 +1985,7 @@ def preflight(args, privileged, repair=None, out=None):
     # 2. The audit directory -- after the install has repaired the files
     #    whose mode is its own to assert.
     if repair is not None:
-        repair(spool)
+        repair(spool, spool_gid)
     blind = unstattable_as_me(spool)
     if blind is not None:
         checks.append(Check("spool", spool, CHECK_UNKNOWN, "%s: %s" % blind))
@@ -1781,15 +2333,16 @@ def system_execute(args, env=None):
         print("# pattern -- the only part of these commands a dry run cannot")
         print("# know. Everything else is what will run:")
 
-    def repair(spool):
-        # Repair before judging. These are this installer's own files and
-        # their mode is its to assert; the preview advertises the identical
-        # list from the identical function. audit_dir_blockers() already
-        # declines to refuse over them, so the order is belt and braces --
-        # but doing it first means the check runs against the state the
-        # operator will actually be left in.
-        for path, _mode in spool_mode_repairs(spool):
-            run(["chmod", "go-w", path], dry_run=args.dry_run, env=env)
+    def repair(spool, gid):
+        # Repair before judging. These are this installer's own directory
+        # and files, and their read scope is its to assert; the preview
+        # advertises the identical list from the identical function.
+        # audit_dir_blockers() already declines to refuse over them, so the
+        # order is belt and braces -- but doing it first means the check
+        # runs against the state the operator will actually be left in.
+        # Through fds, never paths: no root write into the spool follows a
+        # link (ADR-0025).
+        repair_spool(spool, gid, dry_run=args.dry_run)
 
     # Every check, from the function the dry run calls: an install that
     # refuses something the dry run accepted is a guardrail that fails
@@ -1925,12 +2478,33 @@ def system_execute(args, env=None):
 
     # The audit directory, explicitly and BEFORE install.sh. Left to whichever
     # of install.sh or the reaper's first write got there first, its mode was
-    # an artifact of ordering and umask; it is a recorded decision instead
-    # (ADR-0012). Ordering is load-bearing: install.sh re-asserts the same
-    # mode on every poll, so putting this after that call would make it dead
-    # code the day anyone reordered.
-    run(["install", "-d", "-m", "0755", spool],
-        dry_run=args.dry_run, env=env)
+    # an artifact of ordering and umask; it is a recorded decision instead:
+    # root:<spool_group> 02750 (ADR-0025). Ordering is load-bearing:
+    # install.sh re-asserts the same mode and group on every poll, so putting
+    # this after that call would make it dead code the day anyone reordered.
+    #
+    # Not `install -d`, which follows a symlinked leaf -- a spool ancestor a
+    # listed service group can write is exactly where a link could be
+    # planted. `create_spool()` makes it with `mkdir` and sets the mode on a
+    # no-follow fd.
+    if args.dry_run:
+        print("would create if absent, then assert through a no-follow fd: "
+              "%s 0:%d %05o" % (spool, args.spool_gid, SPOOL_DIR_MODE))
+        print("would write the spool marker through the same fd: %s 0:%d %04o"
+              % (os.path.join(spool, SPOOL_MARKER), args.spool_gid,
+                 SPOOL_FILE_MODE))
+    else:
+        try:
+            create_spool(spool, args.spool_gid)
+        except (SpoolRefused, OSError) as exc:
+            sys.stderr.write(
+                "deploy.py: could not create the audit directory %s: %s\n"
+                "  It passed its checks moments ago, so something changed it "
+                "since. Nothing\n  was written into it. No systemd unit was "
+                "written and no timer enabled; the\n  payload under %s is in "
+                "place. Re-run once the spool is a root-owned\n  directory "
+                "again.\n" % (spool, exc, args.prefix))
+            return 5
 
     # No path flags: install.sh carries the same literals, stamped from the
     # same site.toml by the same build. From the DEPLOYED copy, which is the
@@ -1987,7 +2561,9 @@ def system_execute(args, env=None):
     print("\ninstalled, report-only. There are TWO audit trails, and the")
     print("evidence for --kill needs both:")
     print("  tail %s" % os.path.join(spool, "reaper-audit.jsonl"))
-    print("      # Layer 2: what the reaper found, written as root")
+    print("      # Layer 2: what the reaper found, written as root, readable")
+    print("      # by root and the %s group alone (ADR-0025)"
+          % DEFAULT_SPOOL_GROUP)
     print("  journalctl -t walk-blocker -o json")
     print("      # Layer 1: escape-hatch overrides, and the reconcile's own")
     print("      # reports. An ordinary user cannot write %s,"

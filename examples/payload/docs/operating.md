@@ -300,10 +300,15 @@ account (ADR-0004):
   marker so a later install or uninstall knows the directory is its own;
 - the symlink farm under `<prefix>/bin`, one shim per wrapped name that
   resolves in `[install].tool_search_path`, plus `walk-job`;
-- `[install].spool_dir` at mode `0755`: writable by root alone, readable
-  by everyone, so the person who has to make the `--kill` decision can read
-  the trail (ADR-0012); the relink keeps `uncovered-mounts.state` there
-  too, its memory of which mounts it has reported (ADR-0019);
+- `[install].spool_dir` as `root:<spool_group> 02750`, its files `0640`:
+  writable by root alone, readable by the one group `[install].spool_group`
+  names, so the people who make the `--kill` decision can read the trail and
+  nobody else can (ADR-0025). It is created with `mkdir` and set through a
+  descriptor opened without following a link, never `install -d`, and it
+  carries `.walk-blocker-spool`, the root-owned marker that the relink and the
+  reaper require before they write into it as root. The relink
+  keeps `uncovered-mounts.state` there too, its memory of which mounts it has
+  reported (ADR-0019);
 - a hook block in each enabled shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
@@ -326,8 +331,17 @@ What it verifies, and refuses on:
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;
-- **the audit directory is `0755`**, asserted before `install.sh` runs. Too
-  restrictive is corrected; group- or other-writable is a refusal;
+- **the audit directory is `root:<spool_group> 02750`**, asserted before
+  `install.sh` runs. The wrong read scope — `0755`, `0750`, another group,
+  `0644` trail files — is repaired; group- or other-writable, setuid, or
+  setgid anywhere below the spool directory is a refusal;
+- **the groups.** `[install].spool_group` must resolve. Each group in
+  `[install].trusted_groups` must resolve, have a gid below `GID_MIN`, and
+  have no member — in `gr_mem` or by primary gid — with a uid in
+  `[UID_MIN, UID_MAX]` from `/etc/login.defs`; its write bit is then accepted
+  on the spool's strict ancestors and nowhere else. The check sees what NSS
+  enumerates at deploy time and no more, and the dry run makes it as an
+  ordinary user (ADR-0025);
 - **the hook files are plain, root-owned regular files**, not symlinks, not
   group-writable, in a trusted directory chain — they are read and
   rewritten `0644`, and sourced as root to verify the hook, so their owner
@@ -340,17 +354,18 @@ directory's mode, and reports each mount running on its default; the
 reconcile never fails, so a Layer 1 diagnosis cannot stop the Layer 2
 backstop (ADR-0008).
 
-After the install, as an unprivileged account, confirm two things
-ADR-0012 asks for:
+After the install, as an unprivileged member of `[install].spool_group`,
+confirm two things:
 
 ```sh
 stat <spool_dir>
 tail -n 1 <spool_dir>/reaper-audit.jsonl
 ```
 
-Both must succeed. If the trail is unreadable, the `--kill` decision is
-blocked on an access-control fact and nothing else in this runbook can be
-read.
+Both must succeed, and the `stat` must show `root:<spool_group>` and `2750`.
+If the trail is unreadable to the group, the `--kill` decision is blocked on
+an access-control fact and nothing else in this runbook can be read. An
+account outside the group is refused the `tail` by design (ADR-0025).
 
 ## 9. Measure the shim
 
@@ -413,8 +428,9 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 `starttime`, the uid, the `origin` label, `age_s`, `cpu_s`,
 `io_pressure_delta` and `stalling_slice` — and, on `opaque_traversal`
 alone, `d_polls`, the consecutive polls the process has been seen in D
-(ADR-0020). Read it as an unprivileged
-account; it is world-readable by decision. (`[install].audit_filename`
+(ADR-0020). Read it as a member of `[install].spool_group`; the trail is
+`0640`, readable by root and that group and nobody else, by decision
+(ADR-0025). (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account
 cannot append to a root-owned file.)
@@ -435,7 +451,10 @@ Three habits when reading it:
 - **Sort by `NEVER_KILL`.** `orphan_idle`, `opaque_traversal` and
   `unparsed_traversal` can never be acted on and exit the unit 0; a new
   `runaway_traversal`, `orphan_traversal` or `fanout_traversal` exits 1; a
-  `blind` record — no user slice, or `/proc` unreadable — exits 2. Under
+  `blind` record — no user slice, or `/proc` unreadable — exits 2; a spool
+  that fails the reaper's own check, or a write into it that fails, exits 4,
+  with every finding in the unit's journal and nothing written or signalled
+  (ADR-0025). Under
   `--kill` only, a kill that was attempted and left the process not known
   to be gone — an action of `signalled_but_wedged`, `signal_failed` or
   `kill_error` — exits 3, and does so on every poll it recurs, because each
@@ -462,7 +481,13 @@ It carries three kinds of record:
   recorded the same way, and only when they changed the outcome;
 - the **reconcile's reports**: `hook_check` when a hook block is missing or
   no longer fires, naming `[hooks.<shell>].package` as the likely conffile
-  actor; `audit_dir` when the spool's mode had to be created or corrected;
+  actor; `audit_dir` when the spool's mode or group had to be corrected
+  (`mode-corrected`, `group-corrected`), or when it was left alone because
+  it is `absent`, a `symlink`, `not-a-directory`, `owner-not-root`, or
+  `unmarked` — it lacks the `.walk-blocker-spool` marker `deploy.py` writes,
+  so it is not the spool `deploy.py` made (ADR-0025). Nothing is written into
+  such a spool, the reaper exits 4 until a deploy puts it right, and the
+  relink never creates the spool or its marker;
   `coverage_change` when the set of wrapped names changed; `relink_refused`
   when the relink stopped at one of its own checks;
 - one **`refused`** record per refusal, from the shim itself, carrying the
@@ -486,7 +511,7 @@ It carries three kinds of record:
   chosen. After a reboot every uncovered mount is named once more, so a
   volatile journal is not left without the line. What the relink currently
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
-  world-readable.
+  readable by the spool's group.
 
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used,
