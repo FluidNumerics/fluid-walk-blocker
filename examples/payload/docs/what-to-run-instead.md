@@ -90,5 +90,5 @@ Documentation: <https://docs.example.org/hpc/walk-blocker>
 
 Contact: hpc-help@example.org
 
-Rendered by walk-blocker 0.1.0 from this node's `site.toml`; the mount table
+Rendered by walk-blocker 0.2.0 from this node's `site.toml`; the mount table
 above is that file's `[[filesystems.mounts]]`, as built.
