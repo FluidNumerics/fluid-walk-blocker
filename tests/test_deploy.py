@@ -4677,3 +4677,70 @@ def test_uninstall_removes_the_dropin_and_revokes_its_gids(
         deploy.system_uninstall(args)
     assert ["rm", "-f", _dropin(args)] in calls
     assert deploy.journal_revoke_command({31337}, root) in calls
+
+
+@needs_acl
+def test_an_ungranted_journal_root_is_a_gap(tmp_path):
+    """The reader must traverse the root to reach this machine's directory,
+    so a grant on the directory and files alone is not a grant."""
+    root, machine_dir = _journal_tree(tmp_path)
+    gid = os.getgid()
+    _setfacl("-m", "g:%d:r-x,d:g:%d:r-x" % (gid, gid), machine_dir)
+    for name in os.listdir(machine_dir):
+        _setfacl("-m", "g:%d:r--" % gid, os.path.join(machine_dir, name))
+    gaps = deploy.journal_grant_gaps(gid, roots=(root,))
+    assert gaps and {path for path, _why in gaps} == {root}, gaps
+
+
+def test_an_unreadable_machine_id_is_a_gap_not_a_pass(tmp_path, monkeypatch):
+    """No machine id, no `%m` directory to prove the grant on -- which is not
+    the same as proving it."""
+    root, _machine_dir = _journal_tree(tmp_path)
+    monkeypatch.setattr(deploy, "MACHINE_ID_FILE", str(tmp_path / "absent"))
+    gaps = deploy.journal_grant_gaps(os.getgid(), roots=(root,))
+    assert [path for path, _why in gaps] == [str(tmp_path / "absent")], gaps
+
+
+def test_a_redeploy_with_the_grant_on_revokes_nothing(tmp_path, monkeypatch):
+    """The drop-in already names today's gid: nothing is stale, so nothing
+    is revoked -- a revoke there would strip the grant this deploy just
+    re-applied, and the gap check would then report it."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _journal_tree(tmp_path)
+    args = _args(tmp_path)
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(os.getgid()))
+    _granting(monkeypatch)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(args) == 0
+    assert not any(c[0] == "setfacl" for c in calls), calls
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_a_dropin_someone_else_owns_is_refused(tmp_path, monkeypatch, dry_run):
+    """The ownership half of the leaf check: the drop-in's gids decide what a
+    deploy revokes, so a file its owner can edit chooses that."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path, dry_run=dry_run)
+    os.makedirs(args.tmpfiles_dir)
+    dropin = _dropin(args)
+    with open(dropin, "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [deploy._unowned(root, deploy.UNOWNED_FOREIGN_UID,
+                                             "owned by uid 1000, not root")]
+        if root == dropin else [])
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(err):
+        assert deploy.system_execute(args) == 6
+    assert "journal drop-in" in err.getvalue() and "uid 1000" in err.getvalue()
+    assert not any(c[:2] == ["systemctl", "disable"] for c in calls)
