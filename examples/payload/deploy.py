@@ -149,6 +149,9 @@ JOURNAL_DROPIN = "walk-blocker-journal.conf"
 # journald's two storage roots, persistent and volatile. Not site values:
 # they are journald's, and tmpfiles skips a rule whose path is absent.
 JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
+# What tmpfiles expands `%m` to, and so the one directory under each root the
+# drop-in grants and the deploy checks.
+MACHINE_ID_FILE = "/etc/machine-id"
 
 # Where "human" is defined. Not a site value and not an argument: it is the
 # file `useradd` and `groupadd` allocate from, so the ranges it names are the
@@ -696,7 +699,8 @@ def system_preview(args, env=None):
               % DEFAULT_SPOOL_GROUP)
         print("# service and every user, not only walk-blocker's records -- by")
         print("# this drop-in, applied now and at every boot (ADR-0026). The")
-        print("# install then checks every journal file carries the grant:")
+        print("# install then checks every journal file in this machine's")
+        print("# journal directory carries the grant:")
         print("# --- %s ---" % dropin)
         print(render_journal_dropin(gid).rstrip("\n") if gid is not None
               else "# (not rendered: %s does not resolve)" % DEFAULT_SPOOL_GROUP)
@@ -2379,7 +2383,12 @@ def _acl_perm(path, name, gid):
 
 
 def _grant_gap(path, name, gid, want):
-    got = _acl_perm(path, name, gid)
+    try:
+        got = _acl_perm(path, name, gid)
+    except FileNotFoundError:
+        # journald rotated or vacuumed it since the listing. A file that no
+        # longer exists hides nothing from the group.
+        return None
     if got is None:
         return "no %s entry for gid %d" % (name.rsplit(".", 1)[-1], gid)
     perm, mask = got
@@ -2395,40 +2404,64 @@ def _rwx(bits):
                    for c, b in (("r", 4), ("w", 2), ("x", 1)))
 
 
+def _machine_id():
+    try:
+        with open(MACHINE_ID_FILE, encoding="ascii", errors="replace") as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
 def journal_grant_gaps(gid, roots=None):
-    """[(path, why)] for every journal directory and file that does NOT let
+    """[(path, why)] for each journal root, this machine's journal directory
+    under it, and every journal file in that directory, that does NOT let
     `gid` read it. Empty means the grant held everywhere it was looked for.
 
     Why this is checked rather than trusted: systemd-tmpfiles exits 0 over a
     line it skipped, so its status says nothing about whether the ACL
-    landed. And no journal directory at all is a gap, not a pass -- there is
-    nothing the group can read.
+    landed. And no journal directory for this machine is a gap, not a pass --
+    there is nothing the group can read.
+
+    This machine's directory only, which is what the drop-in's `%m` grants
+    and where this node's journald writes. A `remote/` from journal-remote,
+    or a directory an image was cloned with, is neither granted nor where
+    Layer 1's records land; checking it would fail every deploy.
     """
     roots = JOURNAL_ROOTS if roots is None else roots
+    machine = _machine_id()
+    if machine is None:
+        return [(MACHINE_ID_FILE, "unreadable, so there is no %m directory "
+                                  "to check")]
     gaps, seen = [], 0
     for root in roots:
         if not os.path.isdir(root) or os.path.islink(root):
             continue
-        dirs = [root] + sorted(
-            entry.path for entry in os.scandir(root)
-            if entry.is_dir(follow_symlinks=False))
-        for directory in dirs:
-            seen += 1
-            for name in (_ACL_ACCESS, _ACL_DEFAULT):
-                why = _grant_gap(directory, name, gid, _ACL_READ | _ACL_EXECUTE)
-                if why:
-                    gaps.append((directory, why))
-            if directory == root:
+        for name in (_ACL_ACCESS, _ACL_DEFAULT):
+            why = _grant_gap(root, name, gid, _ACL_READ | _ACL_EXECUTE)
+            if why:
+                gaps.append((root, why))
+        directory = os.path.join(root, machine)
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        try:
+            entries = sorted(os.scandir(directory), key=lambda e: e.name)
+        except FileNotFoundError:
+            continue
+        seen += 1
+        for name in (_ACL_ACCESS, _ACL_DEFAULT):
+            why = _grant_gap(directory, name, gid, _ACL_READ | _ACL_EXECUTE)
+            if why:
+                gaps.append((directory, why))
+        for entry in entries:
+            if (".journal" not in entry.name
+                    or not entry.is_file(follow_symlinks=False)):
                 continue
-            for entry in sorted(os.scandir(directory), key=lambda e: e.name):
-                if (".journal" not in entry.name
-                        or not entry.is_file(follow_symlinks=False)):
-                    continue
-                why = _grant_gap(entry.path, _ACL_ACCESS, gid, _ACL_READ)
-                if why:
-                    gaps.append((entry.path, why))
+            why = _grant_gap(entry.path, _ACL_ACCESS, gid, _ACL_READ)
+            if why:
+                gaps.append((entry.path, why))
     if not seen:
-        gaps.append((", ".join(roots), "no journal directory exists"))
+        gaps.append((", ".join(os.path.join(r, machine) for r in roots),
+                     "no journal directory for this machine exists"))
     return gaps
 
 

@@ -49,8 +49,11 @@ manages accounts, invisible to this deploy.
 ## Decision
 
 `[install].journal_readable` (default off) grants `[install].spool_group`
-read on the systemd journal. It covers every journal file under both of
-journald's storage roots, archived and per-user alike.
+read on the systemd journal. It covers both of journald's storage roots and,
+under each, this machine's directory (`%m`, from `/etc/machine-id`): every
+journal file there, archived and per-user alike. Other directories under a
+root, such as journal-remote's `remote/` or one an image was cloned with, are
+neither granted nor where this node's journald writes.
 
 The grant is a tmpfiles.d drop-in under `[install].tmpfiles_dir`, written by
 `deploy.py` and applied with `systemd-tmpfiles --create`. systemd then
@@ -60,9 +63,11 @@ inherit the grant. Existing files get read only.
 
 `deploy.py` does not trust tmpfiles' exit status: tmpfiles skips a line it
 cannot parse and still exits 0. After applying the drop-in it reads the ACL
-of every journal directory and file and checks the gid can read each one. If
-any cannot, or there is no journal directory at all, the deploy exits `10`.
-The timer is already armed by then, so Layer 2 is installed either way.
+of each root, of this machine's directory under it, and of every journal file
+in that directory, and checks the gid can read each one. A file journald
+rotates away mid-check is skipped, not an error. If any cannot be read, or
+this machine has no journal directory at all, the deploy exits `10`. The
+timer is already armed by then, so Layer 2 is installed either way.
 
 Turning the grant off, and `--uninstall`, remove the drop-in and revoke the
 gids it records. The gids come from the drop-in, not from today's spool

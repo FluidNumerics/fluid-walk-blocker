@@ -42,6 +42,10 @@ from walk_blocker import build, stamp
 VALUES = site_values()
 deploy = load_stamped_deploy(VALUES)
 
+# The machine id the autouse fixture writes, and so the one directory under
+# each journal root the grant covers (ADR-0026).
+JOURNAL_MACHINE = "0123456789abcdef0123456789abcdef"
+
 # The test user's primary group: what the suite's spools are chgrp'd to.
 SPOOL_GROUP = grp.getgrgid(os.getgid()).gr_name
 
@@ -159,6 +163,9 @@ def _test_paths(tmp_path, monkeypatch):
     # journald's roots are module constants, not site values, and a test
     # must neither read the machine's real journal nor revoke an ACL on it.
     monkeypatch.setattr(deploy, "JOURNAL_ROOTS", (str(tmp_path / "journal"),))
+    machine_id = tmp_path / "machine-id"
+    machine_id.write_text(JOURNAL_MACHINE + "\n")
+    monkeypatch.setattr(deploy, "MACHINE_ID_FILE", str(machine_id))
     monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(tmp_path / "var-log"))
     monkeypatch.setattr(deploy, "DEFAULT_BASHRC_FILE", str(tmp_path / "bashrc"))
     monkeypatch.setattr(deploy, "DEFAULT_ZSHENV_FILE", str(tmp_path / "zshenv"))
@@ -4369,7 +4376,7 @@ def test_a_marker_name_that_is_a_link_is_refused_not_followed(tmp_path):
 # the journal grant (ADR-0026)
 # --------------------------------------------------------------------------
 
-def _journal_tree(tmp_path, machine="0123456789abcdef0123456789abcdef"):
+def _journal_tree(tmp_path, machine=JOURNAL_MACHINE):
     """One journal root as JOURNAL_ROOTS names it, with a machine directory
     holding a live and an archived file, 0640 as journald writes them."""
     root = tmp_path / "journal"
@@ -4437,6 +4444,49 @@ def test_the_gap_check_reads_the_grant_it_asks_for(tmp_path):
 def test_no_journal_directory_is_a_gap_not_a_pass(tmp_path):
     gaps = deploy.journal_grant_gaps(os.getgid(), roots=(str(tmp_path / "nope"),))
     assert len(gaps) == 1 and "no journal directory" in gaps[0][1]
+    # A root with no directory for THIS machine is the same answer: the
+    # group can read nothing of what this node writes.
+    (tmp_path / "bare" / "remote").mkdir(parents=True)
+    gaps = deploy.journal_grant_gaps(os.getgid(), roots=(str(tmp_path / "bare"),))
+    assert any("no journal directory" in why for _p, why in gaps), gaps
+
+
+@needs_acl
+def test_only_this_machines_directory_is_checked(tmp_path):
+    """The drop-in grants `%m` alone. A journal-remote `remote/` or a
+    directory left by a cloned image is never granted, so checking it would
+    exit 10 on every deploy of such a node."""
+    root, machine_dir = _journal_tree(tmp_path)
+    for stray in ("remote", "fedcba9876543210fedcba9876543210"):
+        os.makedirs(os.path.join(root, stray))
+        open(os.path.join(root, stray, "system.journal"), "w").close()
+    gid = os.getgid()
+    spec = "g:%d:r-x,d:g:%d:r-x" % (gid, gid)
+    _setfacl("-m", spec, root, machine_dir)
+    for name in os.listdir(machine_dir):
+        _setfacl("-m", "g:%d:r--" % gid, os.path.join(machine_dir, name))
+    assert deploy.journal_grant_gaps(gid, roots=(root,)) == []
+
+
+def test_a_file_rotated_away_mid_scan_is_skipped_not_a_crash(
+        tmp_path, monkeypatch):
+    """journald renames and vacuums files at any moment. One that is gone
+    between the listing and the xattr read must not raise -- the deploy is
+    past arming the timer by then, and a traceback there reads as a failed
+    install."""
+    root, machine_dir = _journal_tree(tmp_path)
+    doomed = os.path.join(machine_dir, "system.journal")
+    real = os.getxattr
+
+    def racing(path, name, follow_symlinks=True):
+        if path == doomed and os.path.exists(doomed):
+            os.unlink(doomed)
+        return real(path, name, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(deploy.os, "getxattr", racing)
+    gaps = deploy.journal_grant_gaps(os.getgid(), roots=(root,))
+    assert doomed not in [path for path, _why in gaps], gaps
+    assert gaps, "the other, ungranted paths are still reported"
 
 
 @pytest.mark.skipif(shutil.which("setfacl") is None
@@ -4448,9 +4498,12 @@ def test_the_rendered_dropin_satisfies_the_gap_check(tmp_path, monkeypatch):
     the real drop-in, and the real check agrees it landed. Pins that the
     rules and the checker describe the same grant. Runs unprivileged: an
     owner may set ACLs on their own files."""
+    # tmpfiles expands %m from the real machine id, so the tree and the
+    # checker both use it.
     machine = open("/etc/machine-id").read().strip()
     root, machine_dir = _journal_tree(tmp_path, machine=machine)
     monkeypatch.setattr(deploy, "JOURNAL_ROOTS", (root,))
+    monkeypatch.setattr(deploy, "MACHINE_ID_FILE", "/etc/machine-id")
     gid = os.getgid()
     # Two files, two mask cases, and neither may end up with execute
     # effective. `live` has no ACL at all, so tmpfiles computes its mask from

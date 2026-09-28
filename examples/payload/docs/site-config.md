@@ -275,8 +275,8 @@ group reads **the whole journal**: every service and every user.
 3. `tmpfiles_dir` is `/etc/tmpfiles.d` unless the site keeps local
    tmpfiles rules under `/usr/local/lib/tmpfiles.d`.
 4. `python3 deploy.py --system --dry-run` shows the drop-in. The install
-   applies it, then checks every journal file, and exits `10` if any is
-   still unreadable to the group.
+   applies it, then checks every journal file in this machine's journal
+   directory, and exits `10` if any is still unreadable to the group.
 
 Re-measure when the group's membership changes, or journald's storage
 settings do. Turning the key off and redeploying revokes the grant.
