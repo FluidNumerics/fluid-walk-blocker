@@ -87,6 +87,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Feed `origin` into `classify()` | ADR-0003 — descriptive only |
 | Make the spool world-readable again, or drop the reader group | ADR-0025 |
 | Accept a group-writable ancestor on the prefix, staging, unit or hook chain, or a listed group with a human member | ADR-0025 |
+| Trust `systemd-tmpfiles`' exit status, name the group instead of the gid, or judge journal access by group membership | ADR-0026 — tmpfiles exits 0 over a skipped line; access is an ACL |
 | Key a tool identity on `comm` | rule table docstring and its test — `argv[0]` first; `comm` is the wrapper's name |
 | List an optional-argument flag in `value_flags` | rule table `--color` rule; measured on the tool |
 | `always=True` beside a `dir_action_default` | asserted in `Profile.__init__`; table/shim diverge |
@@ -116,6 +117,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
 | 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
 | 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link, and go only into a spool carrying deploy.py's marker (narrows 0012 and 0019, clarifies 0004) |
+| 0026 | `[install].journal_readable` (off by default) grants the spool group read on the WHOLE journal via a tmpfiles.d drop-in naming the gid; the deploy proves it on each root, `%m` and its files, and exits 10 if it did not land; turning it off or uninstalling revokes the gids the drop-in records |
 
 ## Non-negotiables a prompt must restate
 

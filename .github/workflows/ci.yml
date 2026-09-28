@@ -26,7 +26,10 @@ jobs:
           dnf install -y epel-release
           # strace: the execution-based fork count in test_shim_agrees.py skips
           # without it, and a skipped assertion is not an assertion CI made.
-          dnf install -y git python3 dash shadow-utils strace
+          # acl and systemd: setfacl and systemd-tmpfiles, without which the
+          # journal-grant oracles in test_deploy.py (ADR-0026) skip for the
+          # same reason.
+          dnf install -y git python3 dash shadow-utils strace acl systemd
           useradd -m ciuser
 
       - uses: actions/checkout@v4
