@@ -73,6 +73,7 @@ CONSUMERS = {
         "site.toml:install.spool_dir", "site.toml:install.audit_filename",
         "site.toml:install.spool_group", "site.toml:install.trusted_groups",
         "site.toml:install.staging_parent",
+        "site.toml:install.journal_readable", "site.toml:install.tmpfiles_dir",
         "site.toml:hooks.bash.file", "site.toml:hooks.bash.enabled",
         "site.toml:hooks.zsh.file", "site.toml:hooks.zsh.enabled",
         "site.toml:hooks.fish.file", "site.toml:hooks.fish.enabled",

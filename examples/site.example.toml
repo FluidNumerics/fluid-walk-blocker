@@ -66,6 +66,11 @@ spool_group = "wbaudit"
 # against /etc/login.defs, and refuses one that has any.
 trusted_groups = []
 unit_dir = "/etc/systemd/system"
+# Grant spool_group read on the systemd journal, where Layer 1's records land
+# under each refused user's own uid. The WHOLE journal -- every service, every
+# user -- so turn it on only once that group may read all of it (ADR-0026).
+journal_readable = false
+tmpfiles_dir = "/etc/tmpfiles.d"
 staging_parent = "/run"
 tool_search_path = [
   "/usr/local/sbin", "/usr/local/bin",

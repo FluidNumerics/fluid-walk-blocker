@@ -34,6 +34,10 @@ SINGLE_COMPONENT_OK = frozenset([
     "filesystems.mounts[].path",    # `/home`, `/scratch` are mount points
 ])
 
+# Groups systemd's shipped tmpfiles.d/systemd.conf grants the journal to, or
+# that own it. `install.journal_readable` refuses a spool group among them.
+JOURNAL_GROUPS = frozenset(["adm", "wheel", "systemd-journal", "root"])
+
 # systemd's named calendar shortcuts. Anything else needs a digit or a `*`
 # somewhere; this is the portable floor under `systemd-analyze calendar`,
 # which is consulted too when it is on PATH.
@@ -248,6 +252,18 @@ def check_semantics(schema, data):
                           "incident: a trail only root can read hides it from "
                           "the account that has to decide --kill. Name the "
                           "group of the people who read the trail (ADR-0025)")
+
+    # systemd's own tmpfiles rules grant these the journal already, so the
+    # drop-in would add nothing -- and revoking it, on uninstall or on turning
+    # the grant off, would strip systemd's grant with it.
+    if (data["install"]["journal_readable"]
+            and data["install"]["spool_group"] in JOURNAL_GROUPS):
+        raise ConfigError("install.journal_readable",
+                          "%r already reads the journal by systemd's own "
+                          "grant; the drop-in would add nothing, and removing "
+                          "it would revoke systemd's grant too. Leave "
+                          "journal_readable off (ADR-0026)"
+                          % data["install"]["spool_group"])
 
     timer = data["timer"]
     floor = timer_floor(data)

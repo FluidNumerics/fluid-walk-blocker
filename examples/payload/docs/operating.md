@@ -495,8 +495,11 @@ It carries three kinds of record:
   the reason class and the caller's uid. This is the count that answers
   "did Layer 1 do anything", and the denominator for the escape-hatch
   count when the time comes to read real findings against real traffic.
-  Two properties of journald apply: an ordinary user sees their own
-  records and the `adm` group and root see everyone's; and a session that
+  Two properties of journald apply: under its default `SplitMode=uid` a
+  refusal lands in the refused user's own journal file, which that user,
+  root and systemd's `adm` read — and the spool group only when
+  `[install].journal_readable` grants it the whole journal (ADR-0026); and
+  a session that
   produces refusals faster than journald's per-unit rate limit loses the
   excess, which journald marks with its own "suppressed N messages" line;
 - an **`uncovered_mount`** record, at notice priority, when a mount's

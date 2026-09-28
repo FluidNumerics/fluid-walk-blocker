@@ -255,6 +255,32 @@ and it is a list of service groups, never of people.
 Re-measure when a package upgrade touches a spool ancestor, or a listed
 group's membership changes.
 
+## Decide whether the trail's readers read the journal
+
+Keys: `[install].journal_readable`, `[install].tmpfiles_dir`. Decision
+record: ADR-0026. Off by default.
+
+Layer 1's own records (`refused`, `escape_hatch`, `uncovered_mount`) are in
+the journal, and journald files most of them under the refused user's uid.
+Without the grant, the spool group cannot see them, and an empty
+`journalctl -t walk-blocker` for that group proves nothing. With it, the
+group reads **the whole journal**: every service and every user.
+
+1. Read the group's membership (`getent group <spool_group>`) and decide
+   whether every member may read all of that. Turn it on only if so.
+2. `systemd-analyze cat-config systemd/journald.conf` for `Storage=` and
+   `SplitMode=`, and `getfacl` on the journal directories for what already
+   reads them. `validate` refuses the grant for a group systemd itself
+   grants the journal to (`adm`, `wheel`, `systemd-journal`).
+3. `tmpfiles_dir` is `/etc/tmpfiles.d` unless the site keeps local
+   tmpfiles rules under `/usr/local/lib/tmpfiles.d`.
+4. `python3 deploy.py --system --dry-run` shows the drop-in. The install
+   applies it, then checks every journal file, and exits `10` if any is
+   still unreadable to the group.
+
+Re-measure when the group's membership changes, or journald's storage
+settings do. Turning the key off and redeploying revokes the grant.
+
 ## Measure the shim budgets from local disk
 
 Decision record: ADR-0015. No `site.toml` key: the budgets are arguments to

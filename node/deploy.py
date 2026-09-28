@@ -65,8 +65,8 @@ considered and rejected (ADR-0006).
 `--system` and `--system --dry-run` make the SAME checks, from the
 same `preflight()`: the arguments are the compiled literals, the reader
 group resolves and every listed service group is proven to hold no person
-(ADR-0025), the six root-write locations sit in a trusted chain (and the
-hook files are plain root-owned regular files), the audit directory is
+(ADR-0025), the seven root-write locations sit in a trusted chain (and the
+hook files and the journal drop-in are plain root-owned regular files), the audit directory is
 usable and not writable beyond root, the prefix is reachable by the users
 Layer 1 exists for, the prefix is not somebody else's populated directory, and the parent the
 payload snapshot is staged under is a directory in a trusted chain. The
@@ -91,6 +91,7 @@ import re
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -134,6 +135,20 @@ DEFAULT_AUDIT_FILENAME = '@@install.audit_filename@@'  # GENERATED from site.tom
 # (ADR-0013): nothing on the node chooses which groups these are.
 DEFAULT_SPOOL_GROUP = '@@install.spool_group@@'  # GENERATED from site.toml:install.spool_group
 TRUSTED_GROUPS = '@@install.trusted_groups@@'  # GENERATED from site.toml:install.trusted_groups
+
+# Layer 1's records go to journald through logger(1), and with journald's
+# default SplitMode=uid they land in the REFUSED user's own journal file --
+# readable by that user, root and systemd's `adm`, and by nobody the site
+# chose. When the site turns this on, the spool group gets a read ACL on the
+# whole journal: every service and every user, since an ACL cannot filter by
+# identifier (ADR-0026). A tmpfiles.d drop-in, so the grant is re-asserted
+# at every boot as well as by this deploy.
+JOURNAL_READABLE = '@@install.journal_readable@@'  # GENERATED from site.toml:install.journal_readable
+DEFAULT_TMPFILES_DIR = '@@install.tmpfiles_dir@@'  # GENERATED from site.toml:install.tmpfiles_dir
+JOURNAL_DROPIN = "walk-blocker-journal.conf"
+# journald's two storage roots, persistent and volatile. Not site values:
+# they are journald's, and tmpfiles skips a rule whose path is absent.
+JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
 
 # Where "human" is defined. Not a site value and not an argument: it is the
 # file `useradd` and `groupadd` allocate from, so the ranges it names are the
@@ -274,7 +289,7 @@ def enabled_hook_files(args):
 
 
 def default_paths():
-    """The six root-write locations as an args-shaped mapping.
+    """The seven root-write locations as an args-shaped mapping.
 
     Read through a function rather than captured at import, so a test that
     moves a constant is reflected here.
@@ -282,6 +297,7 @@ def default_paths():
     return {
         "prefix": DEFAULT_PREFIX,
         "unit_dir": DEFAULT_UNIT_DIR,
+        "tmpfiles_dir": DEFAULT_TMPFILES_DIR,
         "spool_dir": DEFAULT_SPOOL_DIR,
         "bashrc_file": DEFAULT_BASHRC_FILE,
         "zshenv_file": DEFAULT_ZSHENV_FILE,
@@ -290,7 +306,7 @@ def default_paths():
 
 
 def not_a_default(args):
-    """Which of the six paths in `args` is not the compiled literal, or None.
+    """Which of the seven paths in `args` is not the compiled literal, or None.
 
     The last line of defence rather than the first: main() offers no flags,
     so reaching this needs a caller inside the module. It stays because "the
@@ -673,6 +689,22 @@ def system_preview(args, env=None):
     for name, text in ((SERVICE_UNIT, service), (TIMER_UNIT, timer)):
         print("# --- %s ---" % os.path.join(args.unit_dir, name))
         print(text.rstrip("\n"))
+    print()
+    dropin = os.path.join(canonical_prefix(args.tmpfiles_dir), JOURNAL_DROPIN)
+    if JOURNAL_READABLE:
+        print("# The %s group is granted read on the WHOLE journal -- every"
+              % DEFAULT_SPOOL_GROUP)
+        print("# service and every user, not only walk-blocker's records -- by")
+        print("# this drop-in, applied now and at every boot (ADR-0026). The")
+        print("# install then checks every journal file carries the grant:")
+        print("# --- %s ---" % dropin)
+        print(render_journal_dropin(gid).rstrip("\n") if gid is not None
+              else "# (not rendered: %s does not resolve)" % DEFAULT_SPOOL_GROUP)
+    else:
+        print("# The journal is NOT granted to %s ([install].journal_readable"
+              % DEFAULT_SPOOL_GROUP)
+        print("# is off). A drop-in an earlier deploy left at %s" % dropin)
+        print("# is removed, and the gids it names are revoked (ADR-0026).")
     print()
     # Every check the install runs, from the same function -- so a preview
     # cannot advertise a command that is going to refuse. install.sh's own
@@ -1615,7 +1647,7 @@ def write_audit_dir_refusal(spool, bad, out=sys.stderr):
         # fabricates that line has advertised deleting a stranger's data.
 
 
-# Which of the six paths is a directory and which is a file. Only that
+# Which of the seven paths is a directory and which is a file. Only that
 # distinction survives from the predecessor's five-column table: the shape
 # checks it also carried (absolute, unit-embeddable, shell-safe) are now
 # properties of the literals, asserted by the schema at build and by one
@@ -1624,6 +1656,7 @@ PATH_KINDS = (
     ("prefix",         "dir"),
     ("spool_dir",      "dir"),
     ("unit_dir",       "dir"),
+    ("tmpfiles_dir",   "dir"),
     ("bashrc_file",    "file"),
     ("zshenv_file",    "file"),
     ("fish_conf_file", "file"),
@@ -1950,11 +1983,11 @@ def preflight(args, privileged, repair=None, out=None):
     args.spool_gid = spool_gid
     args.spool_trusted_gids = trusted_gids
 
-    # 1. The six root-write locations: a trusted chain end to end, and for
+    # 1. The seven root-write locations: a trusted chain end to end, and for
     #    the three hook FILES the leaf's type and ownership as well. Scoped
     #    to the paths this process can actually inspect, so an unprivileged
-    #    preview still checks the five it can see rather than giving up on
-    #    all six.
+    #    preview still checks the ones it can see rather than giving up on
+    #    all seven.
     inspectable = []
     for attr, _kind in PATH_KINDS:
         if attr == "spool_dir" and groups_unknown:
@@ -1975,6 +2008,19 @@ def preflight(args, privileged, repair=None, out=None):
         checks.append(Check("paths", None, CHECK_BLOCKED))
         return 6, checks
     checks.append(Check("paths", None, CHECK_OK))
+
+    # 1b. The journal drop-in's leaf (ADR-0026), whether or not the grant is
+    #     on: a deploy reads it for the gids an earlier one granted, then
+    #     rewrites or removes it, so a link there aims root's write at its
+    #     target, and a file someone else owns chooses which gids get
+    #     revoked. The same leaf checks as a hook file.
+    if "tmpfiles_dir" in inspectable:
+        dropin = journal_dropin_path(args)
+        bad = dropin_blocker(dropin, out=out)
+        if bad is not None:
+            checks.append(Check("journal_dropin", dropin, CHECK_BLOCKED, bad))
+            return 6, checks
+        checks.append(Check("journal_dropin", dropin, CHECK_OK))
 
     # Canonical from here: validate_root_write_paths() rewrites each
     # attribute it was given, and canonical_prefix() is idempotent for the
@@ -2236,6 +2282,214 @@ def write_unit(path, text):
             if os.geteuid() == 0:
                 raise
         handle.write(text)
+
+
+# --------------------------------------------------------------------------
+# the journal grant (ADR-0026)
+# --------------------------------------------------------------------------
+
+# The on-disk POSIX ACL layout (linux/posix_acl_xattr.h): a u32 version, then
+# (u16 tag, u16 perm, u32 id) entries. Read here rather than via getfacl so
+# the check forks nothing and resolves no names.
+_ACL_ACCESS = "system.posix_acl_access"
+_ACL_DEFAULT = "system.posix_acl_default"
+_ACL_GROUP = 0x08
+_ACL_MASK = 0x10
+_ACL_READ = 4
+_ACL_EXECUTE = 1
+_DROPIN_GID = re.compile(r"group:([0-9]+):")
+
+
+def journal_dropin_path(args):
+    return os.path.join(canonical_prefix(args.tmpfiles_dir), JOURNAL_DROPIN)
+
+
+def render_journal_dropin(gid):
+    """The drop-in granting `gid` read on the journal. ONE function for the
+    preview and the install, like render_units().
+
+    The gid, never the name. tmpfiles resolves a name through NSS, and
+    systemd-tmpfiles-setup runs at boot before a directory service may be
+    up; a line it cannot parse it skips with a warning and still exits 0.
+
+    A glob for the files, not `A+` over the directory. `A` applies one ACL
+    to directories and files alike, so a file would get `r-x`; on a file
+    with no mask entry yet, tmpfiles computes one from the entries, and
+    execute becomes effective for every named entry on it. tmpfiles also
+    rejects `X`. The glob grants `r--`, so a computed mask is `r--` too, and
+    an existing mask is left as it was.
+    """
+    lines = [
+        "# walk-blocker: the spool group reads the journal (ADR-0026).",
+        "# Written by deploy.py. Removed by it, with the grant revoked, when",
+        "# [install].journal_readable is turned off or on --uninstall.",
+    ]
+    for root in JOURNAL_ROOTS:
+        lines += [
+            "a+ %s - - - - d:group:%d:r-x,group:%d:r-x" % (root, gid, gid),
+            "a+ %s/%%m - - - - d:group:%d:r-x,group:%d:r-x" % (root, gid, gid),
+            "a+ %s/%%m/*.journal* - - - - group:%d:r--" % (root, gid),
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def dropin_blocker(path, out=None):
+    """Why the drop-in at `path` is unfit to read and rewrite, written to
+    `out`, or None. The hook-file leaf checks: not a link, not irregular,
+    root's if it exists."""
+    bad = irregular_target(path)
+    if bad is None and os.path.lexists(path):
+        offenders = unowned_by(path)
+        if offenders:
+            bad = offenders[0].reason
+    if bad is not None:
+        (sys.stderr if out is None else out).write(
+            "deploy.py: refusing the journal drop-in %s: %s.\n" % (path, bad))
+    return bad
+
+
+def dropin_gids(path):
+    """The gids an existing drop-in grants; empty when there is none.
+    preflight() has already refused a link or a foreign owner here, and the
+    open does not follow one regardless."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return set()
+    with os.fdopen(fd, encoding="utf-8", errors="replace") as handle:
+        return {int(g) for g in _DROPIN_GID.findall(handle.read())}
+
+
+def _acl_perm(path, name, gid):
+    """(`gid`'s named-group perm, mask perm or None) from one ACL xattr, or
+    None when the path carries no such entry."""
+    try:
+        raw = os.getxattr(path, name, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno in (errno.ENODATA, errno.ENOTSUP):
+            return None
+        raise
+    perm = mask = None
+    for tag, bits, ident in struct.iter_unpack("<HHI", raw[4:]):
+        if tag == _ACL_GROUP and ident == gid:
+            perm = bits
+        elif tag == _ACL_MASK:
+            mask = bits
+    return None if perm is None else (perm, mask)
+
+
+def _grant_gap(path, name, gid, want):
+    got = _acl_perm(path, name, gid)
+    if got is None:
+        return "no %s entry for gid %d" % (name.rsplit(".", 1)[-1], gid)
+    perm, mask = got
+    effective = perm if mask is None or name == _ACL_DEFAULT else perm & mask
+    if effective & want != want:
+        return "gid %d has %s, effective %s" % (
+            gid, _rwx(perm), _rwx(effective))
+    return None
+
+
+def _rwx(bits):
+    return "".join(c if bits & b else "-"
+                   for c, b in (("r", 4), ("w", 2), ("x", 1)))
+
+
+def journal_grant_gaps(gid, roots=None):
+    """[(path, why)] for every journal directory and file that does NOT let
+    `gid` read it. Empty means the grant held everywhere it was looked for.
+
+    Why this is checked rather than trusted: systemd-tmpfiles exits 0 over a
+    line it skipped, so its status says nothing about whether the ACL
+    landed. And no journal directory at all is a gap, not a pass -- there is
+    nothing the group can read.
+    """
+    roots = JOURNAL_ROOTS if roots is None else roots
+    gaps, seen = [], 0
+    for root in roots:
+        if not os.path.isdir(root) or os.path.islink(root):
+            continue
+        dirs = [root] + sorted(
+            entry.path for entry in os.scandir(root)
+            if entry.is_dir(follow_symlinks=False))
+        for directory in dirs:
+            seen += 1
+            for name in (_ACL_ACCESS, _ACL_DEFAULT):
+                why = _grant_gap(directory, name, gid, _ACL_READ | _ACL_EXECUTE)
+                if why:
+                    gaps.append((directory, why))
+            if directory == root:
+                continue
+            for entry in sorted(os.scandir(directory), key=lambda e: e.name):
+                if (".journal" not in entry.name
+                        or not entry.is_file(follow_symlinks=False)):
+                    continue
+                why = _grant_gap(entry.path, _ACL_ACCESS, gid, _ACL_READ)
+                if why:
+                    gaps.append((entry.path, why))
+    if not seen:
+        gaps.append((", ".join(roots), "no journal directory exists"))
+    return gaps
+
+
+def journal_revoke_command(gids, root):
+    """setfacl, physical walk: a link under the journal is not followed out
+    of it by a root-run recursive change."""
+    spec = ",".join("group:%d,default:group:%d" % (g, g) for g in sorted(gids))
+    return ["setfacl", "-R", "-P", "-x", spec, root]
+
+
+def journal_step(args, env=None):
+    """Grant, or revoke, the spool group's read on the journal. Returns 0,
+    or 10 with the reason written when the grant did not land.
+
+    Runs whether or not the grant is on: a deploy with it off removes the
+    drop-in an earlier one wrote and revokes what it granted, from the gids
+    recorded IN that drop-in, so a changed spool group is revoked too rather
+    than left holding the journal.
+    """
+    dropin = journal_dropin_path(args)
+    previous = dropin_gids(dropin)
+    want = {args.spool_gid} if JOURNAL_READABLE else set()
+    stale = previous - want
+    if JOURNAL_READABLE:
+        if args.dry_run:
+            print("would write: %s" % dropin)
+        else:
+            created = not os.path.isdir(args.tmpfiles_dir)
+            previous_umask = os.umask(0o022)
+            try:
+                os.makedirs(args.tmpfiles_dir, exist_ok=True)
+            finally:
+                os.umask(previous_umask)
+            if created:
+                os.chmod(args.tmpfiles_dir, 0o755)
+            write_unit(dropin, render_journal_dropin(args.spool_gid))
+        run(["systemd-tmpfiles", "--create", dropin],
+            dry_run=args.dry_run, env=env)
+    elif previous:
+        run(["rm", "-f", dropin], dry_run=args.dry_run, env=env)
+    for root in JOURNAL_ROOTS:
+        if stale and os.path.isdir(root) and not os.path.islink(root):
+            run(journal_revoke_command(stale, root),
+                dry_run=args.dry_run, env=env)
+    if not JOURNAL_READABLE or args.dry_run:
+        return 0
+    gaps = journal_grant_gaps(args.spool_gid)
+    if gaps:
+        sys.stderr.write(
+            "deploy.py: installed, but the journal grant did not land for "
+            "%s (gid %d):\n" % (DEFAULT_SPOOL_GROUP, args.spool_gid))
+        for path, why in gaps[:10]:
+            sys.stderr.write("  %s: %s\n" % (path, why))
+        if len(gaps) > 10:
+            sys.stderr.write("  ... and %d more\n" % (len(gaps) - 10))
+        sys.stderr.write(
+            "  Layer 2 is installed and reporting. Layer 1's journal records\n"
+            "  stay unreadable to the group until this is fixed, and the\n"
+            "  firing report will keep saying so. See ADR-0026.\n")
+        return 10
+    return 0
 
 
 def _units_are_down(env):
@@ -2558,6 +2812,12 @@ def system_execute(args, env=None):
     run(["systemctl", "enable", "--now", TIMER_UNIT],
         dry_run=args.dry_run, env=env)
 
+    # Last, after the timer is armed: the grant is about who can READ
+    # Layer 1's records, and a failure in it must not cost the node Layer 2.
+    rc = journal_step(args, env=env)
+    if rc != 0:
+        return rc
+
     print("\ninstalled, report-only. There are TWO audit trails, and the")
     print("evidence for --kill needs both:")
     print("  tail %s" % os.path.join(spool, "reaper-audit.jsonl"))
@@ -2570,6 +2830,13 @@ def system_execute(args, env=None):
           % audit_path(spool))
     print("      # so these are NOT in it -- reading only the file would show")
     print("      # that column as a flat zero.")
+    if JOURNAL_READABLE:
+        print("      # Readable by the %s group through a journal ACL"
+              % DEFAULT_SPOOL_GROUP)
+        print("      # (ADR-0026) -- the whole journal, not just these records.")
+    else:
+        print("      # Most of them are in the refused user's own journal file,")
+        print("      # which only root and adm read here (ADR-0026).")
     print("What is installed, without executing anything:")
     print("  cat %s" % marker)
     print("  cat %s" % os.path.join(args.prefix, "site.lock.json"))
@@ -2593,8 +2860,11 @@ def system_uninstall(args, env=None):
     # re-enables it would otherwise reach strip_block() unchecked. The spool
     # is excluded because uninstall does not touch it.
     if validate_root_write_paths(
-            args, attrs=("prefix", "unit_dir", "bashrc_file",
+            args, attrs=("prefix", "unit_dir", "tmpfiles_dir", "bashrc_file",
                          "zshenv_file", "fish_conf_file")) != 0:
+        return 6
+    dropin = journal_dropin_path(args)
+    if dropin_blocker(dropin) is not None:
         return 6
 
     # Same rule as the install: a teardown pointed elsewhere would `rm -f`
@@ -2643,6 +2913,19 @@ def system_uninstall(args, env=None):
            dry_run=args.dry_run, env=env).returncode != 0:
         failures.append("systemctl daemon-reload failed; systemd may still "
                         "have the removed units loaded")
+    # Whatever the compiled flag says now: the drop-in records which gids an
+    # earlier deploy granted, and those are what get revoked (ADR-0026).
+    granted = dropin_gids(dropin)
+    if granted:
+        if run(["rm", "-f", dropin], check=False,
+               dry_run=args.dry_run, env=env).returncode != 0:
+            failures.append("could not remove %s" % dropin)
+        for root in JOURNAL_ROOTS:
+            if os.path.isdir(root) and not os.path.islink(root):
+                if run(journal_revoke_command(granted, root), check=False,
+                       dry_run=args.dry_run, env=env).returncode != 0:
+                    failures.append("could not revoke the journal ACL under "
+                                    "%s" % root)
     # The DEPLOYED helper, verified, and no fallback to this directory. The
     # marker check above has already established that the prefix is one
     # walk-blocker installed.
@@ -2964,7 +3247,7 @@ def main(argv=None):
                              "nothing and needs no privilege")
     args = parser.parse_args(argv)
 
-    # The six locations are deliberately NOT options. argparse rejects
+    # The seven locations are deliberately NOT options. argparse rejects
     # `--prefix` with "unrecognized arguments" and exit 2, which is the
     # point: the guarantee is that this command cannot be pointed somewhere
     # else, not that it validates being pointed somewhere else.

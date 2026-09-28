@@ -155,6 +155,10 @@ def _test_paths(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(tmp_path / "prefix"))
     monkeypatch.setattr(deploy, "DEFAULT_UNIT_DIR", str(tmp_path / "unit-dir"))
+    monkeypatch.setattr(deploy, "DEFAULT_TMPFILES_DIR", str(tmp_path / "tmpfiles-dir"))
+    # journald's roots are module constants, not site values, and a test
+    # must neither read the machine's real journal nor revoke an ACL on it.
+    monkeypatch.setattr(deploy, "JOURNAL_ROOTS", (str(tmp_path / "journal"),))
     monkeypatch.setattr(deploy, "DEFAULT_SPOOL_DIR", str(tmp_path / "var-log"))
     monkeypatch.setattr(deploy, "DEFAULT_BASHRC_FILE", str(tmp_path / "bashrc"))
     monkeypatch.setattr(deploy, "DEFAULT_ZSHENV_FILE", str(tmp_path / "zshenv"))
@@ -219,6 +223,7 @@ def _move_constants(monkeypatch, root, spool=None):
     """Point every compiled location under `root` (a `traversable_root`),
     the way the autouse fixture does for tmp_path."""
     for attr, value in (("PREFIX", "prefix"), ("UNIT_DIR", "unit-dir"),
+                        ("TMPFILES_DIR", "tmpfiles-dir"),
                         ("BASHRC_FILE", "bashrc"), ("ZSHENV_FILE", "zshenv"),
                         ("FISH_CONF_FILE", "fish.conf")):
         monkeypatch.setattr(deploy, "DEFAULT_" + attr, os.path.join(root, value))
@@ -2358,13 +2363,14 @@ def test_irregular_target_ignores_a_directory_kind(tmp_path, monkeypatch):
 
 
 def test_validate_covers_every_compiled_location():
-    """PATH_KINDS and default_paths() name the same six locations, so a
+    """PATH_KINDS and default_paths() name the same seven locations, so a
     location added to one and not the other -- the install <-> uninstall
     divergence shape -- fails here."""
     assert sorted(attr for attr, _kind in deploy.PATH_KINDS) == \
         sorted(deploy.default_paths())
     assert dict(deploy.PATH_KINDS) == {
         "prefix": "dir", "spool_dir": "dir", "unit_dir": "dir",
+        "tmpfiles_dir": "dir",
         "bashrc_file": "file", "zshenv_file": "file", "fish_conf_file": "file"}
 
 
@@ -2408,7 +2414,8 @@ def test_the_installer_paths_are_shaped_for_every_sink_they_reach(monkeypatch):
     monkeypatch.undo()
     paths = deploy.default_paths()
     assert sorted(paths) == ["bashrc_file", "fish_conf_file", "prefix",
-                             "spool_dir", "unit_dir", "zshenv_file"]
+                             "spool_dir", "tmpfiles_dir", "unit_dir",
+                             "zshenv_file"]
 
     for attr, value in sorted(paths.items()):
         assert os.path.isabs(value), attr
@@ -4356,3 +4363,264 @@ def test_a_marker_name_that_is_a_link_is_refused_not_followed(tmp_path):
         deploy.create_spool(spool, os.getgid())
     assert sentinel.read_text() == "not the walk-blocker's\n"
     assert stat.S_IMODE(sentinel.stat().st_mode) == 0o600
+
+
+# --------------------------------------------------------------------------
+# the journal grant (ADR-0026)
+# --------------------------------------------------------------------------
+
+def _journal_tree(tmp_path, machine="0123456789abcdef0123456789abcdef"):
+    """One journal root as JOURNAL_ROOTS names it, with a machine directory
+    holding a live and an archived file, 0640 as journald writes them."""
+    root = tmp_path / "journal"
+    machine_dir = root / machine
+    machine_dir.mkdir(parents=True)
+    for name in ("system.journal", "user-1@0001-0002.journal~"):
+        path = machine_dir / name
+        path.write_bytes(b"")
+        path.chmod(0o640)
+    return str(root), str(machine_dir)
+
+
+def _setfacl(*args):
+    subprocess.run(["setfacl"] + list(args), check=True)
+
+
+needs_acl = pytest.mark.skipif(shutil.which("setfacl") is None,
+                               reason="setfacl not installed")
+
+
+def _dropin(args):
+    return os.path.join(args.tmpfiles_dir, deploy.JOURNAL_DROPIN)
+
+
+def _granting(monkeypatch, on=True, gaps=()):
+    monkeypatch.setattr(deploy, "JOURNAL_READABLE", on)
+    monkeypatch.setattr(deploy, "journal_grant_gaps",
+                        lambda gid, roots=None: list(gaps))
+
+
+def test_the_dropin_names_the_gid_never_the_group_and_no_capital_x():
+    """A name needs NSS at boot, and `X` is a line tmpfiles rejects -- both
+    skipped with a warning and exit 0, so a grant that silently never lands."""
+    text = deploy.render_journal_dropin(4242)
+    rules = [l for l in text.splitlines() if l and not l.startswith("#")]
+    assert len(rules) == 3 * len(deploy.JOURNAL_ROOTS)
+    for rule in rules:
+        acl = rule.split()[-1]
+        assert "group:4242:" in acl
+        assert "X" not in acl
+        assert "group:%s:" % deploy.DEFAULT_SPOOL_GROUP not in acl
+    files = [r for r in rules if r.split()[1].endswith("*.journal*")]
+    assert files and all(r.split()[-1] == "group:4242:r--" for r in files), \
+        "files get r--, so tmpfiles leaves their r-- mask alone"
+
+
+@needs_acl
+def test_the_gap_check_reads_the_grant_it_asks_for(tmp_path):
+    root, machine_dir = _journal_tree(tmp_path)
+    gid = os.getgid()
+    assert deploy.journal_grant_gaps(gid, roots=(root,)), "nothing granted yet"
+    spec = "g:%d:r-x,d:g:%d:r-x" % (gid, gid)
+    _setfacl("-m", spec, root, machine_dir)
+    for name in os.listdir(machine_dir):
+        _setfacl("-m", "g:%d:r--" % gid, os.path.join(machine_dir, name))
+    assert deploy.journal_grant_gaps(gid, roots=(root,)) == []
+    # A mask with no read makes the named entry ineffective: a grant on
+    # paper that does not read.
+    live = os.path.join(machine_dir, "system.journal")
+    _setfacl("-n", "-m", "m::---", live)
+    gaps = deploy.journal_grant_gaps(gid, roots=(root,))
+    assert [path for path, _why in gaps] == [live], gaps
+
+
+def test_no_journal_directory_is_a_gap_not_a_pass(tmp_path):
+    gaps = deploy.journal_grant_gaps(os.getgid(), roots=(str(tmp_path / "nope"),))
+    assert len(gaps) == 1 and "no journal directory" in gaps[0][1]
+
+
+@pytest.mark.skipif(shutil.which("setfacl") is None
+                    or shutil.which("systemd-tmpfiles") is None
+                    or not os.path.exists("/etc/machine-id"),
+                    reason="needs setfacl, systemd-tmpfiles and a machine id")
+def test_the_rendered_dropin_satisfies_the_gap_check(tmp_path, monkeypatch):
+    """End to end on a tree this user owns: the real systemd-tmpfiles applies
+    the real drop-in, and the real check agrees it landed. Pins that the
+    rules and the checker describe the same grant. Runs unprivileged: an
+    owner may set ACLs on their own files."""
+    machine = open("/etc/machine-id").read().strip()
+    root, machine_dir = _journal_tree(tmp_path, machine=machine)
+    monkeypatch.setattr(deploy, "JOURNAL_ROOTS", (root,))
+    gid = os.getgid()
+    # Two files, two mask cases, and neither may end up with execute
+    # effective. `live` has no ACL at all, so tmpfiles computes its mask from
+    # the grant -- an `A+ ... r-x` rule makes that r-x. `archived` carries a
+    # named entry held to r-- by an existing mask, as journald's files do.
+    live = os.path.join(machine_dir, "system.journal")
+    archived = os.path.join(machine_dir, "user-1@0001-0002.journal~")
+    _setfacl("-n", "-m", "u:%d:r-x,m::r--" % os.getuid(), archived)
+    conf = tmp_path / "grant.conf"
+    conf.write_text(deploy.render_journal_dropin(gid))
+    done = subprocess.run(["systemd-tmpfiles", "--create", str(conf)],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert "Ignoring" not in done.stderr, done.stderr
+    assert deploy.journal_grant_gaps(gid, roots=(root,)) == []
+    for path in (live, archived):
+        assert deploy._acl_perm(path, deploy._ACL_ACCESS, gid)[1] == \
+            deploy._ACL_READ, "%s: mask is r--, execute is not effective" % path
+    # And the revoke takes all of it back, file and default entries alike.
+    subprocess.run(deploy.journal_revoke_command({gid}, root), check=True)
+    assert len(deploy.journal_grant_gaps(gid, roots=(root,))) > 0
+    listing = subprocess.run(["getfacl", "-R", "-p", "-n", root],
+                             capture_output=True, text=True).stdout
+    assert "group:%d:" % gid not in listing
+
+
+def test_an_install_with_the_grant_on_writes_and_applies_the_dropin(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _granting(monkeypatch)
+    args = _args(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(args) == 0
+    dropin = _dropin(args)
+    assert open(dropin).read() == deploy.render_journal_dropin(os.getgid())
+    assert stat.S_IMODE(os.stat(dropin).st_mode) == 0o644
+    apply_at = calls.index(["systemd-tmpfiles", "--create", dropin])
+    enable_at = next(i for i, c in enumerate(calls)
+                     if c[:3] == ["systemctl", "enable", "--now"])
+    assert apply_at > enable_at, "Layer 2 is armed before the grant is tried"
+
+
+def test_a_grant_that_did_not_land_is_exit_10_with_layer_2_armed(
+        tmp_path, monkeypatch):
+    """systemd-tmpfiles exits 0 over a line it skipped, so the install checks
+    the result and says so, rather than printing "installed" over nothing."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _granting(monkeypatch, gaps=[("/j/m/system.journal", "no access entry")])
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(err):
+        assert deploy.system_execute(_args(tmp_path)) == 10
+    assert "did not land" in err.getvalue()
+    assert "/j/m/system.journal" in err.getvalue()
+    assert any(c[:3] == ["systemctl", "enable", "--now"] for c in calls)
+
+
+def test_turning_the_grant_off_revokes_what_the_dropin_recorded(
+        tmp_path, monkeypatch):
+    """The gids come from the drop-in, not from today's spool group: a site
+    that changed group AND turned the grant off must not leave the old group
+    holding the journal."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    root, _machine = _journal_tree(tmp_path)
+    args = _args(tmp_path)
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    _granting(monkeypatch, on=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(args) == 0
+    assert ["rm", "-f", _dropin(args)] in calls
+    assert deploy.journal_revoke_command({31337}, root) in calls
+    assert not any(c[0] == "systemd-tmpfiles" for c in calls)
+
+
+def test_a_changed_spool_group_revokes_only_the_old_gid(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    root, _machine = _journal_tree(tmp_path)
+    args = _args(tmp_path)
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    _granting(monkeypatch)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(args) == 0
+    revokes = [c for c in calls if c[0] == "setfacl"]
+    assert revokes == [deploy.journal_revoke_command({31337}, root)]
+
+
+def test_with_the_grant_off_and_no_dropin_nothing_touches_the_journal(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _journal_tree(tmp_path)
+    _granting(monkeypatch, on=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(_args(tmp_path)) == 0
+    assert not any(c[0] in ("setfacl", "systemd-tmpfiles") for c in calls)
+    assert not any(deploy.JOURNAL_DROPIN in " ".join(c) for c in calls)
+
+
+def test_a_dry_run_with_the_grant_on_shows_the_dropin_and_writes_nothing(
+        tmp_path, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    _granting(monkeypatch)
+    args = _args(tmp_path, dry_run=True)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert deploy.system_execute(args) == 0
+    assert not os.path.exists(args.tmpfiles_dir)
+    text = out.getvalue()
+    assert "WHOLE journal" in text
+    assert deploy.render_journal_dropin(os.getgid()).splitlines()[-1] in text
+    assert "would write: %s" % _dropin(args) in text
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_a_symlinked_dropin_is_refused_before_anything_runs(
+        tmp_path, monkeypatch, dry_run):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    args = _args(tmp_path, dry_run=dry_run)
+    os.makedirs(args.tmpfiles_dir)
+    target = tmp_path / "elsewhere.conf"
+    target.write_text("group:1:\n")
+    os.symlink(str(target), _dropin(args))
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(err):
+        assert deploy.system_execute(args) == 6
+    assert "journal drop-in" in err.getvalue()
+    assert not any(c[:2] == ["systemctl", "disable"] for c in calls), \
+        "refused before the timer was touched"
+    assert target.read_text() == "group:1:\n"
+
+
+def test_uninstall_removes_the_dropin_and_revokes_its_gids(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    prefix = str(tmp_path / "prefix")
+    pass_uninstall_checks(monkeypatch, prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    root, _machine = _journal_tree(tmp_path)
+    args = _args(tmp_path, prefix=prefix)
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    # Whatever the flag says now: the drop-in is the record of the grant.
+    _granting(monkeypatch, on=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        deploy.system_uninstall(args)
+    assert ["rm", "-f", _dropin(args)] in calls
+    assert deploy.journal_revoke_command({31337}, root) in calls

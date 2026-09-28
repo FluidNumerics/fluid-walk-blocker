@@ -38,6 +38,8 @@ REQUIRED_SOURCES = (
     "site.toml:install.spool_group",
     "site.toml:install.trusted_groups",
     "site.toml:install.staging_parent",
+    "site.toml:install.journal_readable",
+    "site.toml:install.tmpfiles_dir",
     "site.toml:hooks.bash.file",
     "site.toml:hooks.bash.enabled",
     "site.toml:hooks.zsh.file",

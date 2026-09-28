@@ -389,3 +389,33 @@ def test_a_load_error_is_worded_by_its_class():
     assert config.describe_load_error(site, shape) == "site.toml: /reaper/fanout_n: is not of type 'integer'"
     assert config.describe_load_error(site, OSError("no such file")) == "site.toml: no such file"
     assert config.describe_load_error(site, ValueError("Invalid statement")) == "site.toml: Invalid statement"
+
+
+def test_journal_readable_defaults_off_and_tmpfiles_dir_is_admin_owned():
+    """ADR-0026: the whole-journal grant is opt-in, and the drop-in's
+    directory is one of the two an administrator owns."""
+    data = load_example_dict()
+    del data["install"]["journal_readable"]
+    del data["install"]["tmpfiles_dir"]
+    site = config.from_dict(data)
+    assert site.lookup("install.journal_readable") is False
+    assert site.lookup("install.tmpfiles_dir") == "/etc/tmpfiles.d"
+    data = load_example_dict()
+    data["install"]["tmpfiles_dir"] = "/usr/lib/tmpfiles.d"
+    with pytest.raises((config.ConfigError, jsonschema.ValidationError)):
+        config.from_dict(data)
+
+
+@pytest.mark.parametrize("group", sorted(config.JOURNAL_GROUPS))
+def test_journal_readable_refuses_a_group_systemd_already_grants(group):
+    """Revoking the drop-in's grant for one of these would strip systemd's
+    own. Off, the same group is fine -- except root, refused on its own."""
+    data = load_example_dict()
+    data["install"]["spool_group"] = group
+    data["install"]["journal_readable"] = True
+    with pytest.raises(config.ConfigError) as exc:
+        config.from_dict(data)
+    assert exc.value.path in ("install.journal_readable", "install.spool_group")
+    if group != "root":
+        data["install"]["journal_readable"] = False
+        config.from_dict(data)

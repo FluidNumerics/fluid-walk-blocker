@@ -221,6 +221,20 @@
           "default": "/etc/systemd/system",
           "description": "Which systemd unit directory receives the reaper service and timer. Only the two administrator-owned locations are permitted."
         },
+        "journal_readable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Grant `spool_group` read on the systemd journal, so the people who read Layer 2's trail can also read Layer 1's records, which journald files under the refused user's own uid. This is the WHOLE journal -- every service and every user -- not only `walk-blocker`'s records: an ACL cannot filter by identifier. Off unless the site has decided that group may read all of it (ADR-0026). Turning it off revokes the grant on the next deploy."
+        },
+        "tmpfiles_dir": {
+          "type": "string",
+          "enum": [
+            "/etc/tmpfiles.d",
+            "/usr/local/lib/tmpfiles.d"
+          ],
+          "default": "/etc/tmpfiles.d",
+          "description": "Which tmpfiles.d directory receives the journal ACL drop-in. Only the two administrator-owned locations are permitted. Required even with `journal_readable` off, because the deploy that turns the grant off removes a drop-in a previous one wrote."
+        },
         "staging_parent": {
           "$ref": "#/$defs/sink_path",
           "default": "/run",
