@@ -76,6 +76,10 @@ and may not make one of those stats it says "could not be checked as this
 user" rather than reporting it clean; run as root, that same answer is a
 refusal. A dry run stages nothing, so the staging parent is the one check
 it does not make -- in the dry run and in the install alike.
+
+Exit 10 is not a refusal: it is reported after the install, timer armed,
+when the journal grant (ADR-0026) did not land -- which only a written ACL
+can show. The dry run names the causes it can know in advance.
 """
 
 import argparse
@@ -704,6 +708,20 @@ def system_preview(args, env=None):
         print("# --- %s ---" % dropin)
         print(render_journal_dropin(gid).rstrip("\n") if gid is not None
               else "# (not rendered: %s does not resolve)" % DEFAULT_SPOOL_GROUP)
+        # Exit 10 is a report after the install, not a refusal, so it does
+        # not stop the preview -- but where it is already certain, say so.
+        certain = journal_certain_failure()
+        if certain:
+            print("# As things stand the install WILL exit 10: %s (ADR-0026)."
+                  % certain)
+            print("# Layer 2 is still installed; the group just cannot read.")
+        else:
+            _id, _m, dirs = journal_machine_dirs()
+            if dirs and not any(d == JOURNAL_PRESENT for _r, _s, d in dirs) \
+                    and any(d == JOURNAL_UNCHECKED for _r, _s, d in dirs):
+                print("# Whether this machine's journal directory exists could "
+                      "not be checked")
+                print("# as this user; the install's gap check will say.")
     else:
         print("# The journal is NOT granted to %s ([install].journal_readable"
               % DEFAULT_SPOOL_GROUP)
@@ -2404,12 +2422,60 @@ def _rwx(bits):
                    for c, b in (("r", 4), ("w", 2), ("x", 1)))
 
 
-def _machine_id():
+JOURNAL_PRESENT = "present"
+JOURNAL_ABSENT = "absent"
+JOURNAL_UNCHECKED = "unchecked"
+
+
+def _dir_state(path):
+    """present, absent, or unchecked -- a stat this process may not make is
+    not evidence either way, the same third answer preflight() gives."""
+    try:
+        info = os.lstat(path)
+    except PermissionError:
+        return JOURNAL_UNCHECKED
+    except OSError:
+        return JOURNAL_ABSENT
+    return JOURNAL_PRESENT if stat.S_ISDIR(info.st_mode) else JOURNAL_ABSENT
+
+
+def journal_machine_dirs(roots=None):
+    """(machine id state, machine id or None, [(root, root state, machine
+    directory state)]). ONE function for the gap check and the dry run, so
+    the dry run's "will exit 10" and the install's exit 10 cannot disagree
+    about which directories exist."""
+    roots = JOURNAL_ROOTS if roots is None else roots
     try:
         with open(MACHINE_ID_FILE, encoding="ascii", errors="replace") as fh:
-            return fh.read().strip() or None
+            machine = fh.read().strip() or None
+        id_state = JOURNAL_PRESENT if machine else JOURNAL_ABSENT
+    except PermissionError:
+        machine, id_state = None, JOURNAL_UNCHECKED
     except OSError:
-        return None
+        machine, id_state = None, JOURNAL_ABSENT
+    dirs = []
+    if machine is not None:
+        for root in roots:
+            root_state = _dir_state(root)
+            dirs.append((root, root_state,
+                         _dir_state(os.path.join(root, machine))
+                         if root_state == JOURNAL_PRESENT else root_state))
+    return id_state, machine, dirs
+
+
+def journal_certain_failure(roots=None):
+    """Why the install WILL exit 10, knowable before anything is written, or
+    None. Only from answers this process could make: an unchecked stat is
+    never turned into a prediction."""
+    id_state, machine, dirs = journal_machine_dirs(roots)
+    if id_state == JOURNAL_ABSENT:
+        return "%s is missing or empty, so there is no %%m directory" % (
+            MACHINE_ID_FILE)
+    if id_state == JOURNAL_PRESENT and dirs and all(
+            d == JOURNAL_ABSENT for _r, _s, d in dirs):
+        return "no journal directory for this machine exists under %s" % (
+            ", ".join(r for r, _s, _d in dirs))
+    return None
 
 
 def journal_grant_gaps(gid, roots=None):
@@ -2428,20 +2494,20 @@ def journal_grant_gaps(gid, roots=None):
     Layer 1's records land; checking it would fail every deploy.
     """
     roots = JOURNAL_ROOTS if roots is None else roots
-    machine = _machine_id()
+    _id_state, machine, dirs = journal_machine_dirs(roots)
     if machine is None:
         return [(MACHINE_ID_FILE, "unreadable, so there is no %m directory "
                                   "to check")]
     gaps, seen = [], 0
-    for root in roots:
-        if not os.path.isdir(root) or os.path.islink(root):
+    for root, root_state, dir_state in dirs:
+        if root_state != JOURNAL_PRESENT:
             continue
         for name in (_ACL_ACCESS, _ACL_DEFAULT):
             why = _grant_gap(root, name, gid, _ACL_READ | _ACL_EXECUTE)
             if why:
                 gaps.append((root, why))
         directory = os.path.join(root, machine)
-        if not os.path.isdir(directory) or os.path.islink(directory):
+        if dir_state != JOURNAL_PRESENT:
             continue
         try:
             entries = sorted(os.scandir(directory), key=lambda e: e.name)

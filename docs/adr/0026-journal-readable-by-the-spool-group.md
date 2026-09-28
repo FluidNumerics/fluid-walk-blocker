@@ -67,7 +67,9 @@ of each root, of this machine's directory under it, and of every journal file
 in that directory, and checks the gid can read each one. A file journald
 rotates away mid-check is skipped, not an error. If any cannot be read, or
 this machine has no journal directory at all, the deploy exits `10`. The
-timer is already armed by then, so Layer 2 is installed either way.
+timer is already armed by then, so Layer 2 is installed either way: exit `10`
+is a report after the install, not a refusal, and the dry run names the causes
+it can know in advance (no machine id, no journal directory for this machine).
 
 Turning the grant off, and `--uninstall`, remove the drop-in and revoke the
 gids it records. The gids come from the drop-in, not from today's spool
@@ -99,6 +101,11 @@ the journal to, because revoking the drop-in would strip systemd's own entry.
   group test would miss it.
 - **Exit `10` is new.** It means installed and reporting, but the group
   cannot read the journal. It says which paths failed the check.
+- **This record narrows nothing, and has no Narrows line on purpose.**
+  ADR-0025's "The journal is unchanged: an ordinary user still reads their
+  own Layer 1 records there" still holds: ADR-0025 did not touch the journal,
+  and this record adds the spool group as a reader where a site opts in and
+  removes no reader.
 
 ## Re-measure when
 

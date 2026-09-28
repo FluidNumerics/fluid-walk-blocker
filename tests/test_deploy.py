@@ -4744,3 +4744,49 @@ def test_a_dropin_someone_else_owns_is_refused(tmp_path, monkeypatch, dry_run):
         assert deploy.system_execute(args) == 6
     assert "journal drop-in" in err.getvalue() and "uid 1000" in err.getvalue()
     assert not any(c[:2] == ["systemctl", "disable"] for c in calls)
+
+
+def _preview(tmp_path, monkeypatch):
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    _granting(monkeypatch)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert deploy.system_execute(_args(tmp_path, dry_run=True)) == 0
+    return out.getvalue()
+
+
+def test_the_dry_run_says_when_exit_10_is_already_certain(tmp_path, monkeypatch):
+    """Exit 10 is a report after the install, not a refusal, but a missing
+    journal directory for this machine makes it certain -- and that is
+    knowable before anything is written, so the dry run says it."""
+    text = _preview(tmp_path, monkeypatch)
+    assert "install WILL exit 10" in text and "no journal directory" in text
+    assert "Layer 2 is still installed" in text
+
+
+def test_the_dry_run_says_when_the_machine_id_makes_exit_10_certain(
+        tmp_path, monkeypatch):
+    _journal_tree(tmp_path)
+    monkeypatch.setattr(deploy, "MACHINE_ID_FILE", str(tmp_path / "absent"))
+    text = _preview(tmp_path, monkeypatch)
+    assert "install WILL exit 10" in text and "absent" in text
+
+
+def test_a_present_machine_directory_predicts_nothing(tmp_path, monkeypatch):
+    _journal_tree(tmp_path)
+    assert "WILL exit 10" not in _preview(tmp_path, monkeypatch)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can stat anything")
+def test_a_stat_this_user_cannot_make_is_not_a_prediction(tmp_path, monkeypatch):
+    """An unprivileged dry run that cannot look inside the root must say it
+    could not check, never that the install will fail."""
+    root, _machine_dir = _journal_tree(tmp_path)
+    os.chmod(root, 0o000)
+    try:
+        text = _preview(tmp_path, monkeypatch)
+    finally:
+        os.chmod(root, 0o755)
+    assert "WILL exit 10" not in text
+    assert "could not be checked" in text
