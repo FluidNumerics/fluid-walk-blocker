@@ -438,6 +438,17 @@ def test_orphan_traversal_is_the_incident_shape(procfs, mounts_path):
     assert finding.detail["mount"] in ("/home", "/scratch")
 
 
+def test_an_orphan_traversal_is_killable_at_any_age(procfs, mounts_path):
+    """No budget on the orphan arm: a walk whose reader is gone is a finding
+    the moment it is seen, and it is not in NEVER_KILL. The users' page says
+    so, and must not tell people an orphan has to run "that long" first."""
+    write_proc(procfs, 4103, "find", ["find", "/home", "-type", "f"],
+               uid=UID_B, ppid=1, state="D", cpu_s=2.0, age_s=5)
+    findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
+    assert [f.verdict for f in findings] == ["orphan_traversal"]
+    assert "orphan_traversal" not in reaper.NEVER_KILL
+
+
 def test_runaway_traversal_has_a_live_parent(procfs, mounts_path):
     write_proc(procfs, 500, "bash", ["-bash"], uid=UID_B, ppid=1, state="S")
     write_proc(procfs, 4102, "grep", ["grep", "-rIn", "pat", "/home/someone"],

@@ -49,8 +49,8 @@ prefix, and every refusal prints its path.
 
 - **Why.** A refusal means the command would have walked an expensive
   filesystem with no bound. A kill means the reaper found a traversal tool
-  past its time budget on such a mount, one orphaned by a closed session, or
-  too many running at once under one parent. The reaper kills only when the
+  past its time budget on such a mount, one orphaned by a closed session (at
+  any age), or too many running at once under one parent. The reaper kills only when the
   site has explicitly enabled it with `--kill-others`. By default it reports
   and signals nothing.
 - **How to check.** `systemctl cat walk-blocker.service | grep ExecStart=`

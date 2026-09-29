@@ -307,3 +307,14 @@ def test_users_guidance_comes_before_the_mount_table(page):
     how to check, and how to avoid it come first; the reference follows."""
     assert page.index("## If walk-blocker stopped your command") < page.index(
         "## The mounts this node guards")
+
+
+def test_the_orphan_reason_carries_no_time_limit(page):
+    """classify() names an orphaned traversal at any age (see
+    test_an_orphan_traversal_is_killable_at_any_age), so the page's kill
+    reasons must not give the orphan case the budget's condition."""
+    reasons = page.split("It kills a process for one of three reasons")[1]
+    reasons = reasons.split("It never kills")[0]
+    orphan = [item for item in reasons.split("\n- ") if "had gone" in item]
+    assert len(orphan) == 1, reasons
+    assert "no time" in orphan[0] and "that long" not in orphan[0], orphan[0]
