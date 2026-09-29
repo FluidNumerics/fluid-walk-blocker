@@ -759,10 +759,12 @@ that build's `site.toml`. A payload built with a different `[install].prefix`
 is refused, because the prefix it names carries no payload marker; one built
 with different hook files or a different `[install].unit_dir` strips and
 removes in those places and leaves the installed files behind. If the copy
-from step 6 is gone, take the `site_sha256` that step 1 of §11 prints, run
-`walk-blocker provenance --sha256 <that hash>` in a clone of the site's
-repository, rebuild the payload at the commit it reports as `REVIEWED`, copy
-it to the node, and run the uninstall from there.
+from step 6 is gone, read `site_sha256` from the installed
+`<prefix>/site.lock.json`, which every account can read. In a clone of the
+site's repository, run `walk-blocker provenance --sha256 <that hash> --repo .
+--ref origin/main`, naming the site's reviewed branch if it is not
+`origin/main` (§11, step 3). Rebuild the payload at the commit it reports as
+`REVIEWED`, copy it to the node, and run the uninstall from there.
 
 It reverses the install and is gated on root alone — reversing a control is
 the safer direction and does not need the same ceremony as installing one
