@@ -754,12 +754,15 @@ python3 walk-blocker-payload/deploy.py --uninstall
 
 `deploy.py` is not under `<prefix>`: the installer is not part of what it
 installs. Use the payload the install came from, or a rebuild of the same
-reviewed commit. Every path the uninstall removes is compiled in from that
-build's `site.toml`, so a payload built with a different `[install]` or
-`[hooks.*]` would tear down somewhere else. If the copy from step 6 is gone,
-rebuild it from the site's repository at the commit `provenance` names for
-the installed `site.lock.json` (§11), copy it to the node, and run the
-uninstall from there.
+reviewed configuration. Every path the uninstall touches is compiled in from
+that build's `site.toml`. A payload built with a different `[install].prefix`
+is refused, because the prefix it names carries no payload marker; one built
+with different hook files or a different `[install].unit_dir` strips and
+removes in those places and leaves the installed files behind. If the copy
+from step 6 is gone, take the `site_sha256` that step 1 of §11 prints, run
+`walk-blocker provenance --sha256 <that hash>` in a clone of the site's
+repository, rebuild the payload at the commit it reports as `REVIEWED`, copy
+it to the node, and run the uninstall from there.
 
 It reverses the install and is gated on root alone — reversing a control is
 the safer direction and does not need the same ceremony as installing one
