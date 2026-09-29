@@ -761,8 +761,7 @@ refused outright, because the prefix it names carries no payload marker. That
 holds because a node carries one walk-blocker install: the timer and service
 have fixed names, so a second install under another prefix replaces the
 first's units, or shadows them if its `[install].unit_dir` differs, rather
-than running beside them. Two reapers never fire on one node (ADR-0017).
-Nothing refuses a second install, so uninstall the first before installing
+than running beside them. Nothing refuses a second install, so uninstall the first before installing
 again. Where two prefixes carry the marker anyway, the uninstall removes the
 one its payload was built for, and stops the one pair of units whichever
 install wrote them. Before running it, compare `site_sha256` in the
