@@ -732,20 +732,21 @@ uv run walk-blocker build --site site.toml --out payload/
 ```
 
 then copy the payload to the node and run the install again (steps 6 to
-8). The install over an existing prefix is the redeploy: it recognises its
-own payload marker, replaces the payload from the snapshot, rewrites the
-hook blocks between their markers, and restarts the timer. The diff to
-`site.toml`, reviewed in the site's own repository, is the review ADR-0005
-wanted for a root-run installer's write targets.
+8). An install to the same `[install].prefix` and `[install].unit_dir` is
+the redeploy: it recognises its own payload marker, replaces the payload
+from the snapshot, rewrites the hook blocks between their markers, and
+restarts the timer. The diff to `site.toml`, reviewed in the site's own
+repository, is the review ADR-0005 wanted for a root-run installer's write
+targets.
 
 Two changes deserve a second look before the rebuild. A change under
 `[install]` or `[hooks.<shell>].file` moves where root writes; read the
-preview (step 7) with particular care. A new `[install].prefix` or
-`[install].unit_dir` is not a redeploy: the install writes to the new path
-and leaves what the old build wrote at the old path in place (§14). Uninstall
-with the old payload first, then install the new one. A change to `[timer].on_calendar`
-must be re-surveyed against the live schedule of the node, not carried over
-(ADR-0017).
+preview (step 7) with particular care. If it moves `[install].prefix` or
+`[install].unit_dir`, it is not a redeploy: the install writes to the new
+path and leaves what the old build wrote at the old path in place (§14).
+Uninstall with the old payload first, then install the new one. A change
+to `[timer].on_calendar` must be re-surveyed against the live schedule of
+the node, not carried over (ADR-0017).
 
 ## 14. Uninstall
 
