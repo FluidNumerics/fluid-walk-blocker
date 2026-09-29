@@ -741,9 +741,9 @@ wanted for a root-run installer's write targets.
 Two changes deserve a second look before the rebuild. A change under
 `[install]` or `[hooks.<shell>].file` moves where root writes; read the
 preview (step 7) with particular care. A new `[install].prefix` or
-`[install].unit_dir` is not a redeploy: the install at the new place is a
-second install beside the first (§14). Uninstall with the old payload first,
-then install the new one. A change to `[timer].on_calendar`
+`[install].unit_dir` is not a redeploy: the install writes to the new place
+and leaves behind what the old one wrote there (§14). Uninstall with the old
+payload first, then install the new one. A change to `[timer].on_calendar`
 must be re-surveyed against the live schedule of the node, not carried over
 (ADR-0017).
 
