@@ -220,6 +220,13 @@ TRUSTED_PYTHON3 = '@@trusted_binaries.python3@@'  # GENERATED from site.toml:tru
 DISPLAY_NAME = '@@site.display_name@@'  # GENERATED from site.toml:site.display_name
 
 SERVICE_UNIT = "walk-blocker.service"
+# install.sh --system's `verify_hooks || exit 4`: a required hook could not be
+# proven to fire, over a payload that is installed and passed every trust
+# check. Its refusals exit 3. Under `set -e` another failing command could in
+# principle exit 4 too; reading that as a hook failure only re-arms a timer
+# the post-install ownership check has already cleared, never a payload
+# install.sh refused.
+INSTALL_HOOKS_UNPROVEN = 4
 TIMER_UNIT = "walk-blocker.timer"
 
 # Exactly what this installs under the prefix, and therefore exactly what it
@@ -587,7 +594,11 @@ def run(cmd, check=True, capture=True, dry_run=False, env=None):
         return subprocess.CompletedProcess(cmd, 0, "", "")
     result = subprocess.run(cmd, capture_output=capture, text=True, env=env)
     if check and result.returncode != 0:
-        sys.stderr.write("failed: %s\n%s\n" % (printable, result.stderr))
+        sys.stderr.write("failed: %s\n" % printable)
+        # Only what was captured: uncaptured, the command already wrote its
+        # own stderr to the terminal, and result.stderr is None.
+        if result.stderr:
+            sys.stderr.write(result.stderr.rstrip("\n") + "\n")
         raise SystemExit(result.returncode)
     return result
 
@@ -2862,9 +2873,23 @@ def system_execute(args, env=None):
     # No path flags: install.sh carries the same literals, stamped from the
     # same site.toml by the same build. From the DEPLOYED copy, which is the
     # only place install.sh will run a writing install from.
-    run([TRUSTED_SH, os.path.join(args.prefix, "shim", "install.sh"),
-         "--system"],
-        capture=False, dry_run=args.dry_run, env=env)
+    shim_cmd = [TRUSTED_SH, os.path.join(args.prefix, "shim", "install.sh"),
+                "--system"]
+    installed = run(shim_cmd, check=False, capture=False,
+                    dry_run=args.dry_run, env=env)
+    hooks_unproven = installed.returncode == INSTALL_HOOKS_UNPROVEN
+    if installed.returncode != 0 and not hooks_unproven:
+        # A refusal or a failure of install.sh's own. The timer was disabled
+        # above and stays that way: root must not keep executing a payload
+        # this run did not accept. Say so, since nothing else will.
+        sys.stderr.write(
+            "failed: %s\n"
+            "  The reaper's timer (%s) was disabled at the start of this\n"
+            "  install and is STILL DISABLED: Layer 2 is not running. Fix the\n"
+            "  cause above and re-run this install. Re-enabling the timer by\n"
+            "  hand would run a payload this install did not accept.\n"
+            % (" ".join(shlex.quote(c) for c in shim_cmd), TIMER_UNIT))
+        raise SystemExit(installed.returncode)
 
     # Re-assert AFTER install.sh, because it creates $prefix/bin -- the
     # directory that actually holds the shims -- and the earlier check ran
@@ -2914,6 +2939,16 @@ def system_execute(args, env=None):
     # Last, after the timer is armed: the grant is about who can READ
     # Layer 1's records, and a failure in it must not cost the node Layer 2.
     rc = journal_step(args, env=env)
+    if hooks_unproven:
+        sys.stderr.write(
+            "\ndeploy.py: installed with Layer 1 NOT proven. install.sh could\n"
+            "  not prove a required hook fires (above). The payload passed\n"
+            "  every ownership and trust check, so the units are written and\n"
+            "  %s is enabled: Layer 2 is running. Layer 1's upkeep\n"
+            "  must never take Layer 2 down. Fix the hook, then re-run this\n"
+            "  install; until then, sessions that do not source the hook are\n"
+            "  unguarded by Layer 1.\n" % TIMER_UNIT)
+        return INSTALL_HOOKS_UNPROVEN
     if rc != 0:
         return rc
 

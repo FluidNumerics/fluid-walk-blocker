@@ -327,7 +327,11 @@ What it verifies, and refuses on:
   directory. A required shell whose binary is absent is a hard failure — an
   automatic pass on "absent" would spell "unchecked" as "verified". A
   `best-effort` shell is written and checked only when its binary resolves,
-  and its failure is a warning (ADR-0008);
+  and its failure is a warning (ADR-0008). A required hook that fails its
+  proof still fails the deploy, with exit 4, but only after the reaper's
+  units are written and its timer re-enabled: the payload passed every
+  trust check, and Layer 1's upkeep must never take Layer 2 down. Any other
+  `install.sh` failure leaves the timer disabled and says so;
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;
