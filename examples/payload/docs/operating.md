@@ -531,6 +531,52 @@ the node regardless. Read both, for several days, before deciding anything.
 Whether the journal persists across a reboot is a property of the node's
 journald configuration, not of this tree.
 
+### Who can see what, and for how long
+
+Two questions decide whether a kill can be accounted for: who can read the
+record, and whether the record will still be there when someone asks.
+
+| Record | Written by | Readable by | Kept until |
+|---|---|---|---|
+| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root and `[install].spool_group` (ADR-0025) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
+| the unit's journal (the reaper's stdout) | the reaper, every finding every poll | root, `adm`, and the spool group when `[install].journal_readable` is on (ADR-0026) | journald vacuums it |
+| Layer 1's journal records | the shim and the relink | the refused user (their own file), plus everyone in the row above | journald vacuums it |
+
+Three consequences, and none of them is visible from the trail alone:
+
+- **The person whose process was killed cannot confirm it.** The reaper runs
+  as a system unit, so under `SplitMode=uid` its output goes to the system
+  journal, not to the user's file, and the trail is closed to them by
+  decision. All the user sees is `Terminated` or `Killed`, which also covers
+  the out-of-memory killer, a scheduler, and a person with `kill`. The users'
+  page says so and tells them whom to ask. Nothing notifies them. Decide how
+  a user reaches the spool group before promoting to `--kill` (§12).
+- **The trail is the durable record of a kill; the journal is not.**
+  The trail is bounded by bytes, not age. The dedup means it grows with
+  distinct findings, so at a quiet site it can hold everything since install.
+  Read its oldest row to know what it covers. The one case where the journal
+  holds something the trail does not is exit 4, UNRECORDED: those findings
+  reached the journal only, and no kill was sent.
+- **Layer 1's records live only as long as the journal.** journald's
+  retention is a property of the node, not of this tree, and under
+  `SplitMode=uid` it is usually file count, not disk, that runs out first:
+  every active user has their own file, and `SystemMaxFiles` (default 100)
+  caps the archived files for all of them together. On a login node with
+  many users that can be less than a day. A `proven-quiet` Layer 1 then
+  means quiet within that window, not since install. Measure it:
+
+```sh
+systemd-analyze cat-config systemd/journald.conf | grep -E 'SplitMode|SystemMax|MaxRetention'
+journalctl --disk-usage
+journalctl -o short-iso-precise | head -n 1    # the oldest entry you can read
+head -n 1 <spool_dir>/reaper-audit.jsonl       # the oldest row of the trail
+```
+
+Raising journald's retention keeps Layer 1's evidence longer. It does not
+help a user confirm a kill, and it lengthens the history the spool group
+can read when `[install].journal_readable` is on, which is a change to
+ADR-0026's exposure, not only to disk use.
+
 ## 11. Ask the node what is deployed
 
 Four answers, and they should agree:
@@ -611,6 +657,12 @@ promote only when every finding outside `NEVER_KILL` is one a human would
 have killed. Recalibrate the stall thresholds under known load first
 (ADR-0002); `stalling_slice: false` on a kill record is what tells the
 reviewer PSI did not corroborate it, and it is not a precondition.
+
+Decide one more thing before promoting: how a user whose process was killed
+finds out. The reaper does not tell them, and they cannot read the trail or
+the system journal (§10, "Who can see what"). Set `[site].contact`, so the
+users' page and every refusal name a person, and make sure whoever answers
+it can read the trail.
 
 Two flags, both explicit:
 

@@ -40,6 +40,33 @@ Copyright (c) 2026 Trevor Keller, PhD. Licensed under the BSD 3-Clause
 License; see `LICENSE`, which every payload carries so the terms travel with
 the code it installs.
 
+## If walk-blocker stopped your command or killed your process
+
+This section is for the people on a node that runs walk-blocker, whether it
+stopped them on purpose or by mistake. The node's own copy, filled in with
+that node's limits, is `docs/what-to-run-instead.md` under the install
+prefix, and every refusal prints its path.
+
+- **Why.** A refusal means the command would have walked an expensive
+  filesystem with no bound. A kill means the reaper found a traversal tool
+  past its time budget on such a mount, one orphaned by a closed session, or
+  too many running at once under one parent. The reaper kills only when the
+  site has explicitly enabled it with `--kill-others`. By default it reports
+  and signals nothing.
+- **How to check.** `systemctl cat walk-blocker.service | grep ExecStart=`
+  shows, to any account, whether killing is on at all. A refusal is recorded
+  in your own journal (`journalctl -t walk-blocker`) for as long as the node
+  keeps it. A kill is not visible to you: it is recorded in the reaper's audit
+  trail and the system journal, which only root and the site's spool group can
+  read. Ask them, with the time and the command. From your shell a kill looks
+  like `Terminated` or `Killed`, the same as any other signal.
+- **How to avoid it.** Bound the walk to the mount's depth allowance or start
+  it deeper, run long walks with `walk-job`, make sure a remote command ends
+  with its session, and do not fan walks out in parallel.
+- **If it was wrong,** say so to whoever runs the node. A refusal of a command
+  that should have been allowed is a bug in the rule table. A kill of a
+  process that was not a walk is a bug in the reaper.
+
 ## Why
 
 An automated agent ran an unbounded `find` over ssh against a very large
