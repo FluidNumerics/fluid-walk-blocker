@@ -538,7 +538,7 @@ record, and whether the record will still be there when someone asks.
 
 | Record | Written by | Readable by | Kept until |
 |---|---|---|---|
-| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root and `[install].spool_group` (ADR-0025) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
+| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root, `[install].spool_group`, and any account a named ACL entry on the spool grants read (ADR-0025; the deploy lists them) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
 | the unit's journal (the reaper's stdout) | the reaper, every finding every poll | root, `adm`, and the spool group when `[install].journal_readable` is on (ADR-0026) | journald vacuums it |
 | Layer 1's journal records | the shim and the relink | the refused user (their own file), plus everyone in the row above | journald vacuums it |
 

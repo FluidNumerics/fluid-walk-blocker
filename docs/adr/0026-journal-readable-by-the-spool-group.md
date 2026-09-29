@@ -90,7 +90,9 @@ the journal to, because revoking the drop-in would strip systemd's own entry.
   same property ADR-0025 accepted for the spool, applied to much more data.
 - **Hand-set ACL entries on the journal are left alone.** The revoke removes
   only gids the drop-in names. Other named entries, including any a site
-  set by hand, are neither checked nor removed.
+  set by hand, are neither checked nor removed. So the drop-in is not
+  necessarily the only read path to the journal: who reads it is answered by
+  `getfacl` on the journal directories, not by this record's grant alone.
 - **Files get `r--`, never `r-x`.** tmpfiles rejects `X`. A recursive rule
   applying `r-x` to files would make execute effective, through the mask
   tmpfiles computes for a file that has none. The drop-in uses a glob for
