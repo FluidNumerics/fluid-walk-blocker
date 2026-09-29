@@ -429,7 +429,10 @@ def test_the_committed_example_payload_is_current():
 
 @pytest.mark.parametrize("edit,expected", [
     (('spool_group = "wbaudit"', 'spool_group = "wbread"'),
-     {"deploy.py", "shim/install.sh", "site.toml", "site.lock.json"}),
+     # The users' page names the group that may read the trail, so a user
+     # who lost a process knows whom to ask.
+     {"deploy.py", "shim/install.sh", "docs/what-to-run-instead.md",
+      "site.toml", "site.lock.json"}),
     (("trusted_groups = []", 'trusted_groups = ["svc-log"]'),
      {"deploy.py", "site.toml", "site.lock.json"}),
 ])

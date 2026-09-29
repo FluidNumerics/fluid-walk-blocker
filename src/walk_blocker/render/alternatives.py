@@ -67,33 +67,78 @@ def _is_prose(line, mid_paragraph):
     return not (m and (not mid_paragraph or m.group(1) == "1"))
 
 
+# A list item is a paragraph with a hanging indent: its continuation lines
+# sit under the item's text, at the column after the marker. They are
+# gathered and re-filled at that indent, so a substitution inside an item
+# leaves it neither ragged nor pulled back to the margin. A later paragraph
+# at that same indent, after a blank line or a code block, still belongs to
+# the item and is filled at it too. Four or more spaces past that column is
+# code inside the item.
+_ITEM = re.compile(r"^( {0,3}(?:[-*+]|\d+[.)]) +)\S")
+
+
 def reflow(text, width=WRAP_WIDTH):
     """Re-wrap the paragraphs of a rendered page, leaving structure alone.
 
-    A blank line, a heading, a table row, a list item, a quote or any code
-    ends the paragraph being gathered and is emitted as it stands. Long words
-    are never broken: a path or a URL that does not fit goes on a line of its
-    own and over the width, which is what a reader wants from a value they
-    may need to copy."""
+    A blank line, a heading, a table row, a quote or any code ends the
+    paragraph being gathered and is emitted as it stands. A list item is
+    filled like a paragraph, under a hanging indent. Long words are never
+    broken: a path or a URL that does not fit goes on a line of its own and
+    over the width, which is what a reader wants from a value they may need
+    to copy."""
     out = []
     paragraph = []
+    # item: the indent of the list item this line may belong to, or None.
+    # first: the indent of the paragraph's own first line.
+    state = {"item": None, "first": ""}
     fenced = False
 
     def flush():
         if paragraph:
+            hang = " " * state["item"] if state["item"] is not None else ""
             out.extend(textwrap.wrap(
                 " ".join(paragraph), width=width,
+                initial_indent=state["first"], subsequent_indent=hang,
                 break_long_words=False, break_on_hyphens=False))
             del paragraph[:]
+        state["first"] = ""
+
+    def in_item(line):
+        lead = len(line) - len(line.lstrip(" "))
+        return (state["item"] is not None
+                and state["item"] <= lead < state["item"] + 4)
 
     for line in text.split("\n"):
         if _FENCE.match(line):
             flush()
             fenced = not fenced
             out.append(line)
-        elif fenced or not _is_prose(line, bool(paragraph)):
+            continue
+        if fenced:
+            out.append(line)
+            continue
+        if not line.strip():
             flush()
             out.append(line)
+            continue
+        if in_item(line):
+            if not paragraph:
+                state["first"] = " " * state["item"]
+            paragraph.append(line.strip())
+            continue
+        lead = len(line) - len(line.lstrip(" "))
+        if state["item"] is not None and lead < state["item"]:
+            # Back at the margin, or at a new marker: the item is over.
+            flush()
+            state["item"] = None
+        if not _is_prose(line, bool(paragraph)):
+            flush()
+            item = _ITEM.match(line)
+            if item:
+                state["item"] = len(item.group(1))
+                paragraph.append(line.rstrip())
+            else:
+                out.append(line)
         else:
             paragraph.append(line.strip())
     flush()
@@ -228,6 +273,9 @@ def substitutions(policy, site, version):
         "@@BIN_DIR@@": md_code(os.path.join(prefix, "bin"), "install.prefix"),
         "@@DOCS_LINE@@": _optional_md_line(site, "docs_url", "Documentation", autolink=True),
         "@@CONTACT_LINE@@": _optional_md_line(site, "contact", "Contact"),
+        "@@TRAVERSAL_BUDGET@@": str(int(data["reaper"]["traversal_budget_s"])),
+        "@@FANOUT_N@@": str(int(data["reaper"]["fanout_n"])),
+        "@@SPOOL_GROUP@@": md_cell(data["install"]["spool_group"], "install.spool_group"),
         "@@ESCAPE@@": R.ESCAPE_HATCH,
         "@@VERSION@@": md_cell(version, "VERSION"),
     }

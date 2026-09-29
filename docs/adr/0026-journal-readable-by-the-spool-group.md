@@ -117,6 +117,12 @@ change to the node's own journal ACLs (`getfacl` on the journal directories,
 counting named entries). A deploy with the grant on re-proves the grant
 itself.
 
+Also when the node's journal retention changes (`SystemMaxFiles=`,
+`SystemMaxUse=`, `MaxRetentionSec=`). The grant is to whatever the journal
+holds, so a longer retention widens it: the spool group reads more of every
+user's and every service's history, with nothing in this tree changed.
+Weigh that before raising retention to keep Layer 1's records longer.
+
 ## Site config touched
 
 - `[install].journal_readable`

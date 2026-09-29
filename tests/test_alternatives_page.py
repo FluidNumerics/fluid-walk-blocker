@@ -85,7 +85,8 @@ def test_the_template_uses_exactly_the_placeholders_the_renderer_fills(example):
         "@@DISPLAY_NAME@@", "@@MOUNT_TABLE@@", "@@MAXDEPTH@@", "@@UNSCOPED_DEPTH@@",
         "@@REMOTE_FSTYPES@@", "@@PARTITION@@", "@@DEFAULT_TIME@@", "@@DEFAULT_MEM@@",
         "@@MIN_JOB_AGE@@", "@@EXTRA_JOB_TOOLS_LINES@@", "@@BIN_DIR@@",
-        "@@ALTERNATIVES_PATH@@",
+        "@@ALTERNATIVES_PATH@@", "@@TRAVERSAL_BUDGET@@", "@@FANOUT_N@@",
+        "@@SPOOL_GROUP@@",
         "@@DOCS_LINE@@", "@@CONTACT_LINE@@", "@@ESCAPE@@", "@@VERSION@@",
     }
 
@@ -253,3 +254,56 @@ def test_a_substituted_number_at_the_start_of_a_line_is_not_an_ordered_list():
     # A real list, which starts its own block, still survives.
     real = "A paragraph.\n\n1. first\n2. second\n"
     assert alternatives.reflow(real) == real
+
+
+def test_a_list_item_is_filled_under_a_hanging_indent():
+    """A substitution inside a list item leaves a short or long line like one
+    in a paragraph does. The item is filled like a paragraph, and its
+    continuation lines sit under its text, not back at the margin."""
+    source = "\n".join([
+        "- the walk ran longer than 900 seconds while the process",
+        "  that started it was still alive;",
+        "- a short one.",
+        "",
+    ])
+    assert alternatives.reflow(source) == "\n".join([
+        "- the walk ran longer than 900 seconds while the process that started it was",
+        "  still alive;",
+        "- a short one.",
+        "",
+    ])
+
+
+def test_a_paragraph_after_code_inside_an_item_keeps_the_item_indent():
+    """A numbered step with a command and then a sentence about it: the
+    command is code inside the item and is left alone, and the sentence
+    after it still belongs to the item, so it is filled at the item's
+    indent rather than pulled back to the margin."""
+    source = "\n".join([
+        "1. **Check.** Run:",
+        "",
+        "       systemctl cat some.service | grep ExecStart=",
+        "",
+        "   If that line says one thing, then the",
+        "   answer is short.",
+        "",
+        "A paragraph at the margin ends the item.",
+        "",
+    ])
+    assert alternatives.reflow(source) == "\n".join([
+        "1. **Check.** Run:",
+        "",
+        "       systemctl cat some.service | grep ExecStart=",
+        "",
+        "   If that line says one thing, then the answer is short.",
+        "",
+        "A paragraph at the margin ends the item.",
+        "",
+    ])
+
+
+def test_users_guidance_comes_before_the_mount_table(page):
+    """Someone who lands here was refused or lost a process. What happened,
+    how to check, and how to avoid it come first; the reference follows."""
+    assert page.index("## If walk-blocker stopped your command") < page.index(
+        "## The mounts this node guards")
