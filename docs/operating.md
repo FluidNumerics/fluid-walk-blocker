@@ -759,10 +759,11 @@ that build's `site.toml`, so a payload built from a different configuration
 does not cleanly undo this install. Only a different `[install].prefix` is
 refused outright, because the prefix it names carries no payload marker. That
 holds because a node carries one walk-blocker install: the timer and service
-have fixed names, so a second install under another prefix replaces the
-first's units, or shadows them if its `[install].unit_dir` differs, rather
-than running beside them. Nothing refuses a second install, so uninstall the first before installing
-again. Where two prefixes carry the marker anyway, the uninstall removes the
+have fixed names, so systemd loads one of each. A second install under
+another prefix overwrites the first's unit files, or, with a different
+`[install].unit_dir`, the copy in whichever directory systemd searches first
+is the one that runs; the two never run side by side. Nothing refuses a
+second install, so uninstall the first before installing again. Where two prefixes carry the marker anyway, the uninstall removes the
 one its payload was built for, and stops the one pair of units whichever
 install wrote them. Before running it, compare `site_sha256` in the
 payload's own `site.lock.json` with the one in `<prefix>/site.lock.json`:
