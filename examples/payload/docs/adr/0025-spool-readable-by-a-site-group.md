@@ -151,7 +151,10 @@ hold write on a spool ancestor, never on the spool.
 - **The migration is a repair, not a refusal.** A spool at `0755` or `0750`,
   with the wrong group, holding `0644` trail files, is what every node that
   installed before this record has; the install sets it right through
-  no-follow descriptors and the relink keeps it so. A group- or
+  no-follow descriptors and the relink keeps it so. It does so only once
+  every refusal has passed and the previous units are down, so a refused
+  install writes nothing to the spool and an old relink cannot undo half
+  the repair first. A group- or
   other-writable spool, a setuid bit, or a setgid bit anywhere below the
   spool directory itself still refuses. The spool directory's own setgid
   bit is the decision, not a finding.

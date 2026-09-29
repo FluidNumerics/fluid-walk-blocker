@@ -2751,6 +2751,58 @@ def test_the_install_actually_tightens_what_it_declined_to_refuse(
     assert not [c for c in calls if c[:1] == ["chmod"] and victim in c], calls
 
 
+def test_a_refused_install_leaves_the_spool_exactly_as_it_found_it(
+        tmp_path, monkeypatch):
+    """#74. The repair used to run inside preflight, before the refusals
+    after it and before the old timer was disabled, so a refused install had
+    already re-grouped and re-moded the spool. Here a spool that needs
+    repair meets a refusal after the spool step (a prefix the users cannot
+    reach). Nothing on it may change, and no command may run. Mutation:
+    call repair_spool() from preflight again and the file comes out 0640."""
+    args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    closed = deploy.canonical_prefix(args.prefix)
+    monkeypatch.setattr(
+        deploy, "untraversable_for_users",
+        lambda path: [(os.path.dirname(closed), "no o+x")]
+        if deploy.canonical_prefix(path) == closed else [])
+    before = [(os.lstat(p).st_mode, os.lstat(p).st_gid)
+              for p in (args.spool_dir, victim)]
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+    after = [(os.lstat(p).st_mode, os.lstat(p).st_gid)
+             for p in (args.spool_dir, victim)]
+    assert after == before, (before, after)
+
+
+def test_the_spool_is_repaired_only_after_the_old_timer_is_down(
+        tmp_path, monkeypatch):
+    """The other half of #74: the old units, still firing, could undo part
+    of the repair before the disable. The repair lands after it."""
+    args, _victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    real = deploy.repair_spool
+
+    def recorded(spool, gid, **kw):
+        calls.append(["<repair_spool>"])
+        return real(spool, gid, **kw)
+
+    monkeypatch.setattr(deploy, "repair_spool", recorded)
+    assert deploy.system_execute(args) == 0
+    disable = calls.index(["systemctl", "disable", "--now", deploy.TIMER_UNIT])
+    assert calls.index(["<repair_spool>"]) > disable, calls
+
+
 def test_the_preview_advertises_the_chmod_the_install_will_run(
         tmp_path, monkeypatch):
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)

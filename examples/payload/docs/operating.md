@@ -333,8 +333,10 @@ What it verifies, and refuses on:
   under the prefix still fails that test;
 - **the audit directory is `root:<spool_group> 02750`**, asserted before
   `install.sh` runs. The wrong read scope — `0755`, `0750`, another group,
-  `0644` trail files — is repaired; group- or other-writable, setuid, or
-  setgid anywhere below the spool directory is a refusal;
+  `0644` trail files — is repaired, after every refusal has had its chance
+  and after the previous timer is disabled, so a refused install leaves the
+  spool exactly as it found it; group- or other-writable, setuid, or setgid
+  anywhere below the spool directory is a refusal;
 - **the groups.** `[install].spool_group` must resolve. Each group in
   `[install].trusted_groups` must resolve, have a gid below `GID_MIN`, and
   have no member — in `gr_mem` or by primary gid — with a uid in
