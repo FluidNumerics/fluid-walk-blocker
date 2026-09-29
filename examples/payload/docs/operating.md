@@ -757,8 +757,18 @@ installs. Use the payload the install came from, or a rebuild of the same
 reviewed configuration. Every path the uninstall touches is compiled in from
 that build's `site.toml`, so a payload built from a different configuration
 does not cleanly undo this install. Only a different `[install].prefix` is
-refused outright, because the prefix it names carries no payload marker. If
-the copy from step 6 is gone, read `site_sha256` from the installed
+refused outright, because the prefix it names carries no payload marker. That
+holds because a node carries one walk-blocker install: the timer and service
+have fixed names, so a second install under another prefix replaces the
+first's units, or shadows them if its `[install].unit_dir` differs, rather
+than running beside them. Two reapers never fire on one node (ADR-0017).
+Nothing refuses a second install, so uninstall the first before installing
+again. Where two prefixes carry the marker anyway, the uninstall removes the
+one its payload was built for, and stops the one pair of units whichever
+install wrote them. Before running it, compare `site_sha256` in the
+payload's own `site.lock.json` with the one in `<prefix>/site.lock.json`:
+they match when the payload is a rebuild of the configuration installed
+there. If the copy from step 6 is gone, read `site_sha256` from the installed
 `<prefix>/site.lock.json`, which every account can read. In a clone of the
 site's repository, run `walk-blocker provenance --sha256 <that hash> --repo .
 --ref origin/main`, naming the site's reviewed branch if it is not
