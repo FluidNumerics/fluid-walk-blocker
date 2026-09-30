@@ -3107,9 +3107,9 @@ def system_execute(args, env=None):
     run(["systemctl", "enable", "--now", TIMER_UNIT],
         dry_run=args.dry_run, env=env)
 
-    # Last, after the timer is armed: the grant is about who can READ
-    # Layer 1's records, and a failure in it must not cost the node Layer 2.
-    rc = journal_step(args, env=env)
+    # Told BEFORE the journal step, not after: journal_step() can end the run
+    # through run()'s SystemExit, and this notice is the only thing that says
+    # the timer is armed over a Layer 1 that is not proven.
     if hooks_unproven:
         sys.stderr.write(
             "\ndeploy.py: installed with Layer 1 NOT proven. install.sh could\n"
@@ -3121,6 +3121,11 @@ def system_execute(args, env=None):
             "  required ones, was not written either. Fix the hook, then\n"
             "  re-run this install; until then, sessions that do not source\n"
             "  the hook are unguarded by Layer 1.\n" % TIMER_UNIT)
+
+    # Last, after the timer is armed: the grant is about who can READ
+    # Layer 1's records, and a failure in it must not cost the node Layer 2.
+    rc = journal_step(args, env=env)
+    if hooks_unproven:
         return INSTALL_HOOKS_UNPROVEN
     if rc != 0:
         return rc

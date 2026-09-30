@@ -1098,6 +1098,28 @@ def test_a_hook_proof_failure_still_arms_the_reaper(
     assert "None" not in err.splitlines(), err
 
 
+def test_a_journal_abort_does_not_hide_the_hook_notice(
+        tmp_path, monkeypatch, capsys):
+    """journal_step() runs run() with check=True, which raises SystemExit
+    when systemd-tmpfiles fails. The timer is already armed by then, so the
+    operator must already have been told Layer 1 is not proven: the notice
+    is the only thing that says so."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+
+    def aborting_journal_step(args, env=None):
+        raise SystemExit(11)
+
+    monkeypatch.setattr(deploy, "journal_step", aborting_journal_step)
+    with pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == 11
+    assert ["systemctl", "enable", "--now", deploy.TIMER_UNIT] in calls, calls
+    assert "NOT proven" in capsys.readouterr().err
+
+
 def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
         tmp_path, monkeypatch, capsys):
     """ADR-0008 and the runbook say exit 4 comes only after the post-install
