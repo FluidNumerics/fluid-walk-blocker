@@ -1143,18 +1143,24 @@ def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
     assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
 
 
+# 3 is install.sh's own refusal; the rest are what a script under `set -e`
+# passes through from a failing command: 1 generic, 5 and 64 near the hook
+# proof's 4, 127 a missing program, 137 a killed one. Only exactly 4 is the
+# hook proof; a test over 3 alone cannot tell `== 4` from `>= 4`.
+@pytest.mark.parametrize("installer_rc", [1, 3, 5, 64, 127, 137])
 def test_any_other_installer_failure_leaves_the_timer_off_and_says_so(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, installer_rc):
     """A refusal of install.sh's own (exit 3) or any other failure keeps the
     timer disabled, as before -- root must not keep executing a payload this
     run did not accept -- but the operator is now told it is disabled."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     pass_prefix_checks(monkeypatch)
     calls = []
-    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=3))
+    monkeypatch.setattr(deploy, "run",
+                        recording_run(calls, installer_rc=installer_rc))
     with pytest.raises(SystemExit) as exc:
         deploy.system_execute(_args(tmp_path))
-    assert exc.value.code == 3
+    assert exc.value.code == installer_rc
     assert not [c for c in calls if c[:2] == ["systemctl", "enable"]], calls
     err = capsys.readouterr().err
     assert "STILL DISABLED" in err and deploy.TIMER_UNIT in err, err
