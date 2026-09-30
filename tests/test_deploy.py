@@ -3638,11 +3638,13 @@ def installed(built_payload, tmp_path):
     return _simulate_install(str(built_payload), str(tmp_path / "installed"))
 
 
-def _verify(prefix):
+def _verify(prefix, spool=None):
     class _Args(object):
         pass
     args = _Args()
     args.prefix = prefix
+    if spool is not None:
+        args.spool_dir = spool
     out = io.StringIO()
     return deploy.system_verify(args, out=out), out.getvalue()
 
@@ -3936,6 +3938,79 @@ def test_the_spool_itself_is_never_loosened_only_its_strict_ancestors(tmp_path):
     refused = deploy.untrusted_prefix_chain(
         spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
     assert [p for p, _why in refused] == [spool], refused
+
+
+def _acl_or_skip(*args):
+    """setfacl, or skip naming why: a tmpfs or overlay without ACL support
+    rejects the call, and that is the environment, not the code."""
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl not installed")
+    done = subprocess.run(["setfacl"] + list(args), capture_output=True, text=True)
+    if done.returncode != 0:
+        pytest.skip("filesystem rejected the ACL: %s" % done.stderr.strip())
+
+
+def test_a_trusted_gid_does_not_cover_a_named_user_with_write_behind_the_mask(
+        tmp_path):
+    """#73. With an access ACL the group bits are the mask, so g+w says only
+    that SOME group-class entry writes -- here a named user. The listed
+    group's proof covers the group, not that user. Mutation: return None
+    straight from the trusted-gid branch and this passes the ancestor."""
+    ancestor = _group_writable(str(tmp_path / "log"))
+    _acl_or_skip("-m", "u:%d:rwx,g::r-x" % os.getuid(), ancestor)
+    assert os.lstat(ancestor).st_mode & 0o020, "the mask shows as g+w"
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
+    assert [p for p, _why in refused] == [ancestor], refused
+    assert "uid %d" % os.getuid() in refused[0][1], refused
+
+
+def test_a_named_group_with_write_must_itself_be_listed(tmp_path):
+    ancestor = _group_writable(str(tmp_path / "log"))
+    other = os.getgid() + 1
+    _acl_or_skip("-m", "g:%d:rwx,g::r-x" % other, ancestor)
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
+    assert [p for p, _why in refused] == [ancestor], refused
+    assert deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(), other)) == []
+
+
+def test_read_only_named_entries_leave_the_loosening_intact(tmp_path):
+    """The converse, and the reason "refuse any ACL" is wrong: /var/log
+    routinely grants named READ. A named r-x with the owning group rwx is
+    exactly the ancestor ADR-0025 accepts."""
+    ancestor = _group_writable(str(tmp_path / "log"))
+    _acl_or_skip("-m", "u:%d:r-x,g::rwx" % os.getuid(), ancestor)
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    assert deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),)) == []
+
+
+def test_an_access_acl_this_cannot_parse_refuses_the_loosening(
+        tmp_path, monkeypatch):
+    """A trust decision fails closed: an xattr with an unknown version is
+    not read as "no named entries"."""
+    ancestor = _group_writable(str(tmp_path / "log"))
+    spool = os.path.join(ancestor, "walk-blocker")
+    os.mkdir(spool, 0o750)
+    real = os.getxattr
+
+    def odd(path, name, follow_symlinks=True):
+        if path == ancestor and name == deploy._ACL_ACCESS:
+            return b"\x09\x00\x00\x00"
+        return real(path, name, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(deploy.os, "getxattr", odd)
+    refused = deploy.untrusted_prefix_chain(
+        spool, trusted_uids=ME, trusted_gids=(os.getgid(),))
+    assert [p for p, _why in refused] == [ancestor], refused
+    assert "cannot parse" in refused[0][1], refused
 
 
 def _trusting_me(monkeypatch):
@@ -4842,3 +4917,129 @@ def test_a_stat_this_user_cannot_make_is_not_a_prediction(tmp_path, monkeypatch)
         os.chmod(root, 0o755)
     assert "WILL exit 10" not in text
     assert "could not be checked" in text
+
+
+# --------------------------------------------------------------------------
+# who else reads the spool: reported, never stripped (#80, ADR-0025)
+# --------------------------------------------------------------------------
+
+def _acl_spool(tmp_path):
+    spool = str(tmp_path / "spool")
+    os.mkdir(spool)
+    os.chmod(spool, 0o2750)
+    return spool
+
+
+def test_a_named_reader_on_the_spool_is_reported_in_access_and_default(
+        tmp_path):
+    """The deployed-node shape: a named user inherited from the parent's
+    default ACL, as both an access and a default entry. The spool group's
+    own named entry is not an extra reader. Mutation: drop the _ACL_USER
+    branch and the grant list is empty."""
+    spool = _acl_spool(tmp_path)
+    me, gid = os.getuid(), os.getgid()
+    _acl_or_skip("-m", "u:%d:r-x,g:%d:r-x" % (me, gid), spool)
+    _acl_or_skip("-d", "-m", "u:%d:r-x" % me, spool)
+    grants, unread = deploy.spool_read_grants(spool, gid)
+    assert unread == []
+    assert sorted(grants) == [(spool, "access", "user", me),
+                              (spool, "default", "user", me)], grants
+
+
+def test_a_named_entry_the_mask_holds_to_nothing_is_not_a_reader(tmp_path):
+    """An access entry counts after the mask, which is what the kernel
+    grants. Mutation: skip the `bits &= mask` and this reports a reader who
+    cannot read."""
+    spool = _acl_spool(tmp_path)
+    _acl_or_skip("-n", "-m", "u:%d:r-x,m::---" % os.getuid(), spool)
+    grants, _unread = deploy.spool_read_grants(spool, os.getgid())
+    assert grants == [], grants
+
+
+def test_a_named_reader_on_the_trail_file_is_reported(tmp_path):
+    spool = _acl_spool(tmp_path)
+    trail = os.path.join(spool, "reaper-audit.jsonl")
+    with open(trail, "w") as fh:
+        fh.write("{}\n")
+    os.chmod(trail, 0o640)
+    _acl_or_skip("-m", "u:%d:r--" % os.getuid(), trail)
+    grants, _unread = deploy.spool_read_grants(spool, os.getgid())
+    assert (trail, "access", "user", os.getuid()) in grants, grants
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert len(lines) == 1 and "1 file(s) in it" in lines[0], lines
+
+
+def test_an_acl_the_report_cannot_parse_is_named_not_skipped(
+        tmp_path, monkeypatch):
+    """Unread is not the same as no grant, so it gets its own line."""
+    spool = _acl_spool(tmp_path)
+    real = os.getxattr
+
+    def odd(path, name, follow_symlinks=True):
+        if path == spool:
+            return b"\x02\x00\x00\x00\x01"
+        return real(path, name, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(deploy.os, "getxattr", odd)
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert lines and lines[0].startswith("could not read the ACL on %s" % spool)
+
+
+def test_verify_reports_extra_readers_without_changing_its_exit(
+        installed, tmp_path):
+    spool = _acl_spool(tmp_path)
+    clean_code, clean_out = _verify(installed, spool=spool)
+    assert "no named ACL entry grants read" in clean_out
+    _acl_or_skip("-m", "u:%d:r-x" % os.getuid(), spool)
+    code, out = _verify(installed, spool=spool)
+    assert code == clean_code
+    assert "can read the spool (access ACL)" in out, out
+
+
+def test_the_dry_run_prints_the_grant_report_or_says_there_is_none(
+        tmp_path, monkeypatch):
+    """The preview is one of the three places the report lives. Mutation:
+    delete the loop over `grant_lines` and neither sentence appears."""
+    monkeypatch.setattr(deploy, "spool_read_grant_lines", lambda s, g: [])
+    assert ("no named ACL entry grants read beyond the group"
+            in _preview(tmp_path, monkeypatch))
+    monkeypatch.setattr(deploy, "spool_read_grant_lines",
+                        lambda s, g: ["user audrey can read the spool (access ACL)"])
+    text = _preview(tmp_path, monkeypatch)
+    assert "user audrey can read the spool (access ACL)" in text
+    assert "no named ACL entry grants read" not in text
+
+
+def test_the_post_install_message_lists_extra_readers_and_is_silent_otherwise(
+        tmp_path, monkeypatch, capsys):
+    """The closing text names the extra readers, and says nothing about ACLs
+    when there are none. Mutation: guard the block with `if False` and the
+    named reader never reaches the operator."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    monkeypatch.setattr(deploy, "spool_read_grant_lines", lambda s, g: [])
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    assert "named ACL entries" not in capsys.readouterr().out
+    monkeypatch.setattr(deploy, "spool_read_grant_lines",
+                        lambda s, g: ["user audrey can read the spool (access ACL)"])
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "through named ACL entries this install leaves alone" in out
+    assert "user audrey can read the spool (access ACL)" in out
+
+
+def test_a_journal_acl_this_cannot_parse_is_a_gap_not_a_traceback(
+        tmp_path, monkeypatch):
+    """#80's shared parser: a header or length it does not know used to
+    escape _grant_gap as struct.error. Mutation: delete the
+    `except AclUnreadable` clause and this raises."""
+    path = str(tmp_path / "entry")
+    open(path, "w").close()
+    monkeypatch.setattr(
+        deploy.os, "getxattr",
+        lambda p, n, follow_symlinks=True: b"\x02\x00\x00\x00\x01")
+    why = deploy._grant_gap(path, deploy._ACL_ACCESS, os.getgid(),
+                            deploy._ACL_READ)
+    assert why == "the posix_acl_access ACL could not be parsed", why
+

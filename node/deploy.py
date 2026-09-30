@@ -664,7 +664,7 @@ def system_preview(args, env=None):
     gid, _why = resolve_spool_group(DEFAULT_SPOOL_GROUP)
     print("# The audit directory is root:%s %05o -- writable by root alone,"
           % (DEFAULT_SPOOL_GROUP, SPOOL_DIR_MODE))
-    print("# readable by that group and nobody else -- and its files %04o,"
+    print("# readable by that group by its mode bits -- and its files %04o,"
           % SPOOL_FILE_MODE)
     print("# taking the group from the setgid bit (ADR-0025). Created before")
     print("# install.sh runs, re-asserted by the relink on every poll:")
@@ -677,10 +677,15 @@ def system_preview(args, env=None):
           % (SPOOL_MARKER, DEFAULT_SPOOL_GROUP, SPOOL_FILE_MODE))
     print("#   reaper write only into a spool that carries it, and never")
     print("#   create it -- that is this installer's alone (ADR-0025).")
-    print("# Not `install -d`: GNU install follows a symlinked leaf. Nobody")
-    print("# outside the group reads the trail -- including a user whose own")
-    print("# process is in a record -- and a monitored account still cannot")
-    print("# write it (ADR-0004).")
+    print("# Not `install -d`: GNU install follows a symlinked leaf. By the")
+    print("# mode bits nobody outside the group reads the trail -- including a")
+    print("# user whose own process is in a record -- and a monitored account")
+    print("# still cannot write it (ADR-0004). A named ACL entry, usually")
+    print("# inherited from the parent's default ACL, can widen who reads; it")
+    print("# is reported below and never removed (ADR-0025):")
+    grant_lines = spool_read_grant_lines(spool, gid)
+    for line in grant_lines or ["no named ACL entry grants read beyond the group"]:
+        print("#   %s" % line)
     repairs = spool_mode_repairs(spool, gid)
     if repairs:
         print("# Spool state this install will REPAIR rather than refuse --")
@@ -816,7 +821,7 @@ def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True,
         return "owned by uid %d" % info.st_uid
     mode = info.st_mode & 0o7777
     if (info.st_mode & 0o022) == 0o020 and info.st_gid in trusted_gids:
-        return None
+        return _acl_write_beyond(path, trusted_gids)
     if info.st_mode & 0o022:
         if sticky_is_enough and (info.st_mode & stat.S_ISVTX):
             return None
@@ -827,6 +832,41 @@ def _untrusted(path, trusted_uids=(0,), sticky_is_enough=True,
                     "notwithstanding" % mode)
         return ("mode %04o is writable by group or other, so its entries can "
                 "be replaced" % mode)
+    return None
+
+
+def _acl_write_beyond(path, trusted_gids):
+    """Why a group-write bit accepted on `trusted_gids`' strength is not
+    enough, or None.
+
+    On a directory with an access ACL the group bits are the MASK: the
+    ceiling on every named entry as well as the owning group. A group-write
+    bit then says only that some group-class entry may write, and a named
+    user is one (ADR-0025). So read the ACL behind it: a named user with
+    write, or a named group with write that is not itself listed, refuses.
+    An ACL present but unreadable refuses too -- this is a trust decision.
+    No ACL at all means the bits are the owning group's, and the listed
+    group's proof stands. Reads the ACL, writes none (ADR-0012).
+    """
+    try:
+        got = _acl_entries(path, _ACL_ACCESS)
+    except AclUnreadable:
+        return "carries an access ACL this cannot parse, so who may write is unknown"
+    except OSError as exc:
+        return "its access ACL could not be read: %s" % exc.strerror
+    if got is None:
+        return None
+    entries, mask = got
+    for tag, bits, ident in entries:
+        effective = bits if mask is None else bits & mask
+        if not effective & _ACL_WRITE:
+            continue
+        if tag == _ACL_USER:
+            return ("is group-writable through an ACL that grants write to "
+                    "uid %d, not only to a listed group" % ident)
+        if tag == _ACL_GROUP and ident not in trusted_gids:
+            return ("is group-writable through an ACL that grants write to "
+                    "gid %d, which is not a listed group" % ident)
     return None
 
 
@@ -2315,9 +2355,12 @@ def write_unit(path, text):
 # the check forks nothing and resolves no names.
 _ACL_ACCESS = "system.posix_acl_access"
 _ACL_DEFAULT = "system.posix_acl_default"
+_ACL_XATTR_VERSION = 2
+_ACL_USER = 0x02
 _ACL_GROUP = 0x08
 _ACL_MASK = 0x10
 _ACL_READ = 4
+_ACL_WRITE = 2
 _ACL_EXECUTE = 1
 _DROPIN_GID = re.compile(r"group:([0-9]+):")
 
@@ -2382,21 +2425,46 @@ def dropin_gids(path):
         return {int(g) for g in _DROPIN_GID.findall(handle.read())}
 
 
-def _acl_perm(path, name, gid):
-    """(`gid`'s named-group perm, mask perm or None) from one ACL xattr, or
-    None when the path carries no such entry."""
+class AclUnreadable(ValueError):
+    """An ACL xattr is present but is not the layout this reader knows. A
+    caller deciding trust refuses on it; a caller reporting names it."""
+
+
+def _acl_entries(path, name):
+    """([(tag, perm, id), ...], mask perm or None) from one ACL xattr, or
+    None when the path carries no such xattr.
+
+    Raises AclUnreadable on a header or length this reader does not know,
+    rather than guessing at entries it cannot parse."""
     try:
         raw = os.getxattr(path, name, follow_symlinks=False)
     except OSError as exc:
         if exc.errno in (errno.ENODATA, errno.ENOTSUP):
             return None
         raise
-    perm = mask = None
-    for tag, bits, ident in struct.iter_unpack("<HHI", raw[4:]):
+    if (len(raw) < 4 or (len(raw) - 4) % 8
+            or struct.unpack("<I", raw[:4])[0] != _ACL_XATTR_VERSION):
+        raise AclUnreadable("%s on %s is not a POSIX ACL this reader knows"
+                            % (name, path))
+    entries = list(struct.iter_unpack("<HHI", raw[4:]))
+    mask = None
+    for tag, bits, _ident in entries:
+        if tag == _ACL_MASK:
+            mask = bits
+    return entries, mask
+
+
+def _acl_perm(path, name, gid):
+    """(`gid`'s named-group perm, mask perm or None) from one ACL xattr, or
+    None when the path carries no such entry."""
+    got = _acl_entries(path, name)
+    if got is None:
+        return None
+    entries, mask = got
+    perm = None
+    for tag, bits, ident in entries:
         if tag == _ACL_GROUP and ident == gid:
             perm = bits
-        elif tag == _ACL_MASK:
-            mask = bits
     return None if perm is None else (perm, mask)
 
 
@@ -2407,6 +2475,9 @@ def _grant_gap(path, name, gid, want):
         # journald rotated or vacuumed it since the listing. A file that no
         # longer exists hides nothing from the group.
         return None
+    except AclUnreadable:
+        # A grant this cannot read is not one it may report as held.
+        return "the %s ACL could not be parsed" % name.rsplit(".", 1)[-1]
     if got is None:
         return "no %s entry for gid %d" % (name.rsplit(".", 1)[-1], gid)
     perm, mask = got
@@ -2420,6 +2491,106 @@ def _grant_gap(path, name, gid, want):
 def _rwx(bits):
     return "".join(c if bits & b else "-"
                    for c, b in (("r", 4), ("w", 2), ("x", 1)))
+
+
+# --------------------------------------------------------------------------
+# who else reads the spool (ADR-0025)
+# --------------------------------------------------------------------------
+
+def spool_read_grants(spool, spool_gid):
+    """(grants, unread) for the named ACL entries that let an account outside
+    `spool_gid` read the spool or an installer-owned file in it.
+
+    grants: [(path, "access"|"default", "user"|"group", id)]. An access
+    entry counts after the mask, which is what the kernel grants; a default
+    entry counts as stored, since it is what a new file inherits before any
+    mode caps it. The spool group's own named entry is not an extra reader.
+
+    unread: [(path, why)] for a path whose ACL this process could not read --
+    as an ordinary user, the files behind a 02750 spool. Said, not skipped:
+    an unread path is not a path with no grant.
+
+    Reported, never stripped. The mode bits are this installer's to assert;
+    a named entry is somebody's decision (ADR-0012), usually inherited from
+    a parent's default ACL, and who else reads the trail is the site's call.
+    """
+    grants, unread = [], []
+    paths = [(spool, (("access", _ACL_ACCESS), ("default", _ACL_DEFAULT)))]
+    paths += [(f, (("access", _ACL_ACCESS),))
+              for f in installer_owned_spool_files(spool)]
+    for path, names in paths:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            unread.append((path, exc.strerror))
+            continue
+        if stat.S_ISLNK(info.st_mode):
+            continue
+        for which, name in names:
+            try:
+                got = _acl_entries(path, name)
+            except (OSError, AclUnreadable) as exc:
+                unread.append((path, getattr(exc, "strerror", None) or str(exc)))
+                break
+            if got is None:
+                continue
+            entries, mask = got
+            for tag, bits, ident in entries:
+                if tag == _ACL_USER:
+                    kind = "user"
+                elif tag == _ACL_GROUP and ident != spool_gid:
+                    kind = "group"
+                else:
+                    continue
+                if which == "access" and mask is not None:
+                    bits &= mask
+                if bits & _ACL_READ:
+                    grants.append((path, which, kind, ident))
+    return grants, unread
+
+
+def _account_name(kind, ident):
+    try:
+        if kind == "user":
+            return pwd.getpwuid(ident).pw_name
+        return grp.getgrgid(ident).gr_name
+    except KeyError:
+        return "%s %d" % ("uid" if kind == "user" else "gid", ident)
+
+
+def spool_gid_or_none(spool):
+    """The spool's own group, which is the one its named entries are
+    compared against; the compiled group's gid when the spool is absent."""
+    try:
+        return os.lstat(spool).st_gid
+    except OSError:
+        return resolve_spool_group(DEFAULT_SPOOL_GROUP)[0]
+
+
+def spool_read_grant_lines(spool, spool_gid):
+    """One line per extra reader and per unread path, for the preview, the
+    install's closing text and --verify. Empty when the mode bits are the
+    whole story."""
+    grants, unread = spool_read_grants(spool, spool_gid)
+    readers = collections.OrderedDict()
+    for path, which, kind, ident in grants:
+        readers.setdefault((kind, ident), []).append((path, which))
+    lines = []
+    for (kind, ident), where in readers.items():
+        on_dir = sorted({w for p, w in where if p == spool})
+        files = len({p for p, w in where if p != spool})
+        parts = []
+        if on_dir:
+            parts.append("the spool (%s ACL)" % " and ".join(on_dir))
+        if files:
+            parts.append("%d file(s) in it" % files)
+        lines.append("%s %s can read %s"
+                     % (kind, _account_name(kind, ident), ", ".join(parts)))
+    for path, why in unread:
+        lines.append("could not read the ACL on %s: %s" % (path, why))
+    return lines
 
 
 JOURNAL_PRESENT = "present"
@@ -2921,8 +3092,12 @@ def system_execute(args, env=None):
     print("evidence for --kill needs both:")
     print("  tail %s" % os.path.join(spool, "reaper-audit.jsonl"))
     print("      # Layer 2: what the reaper found, written as root, readable")
-    print("      # by root and the %s group alone (ADR-0025)"
-          % DEFAULT_SPOOL_GROUP)
+    print("      # by root and the %s group (ADR-0025)" % DEFAULT_SPOOL_GROUP)
+    grant_lines = spool_read_grant_lines(spool, spool_gid_or_none(spool))
+    if grant_lines:
+        print("      # and, through named ACL entries this install leaves alone:")
+        for line in grant_lines:
+            print("      #   %s" % line)
     print("  journalctl -t walk-blocker -o json")
     print("      # Layer 1: escape-hatch overrides, and the reconcile's own")
     print("      # reports. An ordinary user cannot write %s,"
@@ -3302,6 +3477,18 @@ def system_verify(args, out=None):
               "not here.\n")
     out.write("  a record beside what it describes cannot detect an edit to "
               "both; see the runbook.\n")
+    spool = getattr(args, "spool_dir", None)
+    if spool:
+        # Reported, not judged: no line here changes the exit code.
+        grant_lines = spool_read_grant_lines(spool, spool_gid_or_none(spool))
+        if grant_lines:
+            out.write("  beyond the %s group, the spool's ACLs say:\n"
+                      % DEFAULT_SPOOL_GROUP)
+            for line in grant_lines:
+                out.write("    %s\n" % line)
+        else:
+            out.write("  no named ACL entry grants read on the spool beyond "
+                      "the %s group.\n" % DEFAULT_SPOOL_GROUP)
     out.write("\n")
     for line in lines:
         out.write(line + "\n")

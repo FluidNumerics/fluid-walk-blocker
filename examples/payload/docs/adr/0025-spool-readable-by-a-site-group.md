@@ -63,6 +63,16 @@ group name; the reaper sets each file's mode through the fd it wrote with.
 refuses `root`: a trail only root can read is the state ADR-0012 recorded
 as the incident.
 
+These modes describe the **mode bits**, and on a directory carrying a POSIX
+ACL the group bits are the mask, not the whole story. A named ACL entry,
+usually inherited from the parent's default ACL, can let more accounts read
+the spool and the files the reaper writes there. The deployer reads the
+spool's access and default ACLs and each installer-owned file's access ACL,
+and reports every named entry that grants read beyond the spool group: in
+the dry run, at the end of the install, and in `--verify`. It reports; it
+never strips, and no exit code depends on it. A named grant is somebody's
+decision (ADR-0012), and who else reads the trail is the site's.
+
 `[install].trusted_groups` lists service groups whose write bit is accepted
 on the spool's **strict ancestors**, and nowhere else. The prefix, staging,
 unit and hook chains stay root-only, the spool itself is never loosened,
@@ -99,6 +109,13 @@ ADR-0004's clause "none of it writable by the account being monitored" is
 kept in full, and this record clarifies how it reads: the account being
 monitored is a human login account. A listed, human-free service group may
 hold write on a spool ancestor, never on the spool.
+
+A group-write bit accepted on a listed group's strength is checked against
+the ancestor's access ACL, because behind an ACL that bit is the mask and
+says only that some group-class entry writes. A named user with write, or a
+named group with write that is not itself listed, refuses. An ACL that is
+present but cannot be parsed refuses too. Both checks read ACLs and write
+none; ADR-0012's "never read or written" still holds for writing.
 
 ## Consequences
 
@@ -168,6 +185,12 @@ hold write on a spool ancestor, never on the spool.
 - **The relink's memory is `0640` like the rest of the spool.** ADR-0019
   called it world-readable; that clause is narrowed here and moves to its
   superseded wording.
+
+- **"Nobody outside the group reads the trail" is true of the mode bits
+  only.** A node whose `/var/log` carries named default ACL entries hands
+  them to the spool at creation, and those accounts read the trail. The
+  deployer names them rather than removing them, so the claim a reader can
+  rely on is the deploy's own report, not this record's sentence.
 
 ## Re-measure when
 
