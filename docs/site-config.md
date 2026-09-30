@@ -226,8 +226,12 @@ Keys: `[install].spool_group`, `[install].trusted_groups`. Decision record:
 ADR-0025. Neither has a default: both are facts about this node's groups.
 
 **`spool_group`** is the one group that may read the audit trail. The
-spool is `root:<spool_group> 02750` and its files `0640`; nobody outside the
-group reads them, including a user whose own process is in a record.
+spool is `root:<spool_group> 02750` and its files `0640`. By those mode bits
+nobody outside the group reads them, including a user whose own process is
+in a record. A named ACL entry on the spool, usually inherited from its
+parent's default ACL, widens that; `deploy.py` reports each one in the dry
+run, the install and `--verify`, and never removes it. Run `getfacl` on the
+spool's parent before deploying if the reader set matters.
 
 1. Decide who has to read the trail to make the `--kill` decision. That is
    the group's membership; `deploy.py` does not audit it, and `validate`

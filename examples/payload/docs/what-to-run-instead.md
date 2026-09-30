@@ -57,10 +57,11 @@ one stuck in I/O), or an idle orphan. It only reports those.
    the same from your shell, so a matching exit code is not proof.
 
 3. **Ask for the record.** You cannot read it yourself. The reaper's audit
-   trail is readable only by root and the `wbaudit` group, and its output
-   goes to the system journal, not to yours. Give the people who run this
-   node the time, the command, and the pid if you have it. The trail records
-   every kill, and every kill it attempted that did not land.
+   trail is readable by root, the `wbaudit` group, and any account the
+   node's ACLs name on it, and its output goes to the system journal, not to
+   yours. Give the people who run this node the time, the command, and the
+   pid if you have it. The trail records every kill, and every kill it
+   attempted that did not land.
 
 A refusal is different: it is recorded in your own journal, which you can
 read for as long as the node's journal keeps it. On a busy node that may be

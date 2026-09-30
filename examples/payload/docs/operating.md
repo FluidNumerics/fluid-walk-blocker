@@ -7,8 +7,8 @@ checked against the tree's own help text.
 
 Two rules frame every step below. **Layer 1 is advisory** (ADR-0001): the
 shim refuses the naive command and names the alternative, and an absolute
-path, a private `PATH`, a container, a batch script or a shell function all
-go around it. **The reaper reports by default**: nothing is killed until a
+path, a private `PATH`, a container, a batch script, a shell function or a
+session that started before the install all go around it. **The reaper reports by default**: nothing is killed until a
 human reads real findings and decides otherwise (ADR-0009).
 
 ## 1. Prerequisites
@@ -175,6 +175,13 @@ uv run walk-blocker build --site site.toml --out payload/ --check
 from what the current `site.toml` and tree would build, and 0 when it is
 current. Run it before every deploy, and run it in the site's own CI so a
 stale payload is a red build rather than a stale node (ADR-0013).
+
+An `extra:` line under `__pycache__/` is not drift. It means Python imported
+a module from inside that payload directory: a hand run of `reaper.py`, which
+imports `search_rules.py` beside it, or anything that imports `deploy.py` as
+a module. Running `deploy.py` itself writes nothing there. Remove that
+`__pycache__/` and run `--check` again. `__pycache__/` is usually gitignored,
+so `git status` will not show it.
 
 ## 6. Copy the payload to the node
 
@@ -367,6 +374,27 @@ If the trail is unreadable to the group, the `--kill` decision is blocked on
 an access-control fact and nothing else in this runbook can be read. An
 account outside the group is refused the `tail` by design (ADR-0025).
 
+### Layer 1 reaches new sessions only
+
+A process inherits `PATH` when it starts and keeps it for life, so the hook
+blocks reach only shells that start after the install. A login shell that
+was already running goes on without the shim. So does a terminal multiplexer
+server that was started earlier, and every window it opens afterwards,
+however long it keeps running. `deploy.py --verify` and the reconcile are
+both silent about this, because nothing on disk is wrong.
+
+Layer 1's coverage is therefore a function of session turnover, not of
+install success. It climbs as people log in again, and for a session kept
+alive for months it may never arrive. This is a case Layer 2 exists to
+carry: the reaper scans the process table whatever `PATH` a process was
+started with (ADR-0001).
+
+The same holds in reverse. A replacement deployment replaces the files, not
+the running sessions: a shell that started under a predecessor keeps that
+predecessor's directory on its `PATH`. After a complete uninstall the
+removed `<prefix>/bin` is simply absent from every such `PATH`, and a lookup
+falls through to the real tool, which is harmless.
+
 ## 9. Measure the shim
 
 The shim runs on every `grep`, `find` and `du` on the node, and its cost is
@@ -429,8 +457,9 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 `io_pressure_delta` and `stalling_slice` — and, on `opaque_traversal`
 alone, `d_polls`, the consecutive polls the process has been seen in D
 (ADR-0020). Read it as a member of `[install].spool_group`; the trail is
-`0640`, readable by root and that group and nobody else, by decision
-(ADR-0025). (`[install].audit_filename`
+`0640`, readable by root and that group by its mode bits, by decision
+(ADR-0025); a named ACL entry can widen that, and the deploy lists the
+accounts it finds. (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account
 cannot append to a root-owned file.)
@@ -522,7 +551,7 @@ every hook block is present and fires, the audit directory has the right
 mode, and no expensive mount is running uncovered. **What it does not
 mean** is that no unbounded walk ran. Every Layer 1 bypass — an absolute
 path, a private `PATH`, a container, a batch script, a shell function, a
-second-level shell — leaves no journal record, because the shim never ran.
+second-level shell, a session that started before the install (§8) — leaves no journal record, because the shim never ran.
 A hook that is not on anyone's `PATH` also produces silence, and the
 reconcile's `hook_check` distinguishes that case only when it can see the
 block is gone. The journal tells you what overrode Layer 1 and when Layer 1
@@ -538,7 +567,7 @@ record, and whether the record will still be there when someone asks.
 
 | Record | Written by | Readable by | Kept until |
 |---|---|---|---|
-| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root and `[install].spool_group` (ADR-0025) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
+| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root, `[install].spool_group`, and any account a named ACL entry on the spool grants read (ADR-0025; the deploy lists them) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
 | the unit's journal (the reaper's stdout) | the reaper, every finding every poll | root, `adm`, and the spool group when `[install].journal_readable` is on (ADR-0026) | journald vacuums it |
 | Layer 1's journal records | the shim and the relink | the refused user (their own file), plus everyone in the row above | journald vacuums it |
 
@@ -604,7 +633,7 @@ credential on the node, network access, or privileges.
 
 ```sh
 # 1. on the node: do the installed files match the record they were built from?
-python3 <prefix>/deploy.py --verify
+python3 walk-blocker-payload/deploy.py --verify
 
 # 2. off the node: is that record the one the site's repository holds?
 sha256sum <prefix>/site.lock.json      # against payload/site.lock.json there
@@ -616,8 +645,14 @@ walk-blocker provenance --payload payload/ --repo . --ref origin/main
 Step 1 exits 0 when everything matches, 1 on drift, and 4 when it cannot
 tell — a missing or unreadable record is not a clean install, and it does
 not report one. It needs no privilege on purpose: every installed file is
-world-readable (ADR-0012), so the people whose `PATH` this tool changed can
-check the guard that refuses their commands.
+world-readable (ADR-0012), so any account holding a copy of the payload can
+check the guard that refuses its commands.
+
+`deploy.py` is the installer and is not part of what it installs, so it is
+never under `<prefix>`. Run it from the payload copied to the node in step 6.
+`--verify` reads only what is under the prefix it was built with, the
+installed files and the installed `site.lock.json`, so any payload built with
+the same `[install].prefix` can check the install.
 
 Step 3 answers by content and never by location. It takes the `site_sha256`
 the payload recorded and looks for a commit reachable from the reviewed ref
@@ -698,25 +733,53 @@ uv run walk-blocker build --site site.toml --out payload/
 ```
 
 then copy the payload to the node and run the install again (steps 6 to
-8). The install over an existing prefix is the redeploy: it recognises its
-own payload marker, replaces the payload from the snapshot, rewrites the
-hook blocks between their markers, and restarts the timer. The diff to
-`site.toml`, reviewed in the site's own repository, is the review ADR-0005
-wanted for a root-run installer's write targets.
+8). An install to the same `[install].prefix`, `[install].unit_dir`,
+`[install].tmpfiles_dir` and `[hooks.<shell>].file` paths is the redeploy:
+it recognises its own payload marker, replaces the payload from the
+snapshot, rewrites the hook blocks between their markers, and restarts the
+timer. The diff to `site.toml`, reviewed in the site's own repository, is
+the review ADR-0005 wanted for a root-run installer's write targets.
 
 Two changes deserve a second look before the rebuild. A change under
 `[install]` or `[hooks.<shell>].file` moves where root writes; read the
-preview (step 7) with particular care. A change to `[timer].on_calendar`
-must be re-surveyed against the live schedule of the node, not carried over
-(ADR-0017).
+preview (step 7) with particular care. If the change moves the prefix, the
+`unit_dir`, the `tmpfiles_dir` or a hook file, it is not a redeploy: the
+install writes to the new path and leaves what the old build wrote at the
+old path in place (§14), including, for `tmpfiles_dir`, the journal read its
+drop-in granted. Uninstall with the old payload first, then install the new
+one. A change to `[timer].on_calendar` must be re-surveyed against the live
+schedule of the node, not carried over (ADR-0017).
 
 ## 14. Uninstall
 
-As root, on the node:
+As root, on the node, from the payload the install was run from:
 
 ```sh
-python3 <prefix>/deploy.py --uninstall
+python3 walk-blocker-payload/deploy.py --uninstall
 ```
+
+`deploy.py` is not under `<prefix>`: the installer is not part of what it
+installs. Use the payload the install came from, or a rebuild of the same
+reviewed configuration. Every path the uninstall touches is compiled in from
+that build's `site.toml`, so a payload built from a different configuration
+does not cleanly undo this install. Only a different `[install].prefix` is
+refused outright, because the prefix it names carries no payload marker. That
+holds because a node carries one walk-blocker install: the timer and service
+have fixed names, so systemd loads one of each. A second install under
+another prefix overwrites the first's unit files, or, with a different
+`[install].unit_dir`, the copy in whichever directory systemd searches first
+is the one that runs; the two never run side by side. Nothing refuses a
+second install, so uninstall the first before installing again. Where two prefixes carry the marker anyway, the uninstall removes the
+one its payload was built for, and stops the one pair of units whichever
+install wrote them. Before running it, compare `site_sha256` in the
+payload's own `site.lock.json` with the one in `<prefix>/site.lock.json`:
+they match when the payload is a rebuild of the configuration installed
+there. If the copy from step 6 is gone, read `site_sha256` from the installed
+`<prefix>/site.lock.json`, which every account can read. In a clone of the
+site's repository, run `walk-blocker provenance --sha256 <that hash> --repo .
+--ref origin/main`, naming the site's reviewed branch if it is not
+`origin/main` (§11, step 3). Rebuild the payload at the commit it reports as
+`REVIEWED`, copy it to the node, and run the uninstall from there.
 
 It reverses the install and is gated on root alone — reversing a control is
 the safer direction and does not need the same ceremony as installing one

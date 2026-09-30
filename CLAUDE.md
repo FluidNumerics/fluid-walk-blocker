@@ -85,9 +85,10 @@ once, before anything that can block. Treat this as settled. See ADR-0006.
 
 **Layer 1 is advisory and the docstrings must say so.** A PATH shim is
 bypassable by an absolute path, an ephemeral environment, a private `PATH`,
-a container, a scheduler job script, a shell function. That is not a bug;
-it is the reason Layer 2 exists. Describing the shim as enforcement invites
-reliance it cannot support. See ADR-0001.
+a container, a scheduler job script, a shell function, a session that started
+before the install. That is not a bug; it is the reason Layer 2 exists.
+Describing the shim as enforcement invites reliance it cannot support. See
+ADR-0001.
 
 **The fast path forks nothing and opens nothing; the guarded path pays one
 documented fork; nothing before the decision reads anything that can
@@ -267,7 +268,7 @@ uvx yamllint==1.38.0 -c .yamllint .github/workflows/ci.yml
 uv run --group dev pyflakes examples/payload/deploy.py   # deploy.py is Python, not shell
 python3 tools/check_no_site_literals.py --require-terms --quiet   # IP hygiene, same as CI; see tools/README-ip-gate.md
 uv run walk-blocker provenance --payload PAYLOAD --repo SITE_REPO   # is this config on the reviewed branch?
-python3 PREFIX/deploy.py --verify                       # on a node: does the install match its record?
+python3 PAYLOAD/deploy.py --verify                      # on a node, from the staged payload: does the install match its record?
 ```
 
 Commands marked with a milestone do not work yet, or run only as a placeholder
