@@ -28,8 +28,9 @@ them about a traversal tool walking a guarded mount:
 
 - the walk ran longer than 900 seconds while the process that started it was
   still alive;
-- the walk ran that long after the process that started it had gone, for
-  example an ssh session that closed without taking its command with it;
+- the walk ran longer than that, counted from its own start, and the process
+  that started it had gone, for example an ssh session that closed without
+  taking its command with it;
 - 4 or more such walks were running at once under one parent.
 
 It never kills a command it could not parse, a tool it does not model (even
