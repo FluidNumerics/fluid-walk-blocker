@@ -75,7 +75,11 @@ configuration is supported. There is no override. The refusal guards against
 the wrong payload, not against root. It prints both digests, and the recovery
 is a build of the installed configuration: `walk-blocker provenance
 --sha256` names the reviewed commit to rebuild, or a copy of the installed
-`site.toml` builds a payload whose digest matches by construction.
+`site.toml` builds a payload whose digest matches by construction. An install
+whose `site.toml` is missing or cannot vouch for it has no digest to rebuild
+from, so for that case the recovery is to re-run the install from its
+payload, which rewrites `site.toml` and is never refused, and then to
+uninstall from the same payload.
 
 The install is unchanged. Installing a different configuration over the same
 prefix is the redeploy, and it is never refused. One install per node is the

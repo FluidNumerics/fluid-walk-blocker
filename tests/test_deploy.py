@@ -2058,25 +2058,35 @@ def test_uninstall_refuses_an_install_of_another_configuration(
         installed = hashlib.sha256(fh.read()).hexdigest()
     assert installed in err and deploy.SITE_SHA256 in err, err
     assert "walk-blocker provenance --sha256" in err, err
+    assert "Re-run the install" not in err, err
 
 
+@pytest.mark.parametrize("dry_run", [False, True], ids=["run", "preview"])
 def test_uninstall_preview_refuses_another_configuration_too(
-        tmp_path, monkeypatch):
-    """The dry run reaches the same answer as the run it previews."""
+        tmp_path, monkeypatch, capsys, dry_run):
+    """The dry run reaches the same answer, and names the same recovery, as
+    the run it previews."""
     code, calls = _uninstall_with_installed_site(
-        tmp_path, monkeypatch, _other_config, dry_run=True)
+        tmp_path, monkeypatch, _other_config, dry_run=dry_run)
     assert code == 6
     assert calls == []
+    assert "walk-blocker provenance --sha256" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("dry_run", [False, True], ids=["run", "preview"])
 def test_uninstall_refuses_when_the_installed_config_is_absent(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, dry_run):
     """The marker lands first, so an install that stopped half way can be
-    marked with no configuration beside it."""
+    marked with no configuration beside it. No build can match a file that
+    is not there, so the recovery named is the re-install, never a rebuild
+    of a digest that does not exist."""
     code, calls = _uninstall_with_installed_site(
-        tmp_path, monkeypatch, lambda site: None)
+        tmp_path, monkeypatch, lambda site: None, dry_run=dry_run)
     assert (code, calls) == (6, [])
-    assert "does not exist" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "does not exist" in err, err
+    assert "Re-run the install" in err, err
+    assert "provenance" not in err, err
 
 
 def test_uninstall_refuses_a_symlinked_installed_config(tmp_path, monkeypatch):

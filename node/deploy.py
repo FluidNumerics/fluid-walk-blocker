@@ -2277,8 +2277,8 @@ def installed_config_refusal(prefix):
     if bad is not None:
         return ("%s %s" % (path, bad), None)
     if not os.path.exists(path):
-        return ("%s does not exist, so the install stopped before its "
-                "configuration landed" % path, None)
+        return ("%s does not exist: the install did not finish, or the "
+                "file was removed" % path, None)
     offenders = unowned_by(path)
     if offenders:
         return ("%s: %s" % (offenders[0].path, offenders[0].reason), None)
@@ -2310,7 +2310,10 @@ def installed_config_refusal(prefix):
 
 
 def write_installed_config_refusal(prefix, reason, installed, out=None):
-    """Said once, so the message names both digests and both recoveries."""
+    """Said once, so the message names both digests and the recovery that
+    fits: a rebuild when there is an installed digest to rebuild, and a
+    re-install when there is none, since no build can match a file that is
+    not there or cannot be read."""
     out = sys.stderr if out is None else out
     out.write("deploy.py: refusing to uninstall prefix=%s: %s.\n"
               % (prefix, reason))
@@ -2320,13 +2323,22 @@ def write_installed_config_refusal(prefix, reason, installed, out=None):
     out.write(
         "  A payload tears down the unit_dir, journal drop-in and hook files\n"
         "  compiled into it, which are the install's only when it was built\n"
-        "  from the same configuration. Nothing has been touched. Uninstall\n"
-        "  with a build of the installed configuration instead:\n"
-        "  `walk-blocker provenance --sha256 <installed> --repo SITE_REPO`\n"
-        "  names the reviewed commit to rebuild, or build from a copy of\n"
-        "  %s, whose digest matches by construction.\n"
-        "  See docs/operating.md section 14.\n"
-        % os.path.join(prefix, "site.toml"))
+        "  from the same configuration. Nothing has been touched.\n")
+    if installed is None:
+        out.write(
+            "  With no installed configuration to vouch for the install, no\n"
+            "  build can match it. Re-run the install from the payload that\n"
+            "  wrote this prefix, or from a build of the site's reviewed\n"
+            "  configuration: the install rewrites site.toml and is never\n"
+            "  refused. Then uninstall from that same payload.\n")
+    else:
+        out.write(
+            "  Uninstall with a build of the installed configuration instead:\n"
+            "  `walk-blocker provenance --sha256 <installed> --repo SITE_REPO`\n"
+            "  names the reviewed commit to rebuild, or build from a copy of\n"
+            "  %s, whose digest matches by construction.\n"
+            % os.path.join(prefix, "site.toml"))
+    out.write("  See docs/operating.md section 14.\n")
 
 
 def irregular_target(path):

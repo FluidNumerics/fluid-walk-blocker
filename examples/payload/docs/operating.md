@@ -790,6 +790,15 @@ install wrote. A copy whose `schema_version` the current tool no longer
 accepts builds with the release that installed it. There is no flag that
 skips the check; it guards against the wrong payload, not against root.
 
+A refusal that prints no installed hash — the `site.toml` is missing, a
+symlink, not a regular file, not root-owned or unreadable — has nothing to
+rebuild from. The install did not finish, or the file was altered since. If
+`<prefix>/site.lock.json` survives, its `site_sha256` is the hash to give
+`provenance --sha256` to find which configuration that was. Re-run the
+install from the payload that wrote the prefix, or from a rebuild of the
+site's reviewed configuration: the install rewrites `site.toml` and is never
+refused. Then uninstall from that same payload.
+
 It reverses the install and is gated on root alone — reversing a control is
 the safer direction and does not need the same ceremony as installing one
 (ADR-0004). It disables and removes the timer and service, strips every
