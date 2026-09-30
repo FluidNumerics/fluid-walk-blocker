@@ -62,6 +62,7 @@ the ADR it bears on.
 | 0024 A refusal is legible to a caller that reads neither stderr nor a pipeline's exit code | n/a: structural |
 | 0025 The audit trail is readable by a site-named group, and a listed service group may hold a spool ancestor | The spool ancestors' owner, group and mode before and after the package upgrade that changed them, and the membership of the group it left holding write |
 | 0026 A site may grant the spool group read on the whole journal, and the deployer proves the grant landed | journald's storage and split mode, the journal directories' and files' ACLs by class of entry, how many journal files the reader could open, and a root pull of the same window showing the refusals that reader could not see |
+| 0027 An orphaned traversal is a finding only past the traversal budget | The trail row naming a reparented known-tool walk shortly after it started, and the same process's age at a later firing |
 
 ## What this file is not
 

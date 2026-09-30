@@ -309,12 +309,14 @@ def test_users_guidance_comes_before_the_mount_table(page):
         "## The mounts this node guards")
 
 
-def test_the_orphan_reason_carries_no_time_limit(page):
-    """classify() names an orphaned traversal at any age (see
-    test_an_orphan_traversal_is_killable_at_any_age), so the page's kill
-    reasons must not give the orphan case the budget's condition."""
+def test_the_orphan_reason_carries_the_budget(page):
+    """classify() names an orphaned traversal only past the traversal budget
+    (ADR-0027, test_an_orphan_traversal_must_run_past_the_budget_first), so
+    the page's orphan reason must carry the budget's condition, and must not
+    tell people an orphan can be killed however young."""
     reasons = page.split("It kills a process for one of three reasons")[1]
     reasons = reasons.split("It never kills")[0]
     orphan = [item for item in reasons.split("\n- ") if "had gone" in item]
     assert len(orphan) == 1, reasons
-    assert "no time" in orphan[0] and "that long" not in orphan[0], orphan[0]
+    assert "that long" in orphan[0], orphan[0]
+    assert "no time" not in reasons and "however young" not in reasons, reasons

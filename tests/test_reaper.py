@@ -438,15 +438,30 @@ def test_orphan_traversal_is_the_incident_shape(procfs, mounts_path):
     assert finding.detail["mount"] in ("/home", "/scratch")
 
 
-def test_an_orphan_traversal_is_killable_at_any_age(procfs, mounts_path):
-    """No budget on the orphan arm: a walk whose reader is gone is a finding
-    the moment it is seen, and it is not in NEVER_KILL. The users' page says
-    so, and must not tell people an orphan has to run "that long" first."""
+def test_an_orphan_traversal_must_run_past_the_budget_first(procfs, mounts_path):
+    """The orphan arm has the runaway arm's budget (ADR-0027): reparenting to
+    init is how `nohup`, `setsid` and a detached session look too, so a
+    young orphan is not yet a finding. Past the budget it is, and it is not
+    in NEVER_KILL. The users' page tells people the same."""
+    budget = reaper.TRAVERSAL_BUDGET_S
     write_proc(procfs, 4103, "find", ["find", "/home", "-type", "f"],
                uid=UID_B, ppid=1, state="D", cpu_s=2.0, age_s=5)
+    assert reaper.classify(scan(procfs), read_mounts(mounts_path)) == []
+    write_proc(procfs, 4103, "find", ["find", "/home", "-type", "f"],
+               uid=UID_B, ppid=1, state="D", cpu_s=2.0, age_s=budget + 60)
     findings = reaper.classify(scan(procfs), read_mounts(mounts_path))
     assert [f.verdict for f in findings] == ["orphan_traversal"]
     assert "orphan_traversal" not in reaper.NEVER_KILL
+
+
+def test_a_young_orphan_still_counts_toward_fanout(procfs, mounts_path):
+    """The budget gates the per-process verdict, not membership of a
+    fan-out: FANOUT_N young orphaned walks of one mount are still one."""
+    for i in range(reaper.FANOUT_N):
+        write_proc(procfs, 4110 + i, "find", ["find", "/scratch/s%d" % i, "-name", "x"],
+                   uid=UID_B, ppid=1, state="D", cpu_s=1.0, age_s=60)
+    verdicts = [f.verdict for f in reaper.classify(scan(procfs), read_mounts(mounts_path))]
+    assert verdicts == ["fanout_traversal"], verdicts
 
 
 def test_runaway_traversal_has_a_live_parent(procfs, mounts_path):

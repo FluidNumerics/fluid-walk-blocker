@@ -49,8 +49,8 @@ prefix, and every refusal prints its path.
 
 - **Why.** A refusal means the command would have walked an expensive
   filesystem with no bound. A kill means the reaper found a traversal tool
-  past its time budget on such a mount, one orphaned by a closed session (at
-  any age), or too many running at once under one parent. The reaper kills only when the
+  past its time budget on such a mount, whether or not the session that
+  started it is still open, or too many running at once under one parent. The reaper kills only when the
   site has explicitly enabled it with `--kill-others`. By default it reports
   and signals nothing.
 - **How to check.** `systemctl cat walk-blocker.service | grep ExecStart=`
@@ -159,7 +159,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0026` |
+| `docs/adr/` | the decisions, `0001` through `0027` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/operating.md` | the operator's runbook |
@@ -228,7 +228,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0026`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0027`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook
 6. `docs/alternatives.md` — what to run instead: the users' grimoire, and the
