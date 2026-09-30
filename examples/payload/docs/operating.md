@@ -457,8 +457,9 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 `io_pressure_delta` and `stalling_slice` — and, on `opaque_traversal`
 alone, `d_polls`, the consecutive polls the process has been seen in D
 (ADR-0020). Read it as a member of `[install].spool_group`; the trail is
-`0640`, readable by root and that group and nobody else, by decision
-(ADR-0025). (`[install].audit_filename`
+`0640`, readable by root and that group by its mode bits, by decision
+(ADR-0025); a named ACL entry can widen that, and the deploy lists the
+accounts it finds. (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account
 cannot append to a root-owned file.)

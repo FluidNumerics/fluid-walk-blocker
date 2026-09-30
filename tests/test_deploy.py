@@ -4943,3 +4943,51 @@ def test_verify_reports_extra_readers_without_changing_its_exit(
     assert code == clean_code
     assert "can read the spool (access ACL)" in out, out
 
+
+def test_the_dry_run_prints_the_grant_report_or_says_there_is_none(
+        tmp_path, monkeypatch):
+    """The preview is one of the three places the report lives. Mutation:
+    delete the loop over `grant_lines` and neither sentence appears."""
+    monkeypatch.setattr(deploy, "spool_read_grant_lines", lambda s, g: [])
+    assert ("no named ACL entry grants read beyond the group"
+            in _preview(tmp_path, monkeypatch))
+    monkeypatch.setattr(deploy, "spool_read_grant_lines",
+                        lambda s, g: ["user audrey can read the spool (access ACL)"])
+    text = _preview(tmp_path, monkeypatch)
+    assert "user audrey can read the spool (access ACL)" in text
+    assert "no named ACL entry grants read" not in text
+
+
+def test_the_post_install_message_lists_extra_readers_and_is_silent_otherwise(
+        tmp_path, monkeypatch, capsys):
+    """The closing text names the extra readers, and says nothing about ACLs
+    when there are none. Mutation: guard the block with `if False` and the
+    named reader never reaches the operator."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    monkeypatch.setattr(deploy, "spool_read_grant_lines", lambda s, g: [])
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    assert "named ACL entries" not in capsys.readouterr().out
+    monkeypatch.setattr(deploy, "spool_read_grant_lines",
+                        lambda s, g: ["user audrey can read the spool (access ACL)"])
+    assert deploy.system_execute(_args(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "through named ACL entries this install leaves alone" in out
+    assert "user audrey can read the spool (access ACL)" in out
+
+
+def test_a_journal_acl_this_cannot_parse_is_a_gap_not_a_traceback(
+        tmp_path, monkeypatch):
+    """#80's shared parser: a header or length it does not know used to
+    escape _grant_gap as struct.error. Mutation: delete the
+    `except AclUnreadable` clause and this raises."""
+    path = str(tmp_path / "entry")
+    open(path, "w").close()
+    monkeypatch.setattr(
+        deploy.os, "getxattr",
+        lambda p, n, follow_symlinks=True: b"\x02\x00\x00\x00\x01")
+    why = deploy._grant_gap(path, deploy._ACL_ACCESS, os.getgid(),
+                            deploy._ACL_READ)
+    assert why == "the posix_acl_access ACL could not be parsed", why
+
