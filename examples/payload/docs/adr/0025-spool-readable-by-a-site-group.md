@@ -169,9 +169,10 @@ none; ADR-0012's "never read or written" still holds for writing.
   with the wrong group, holding `0644` trail files, is what every node that
   installed before this record has; the install sets it right through
   no-follow descriptors and the relink keeps it so. It does so only once
-  every refusal has passed and the previous units are down, so a refused
-  install writes nothing to the spool and an old relink cannot undo half
-  the repair first. A group- or
+  every preflight refusal has passed and the previous units are down, so an
+  install refused at preflight writes nothing to the spool and an old relink
+  cannot undo half the repair first. A refusal after the payload starts
+  being replaced can follow the repair and leaves the repaired state. A group- or
   other-writable spool, a setuid bit, or a setgid bit anywhere below the
   spool directory itself still refuses. The spool directory's own setgid
   bit is the decision, not a finding.

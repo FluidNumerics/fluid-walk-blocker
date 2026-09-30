@@ -2897,8 +2897,11 @@ def system_execute(args, env=None):
     if not args.dry_run and _units_are_down(env) != 0:
         return 7
 
-    # The spool's read scope, repaired only now: after every refusal above
-    # and after the previous units are down (#74). Repaired during preflight,
+    # The spool's read scope, repaired only now: after every refusal
+    # preflight makes and after the previous units are down (#74). Refusals
+    # below this point (ownership, spool creation, install.sh) come once the
+    # payload is being replaced and can follow this repair; the spool they
+    # leave is the ADR-0025 state, not a half-repair. Repaired during preflight,
     # a refused install still re-grouped and re-moded the spool, and the old
     # timer, still firing, could undo part of it first -- an old relink's
     # `install -d -m 0755` keeps the setgid bit, leaving 2755. These are this
