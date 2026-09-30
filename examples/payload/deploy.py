@@ -1372,12 +1372,13 @@ def _open_spool_dir(spool, uid):
 
 
 def repair_spool(spool, gid, uid=0, dry_run=False, out=None):
-    """The one-time read-scope sweep, before the spool is judged.
+    """The one-time read-scope sweep, after preflight has judged the spool
+    and the previous units are down (#74).
 
     Only what spool_mode_repairs() lists, and each entry is re-judged on the
     fd it is repaired through: an entry that changed between the listing and
-    the open is skipped rather than repaired, and the blockers that run next
-    see it as whatever it now is. Every entry is opened relative to the
+    the open is skipped rather than repaired, and create_spool(), which runs
+    later in system_execute(), judges it as whatever it now is. Every entry is opened relative to the
     spool's fd, O_NOFOLLOW and O_NONBLOCK -- a link is refused by the open,
     and a fifo planted under a trail's name cannot hang the install.
     """
