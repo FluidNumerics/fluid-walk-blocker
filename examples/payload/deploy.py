@@ -2310,9 +2310,10 @@ def installed_config_refusal(prefix):
 
 
 def write_installed_config_refusal(prefix, reason, installed, out=None):
-    """Said once, so the message names both digests and the recovery that
-    fits: a rebuild when there is an installed digest to rebuild, and a
-    re-install when there is none, since no build can match a file that is
+    """Said once, so the message names every digest there is -- the
+    installed one only when there is one -- and the recovery that fits: a
+    rebuild when there is an installed digest to rebuild, and a re-install
+    when there is none, since no build can match a file that is
     not there or cannot be read."""
     out = sys.stderr if out is None else out
     out.write("deploy.py: refusing to uninstall prefix=%s: %s.\n"

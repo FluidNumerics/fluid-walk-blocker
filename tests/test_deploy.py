@@ -2085,6 +2085,7 @@ def test_uninstall_refuses_when_the_installed_config_is_absent(
     assert (code, calls) == (6, [])
     err = capsys.readouterr().err
     assert "does not exist" in err, err
+    assert "installed site.toml  sha256" not in err, "no digest to print"
     assert "Re-run the install" in err, err
     assert "provenance" not in err, err
 

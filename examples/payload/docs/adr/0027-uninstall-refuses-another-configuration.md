@@ -72,9 +72,10 @@ cannot show its configuration cannot be shown to be this one. The dry run
 makes the same comparison and reaches the same answer. The build's `VERSION`
 is not compared: an uninstall run from a newer build of the same
 configuration is supported. There is no override. The refusal guards against
-the wrong payload, not against root. It prints both digests, and the recovery
-is a build of the installed configuration: `walk-blocker provenance
---sha256` names the reviewed commit to rebuild, or a copy of the installed
+the wrong payload, not against root. It prints the payload's digest, and the
+installed one when there is one to print. The recovery on a mismatch is a
+build of the installed configuration: `walk-blocker provenance --sha256`
+names the reviewed commit to rebuild, or a copy of the installed
 `site.toml` builds a payload whose digest matches by construction. An install
 whose `site.toml` is missing or cannot vouch for it has no digest to rebuild
 from, so for that case the recovery is to re-run the install from its

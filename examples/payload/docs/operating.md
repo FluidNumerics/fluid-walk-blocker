@@ -777,8 +777,8 @@ second install, so uninstall the first before installing again. Where two prefix
 one its payload was built for, and stops the one pair of units whichever
 install wrote them.
 
-The refusal prints both hashes, and changes nothing. To uninstall, build the
-configuration that is installed. In a clone of the site's repository, run
+The refusal changes nothing. On a mismatch it prints both hashes. To
+uninstall, build the configuration that is installed. In a clone of the site's repository, run
 `walk-blocker provenance --sha256 <the installed hash> --repo . --ref
 origin/main`, naming the site's reviewed branch if it is not `origin/main`
 (§11, step 3). Rebuild the payload at the commit it reports as `REVIEWED`,
