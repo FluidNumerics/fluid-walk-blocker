@@ -1970,13 +1970,13 @@ def preflight(args, privileged, out=None):
     the preview REPORTS -- never as clean, and never as a blocker
     manufactured out of the reader's uid -- and which the install refuses.
 
-    `repair` is the install's one asymmetry, named here rather than
-    duplicated: it sets the read scope of the spool and its own files before
-    judging them, because that is the state this code exists to correct,
-    where the preview advertises the identical list from the identical
-    function. It runs after the paths are judged and before the audit
-    directory is, exactly where the install used to do it inline, and it is
-    handed the reader group's gid, resolved here.
+    Nothing here writes to the spool. The install's one asymmetry with the
+    preview is that it sets the read scope of the spool and its own files,
+    and it does that in `system_execute()`, after these checks and after the
+    previous units are down (#74); the preview advertises the identical list
+    from the identical function. The spool is judged here as the install
+    will leave it: `audit_dir_blockers()` does not refuse over a path
+    `spool_mode_repairs()` lists.
 
     The groups come first (ADR-0025): the reader group must resolve, and
     every listed service group must be proven free of people, before the
