@@ -67,8 +67,11 @@ toward `fanout_traversal`'s group.
 - A process whose age cannot be read is not an orphan finding, as it is
   already not a runaway one. Age is read from the process table, never
   inferred (the schema's own description of the key).
+  `test_an_orphan_whose_age_cannot_be_read_is_not_a_finding` pins it.
 - `orphan_idle` is unchanged. It covers orphans with no expensive root, and a
-  young orphan on an expensive mount does not fall through to it.
+  young orphan on an expensive mount does not fall through to it;
+  `test_a_young_idle_orphan_on_an_expensive_mount_is_not_orphan_idle` pins
+  that.
 - The users' page states the budget for both reasons. The orphan case no
   longer carries a "no time limit" clause, and
   `test_the_orphan_reason_carries_the_budget` pins that the page says so.

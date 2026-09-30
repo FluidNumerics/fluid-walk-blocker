@@ -464,6 +464,29 @@ def test_a_young_orphan_still_counts_toward_fanout(procfs, mounts_path):
     assert verdicts == ["fanout_traversal"], verdicts
 
 
+def test_an_orphan_whose_age_cannot_be_read_is_not_a_finding(procfs, mounts_path):
+    """ADR-0027: age is read from the process table, never inferred, so an
+    orphan with no age is not past the budget. An unreadable uptime is what
+    leaves age_s None; a walk that old in every other respect stays silent."""
+    write_proc(procfs, 4120, "find", ["find", "/home", "-type", "f"],
+               uid=UID_B, ppid=1, state="D", cpu_s=50.0,
+               age_s=reaper.TRAVERSAL_BUDGET_S + 60)
+    (procfs / "uptime").unlink()
+    procs = scan(procfs)
+    assert procs[4120].age_s is None
+    assert reaper.classify(procs, read_mounts(mounts_path)) == []
+
+
+def test_a_young_idle_orphan_on_an_expensive_mount_is_not_orphan_idle(procfs, mounts_path):
+    """ADR-0027: below the budget the known-tool-on-an-expensive-mount branch
+    still ends the process's classification, so a young orphan with almost no
+    CPU does not fall through to orphan_idle, which covers orphans with no
+    expensive root."""
+    write_proc(procfs, 4121, "find", ["find", "/home", "-type", "f"],
+               uid=UID_B, ppid=1, state="S", cpu_s=0.1, age_s=60)
+    assert reaper.classify(scan(procfs), read_mounts(mounts_path)) == []
+
+
 def test_runaway_traversal_has_a_live_parent(procfs, mounts_path):
     write_proc(procfs, 500, "bash", ["-bash"], uid=UID_B, ppid=1, state="S")
     write_proc(procfs, 4102, "grep", ["grep", "-rIn", "pat", "/home/someone"],
