@@ -3116,9 +3116,11 @@ def system_execute(args, env=None):
             "  not prove a required hook fires (above). The payload passed\n"
             "  every ownership and trust check, so the units are written and\n"
             "  %s is enabled: Layer 2 is running. Layer 1's upkeep\n"
-            "  must never take Layer 2 down. Fix the hook, then re-run this\n"
-            "  install; until then, sessions that do not source the hook are\n"
-            "  unguarded by Layer 1.\n" % TIMER_UNIT)
+            "  must never take Layer 2 down. install.sh stopped at that\n"
+            "  proof, so a best-effort hook, which it writes after the\n"
+            "  required ones, was not written either. Fix the hook, then\n"
+            "  re-run this install; until then, sessions that do not source\n"
+            "  the hook are unguarded by Layer 1.\n" % TIMER_UNIT)
         return INSTALL_HOOKS_UNPROVEN
     if rc != 0:
         return rc

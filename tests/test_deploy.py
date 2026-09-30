@@ -1087,6 +1087,9 @@ def test_a_hook_proof_failure_still_arms_the_reaper(
     assert os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
     err = capsys.readouterr().err
     assert "Layer 2 is running" in err and "NOT proven" in err, err
+    # install.sh exits at the proof, before it writes a best-effort hook;
+    # "installed" alone would say otherwise.
+    assert "best-effort hook" in err and "not written" in err, err
     assert "None" not in err.splitlines(), err
 
 
