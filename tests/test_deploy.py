@@ -1093,6 +1093,29 @@ def test_a_hook_proof_failure_still_arms_the_reaper(
     assert "None" not in err.splitlines(), err
 
 
+def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
+        tmp_path, monkeypatch, capsys):
+    """ADR-0008 and the runbook say exit 4 comes only after the post-install
+    ownership check clears. When that check refuses, the deploy exits 9,
+    writes no unit and enables no timer, whatever install.sh exited with."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+
+    def unowned_after_install(root, uid=0):
+        # The same check runs once BEFORE install.sh (exit 5, and it removes
+        # the payload); only the run after it is under test here.
+        ran = any("install.sh" in a for c in calls for a in c)
+        return [(root, "owner", "owned by uid 1000")] if ran else []
+
+    monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 9
+    assert not [c for c in calls if c[:2] == ["systemctl", "enable"]], calls
+    assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+
+
 def test_any_other_installer_failure_leaves_the_timer_off_and_says_so(
         tmp_path, monkeypatch, capsys):
     """A refusal of install.sh's own (exit 3) or any other failure keeps the

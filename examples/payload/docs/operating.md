@@ -337,8 +337,10 @@ What it verifies, and refuses on:
   and its failure is a warning (ADR-0008). A required hook that fails its
   proof still fails the deploy, with exit 4, but only after the reaper's
   units are written and its timer re-enabled: the payload passed every
-  trust check, and Layer 1's upkeep must never take Layer 2 down. Any other
-  `install.sh` failure leaves the timer disabled and says so;
+  trust check, and Layer 1's upkeep must never take Layer 2 down. If the
+  ownership check below then refuses, the deploy exits 9 instead, writes no
+  unit, and the timer stays disabled. Any other `install.sh` failure leaves
+  the timer disabled and says so;
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;

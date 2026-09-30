@@ -79,7 +79,8 @@ launched by other tooling — noise, not a personal interactive shell.
 a `gate` of `"required"` or `"best-effort"`.**
 
 A **required** shell fails the install (`install.sh --system` exits 4, and
-`deploy.py` exits 4 after it) if `verify_<shell>_hook` cannot prove the file fires under
+`deploy.py` exits 4 after it, unless its own post-install ownership check
+refuses first and exits 9) if `verify_<shell>_hook` cannot prove the file fires under
 remote-command conditions with the shim directory stripped from `PATH` — the
 probe must not pass merely because the caller's own `PATH` already carries it.
 For bash that is `SHLVL=0`, `SSH_CLIENT` set, stdin `/dev/null`, requiring a
