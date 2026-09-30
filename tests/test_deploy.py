@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import functools
 import grp
+import hashlib
 import io
 import json
 import os
@@ -33,7 +34,8 @@ import tempfile
 import pytest
 
 from _deploy_helpers import (EXAMPLE_SITE, REQUIRED_SOURCES, ROOT,
-                             load_stamped_deploy, site_values, source_text,
+                             example_site_sha256, load_stamped_deploy,
+                             site_values, source_text,
                              stamped_text, write_stamped_deploy)
 from _install_helpers import Layout, stamped_install
 import walk_blocker
@@ -97,6 +99,9 @@ def pass_uninstall_checks(monkeypatch, prefix):
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     os.makedirs(prefix, exist_ok=True)
     open(os.path.join(prefix, deploy.PAYLOAD_MARKER), "w").close()
+    # The configuration the module was stamped from, installed as the build
+    # would install it: the uninstall hashes it against SITE_SHA256.
+    shutil.copyfile(EXAMPLE_SITE, os.path.join(prefix, "site.toml"))
     # The teardown runs the DEPLOYED helper, so it has to be there.
     staged = os.path.join(prefix, "shim")
     os.makedirs(staged, exist_ok=True)
@@ -391,8 +396,13 @@ def test_the_built_payload_ships_deploy_py_executable_and_stamped(built_payload)
     text = path.read_text()
     assert "@@" not in text
     site = walk_blocker.config.load_site(EXAMPLE_SITE)
-    values = stamp.SiteValues(site, walk_blocker.__version__)
+    values = stamp.SiteValues(site, walk_blocker.__version__,
+                              example_site_sha256())
     assert stamp.check_text(text, values, "py", stamp.CONSUMERS["deploy.py"]) == []
+    # The constant the uninstall compares against is the digest the lock
+    # records, so a rebuild found by `provenance` matches by construction.
+    lock = json.loads((built_payload / "site.lock.json").read_text())
+    assert "SITE_SHA256 = %r" % lock["site_sha256"] in text
     proc = subprocess.run([NODE_PYTHON, str(path), "--version"],
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
@@ -1998,6 +2008,123 @@ def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(shared))
     assert deploy.system_uninstall(_args(tmp_path)) == 6
     assert not any("install.sh" in arg for c in calls for arg in c), calls
+
+
+# The installed configuration must be this payload's (ADR-0027). Every case
+# refuses with 6 before the first command, so the assertion is on `calls`
+# being empty, not merely on install.sh being absent from it.
+
+def _uninstall_with_installed_site(tmp_path, monkeypatch, write_site,
+                                   **overrides):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path, **overrides)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    site = os.path.join(args.prefix, "site.toml")
+    os.unlink(site)
+    write_site(site)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    return deploy.system_uninstall(args), calls
+
+
+def _other_config(site):
+    with open(EXAMPLE_SITE, "rb") as fh:
+        data = fh.read()
+    with open(site, "wb") as fh:
+        fh.write(data + b"# a comment is a different configuration\n")
+
+
+def test_uninstall_proceeds_when_the_installed_config_is_this_payloads(
+        tmp_path, monkeypatch):
+    """The fixture installs the file the module was stamped from, and its
+    empty marker names no version: VERSION is deliberately not compared."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 0
+    assert any("install.sh" in a for c in calls for a in c)
+
+
+def test_uninstall_refuses_an_install_of_another_configuration(
+        tmp_path, monkeypatch, capsys):
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, _other_config)
+    assert code == 6
+    assert calls == [], "nothing may run before the refusal"
+    err = capsys.readouterr().err
+    with open(os.path.join(_args(tmp_path).prefix, "site.toml"), "rb") as fh:
+        installed = hashlib.sha256(fh.read()).hexdigest()
+    assert installed in err and deploy.SITE_SHA256 in err, err
+    assert "walk-blocker provenance --sha256" in err, err
+
+
+def test_uninstall_preview_refuses_another_configuration_too(
+        tmp_path, monkeypatch):
+    """The dry run reaches the same answer as the run it previews."""
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, _other_config, dry_run=True)
+    assert code == 6
+    assert calls == []
+
+
+def test_uninstall_refuses_when_the_installed_config_is_absent(
+        tmp_path, monkeypatch, capsys):
+    """The marker lands first, so an install that stopped half way can be
+    marked with no configuration beside it."""
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, lambda site: None)
+    assert (code, calls) == (6, [])
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_uninstall_refuses_a_symlinked_installed_config(tmp_path, monkeypatch):
+    """Even to a file with the right bytes: the link is not what the install
+    wrote."""
+    def link(site):
+        target = str(tmp_path / "elsewhere.toml")
+        shutil.copyfile(EXAMPLE_SITE, target)
+        os.symlink(target, site)
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch, link)
+    assert (code, calls) == (6, [])
+
+
+def test_uninstall_refuses_an_installed_config_that_is_not_a_regular_file(
+        tmp_path, monkeypatch):
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch,
+                                                 os.mkfifo)
+    assert (code, calls) == (6, [])
+
+
+def test_uninstall_refuses_an_installed_config_owned_by_someone_else(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    site = os.path.join(args.prefix, "site.toml")
+
+    def unowned(root, uid=0):
+        if root == site:
+            return [deploy.Unowned(site, "owner", "owned by uid 1000")]
+        return []
+    monkeypatch.setattr(deploy, "unowned_by", unowned)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 6
+    assert calls == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-0 file")
+def test_uninstall_refuses_an_unreadable_installed_config(tmp_path,
+                                                          monkeypatch):
+    """Never a match: a file this cannot read vouches for nothing."""
+    def unreadable(site):
+        shutil.copyfile(EXAMPLE_SITE, site)
+        os.chmod(site, 0)
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch,
+                                                 unreadable)
+    assert (code, calls) == (6, [])
 
 
 def test_uninstall_refuses_a_symlinked_prefix(tmp_path, monkeypatch):

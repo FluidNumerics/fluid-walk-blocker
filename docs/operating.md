@@ -746,7 +746,8 @@ preview (step 7) with particular care. If the change moves the prefix, the
 install writes to the new path and leaves what the old build wrote at the
 old path in place (§14), including, for `tmpfiles_dir`, the journal read its
 drop-in granted. Uninstall with the old payload first, then install the new
-one. A change to `[timer].on_calendar` must be re-surveyed against the live
+one. The new payload cannot do it: it was built from a different
+configuration, so its uninstall refuses the old install (§14). A change to `[timer].on_calendar` must be re-surveyed against the live
 schedule of the node, not carried over (ADR-0017).
 
 ## 14. Uninstall
@@ -760,9 +761,13 @@ python3 walk-blocker-payload/deploy.py --uninstall
 `deploy.py` is not under `<prefix>`: the installer is not part of what it
 installs. Use the payload the install came from, or a rebuild of the same
 reviewed configuration. Every path the uninstall touches is compiled in from
-that build's `site.toml`, so a payload built from a different configuration
-does not cleanly undo this install. Only a different `[install].prefix` is
-refused outright, because the prefix it names carries no payload marker. That
+that build's `site.toml`, so before it touches anything it hashes the
+installed `<prefix>/site.toml` and refuses, with exit 6, unless the hash is
+the `site_sha256` its own build recorded (ADR-0027). A payload built from any
+other configuration is refused, even one that differs by a comment, and so is
+an install whose `site.toml` is missing or is not the root-owned regular file
+the install wrote. A payload for a different `[install].prefix` is refused
+sooner, because the prefix it names carries no payload marker. The check
 holds because a node carries one walk-blocker install: the timer and service
 have fixed names, so systemd loads one of each. A second install under
 another prefix overwrites the first's unit files, or, with a different
@@ -770,15 +775,20 @@ another prefix overwrites the first's unit files, or, with a different
 is the one that runs; the two never run side by side. Nothing refuses a
 second install, so uninstall the first before installing again. Where two prefixes carry the marker anyway, the uninstall removes the
 one its payload was built for, and stops the one pair of units whichever
-install wrote them. Before running it, compare `site_sha256` in the
-payload's own `site.lock.json` with the one in `<prefix>/site.lock.json`:
-they match when the payload is a rebuild of the configuration installed
-there. If the copy from step 6 is gone, read `site_sha256` from the installed
-`<prefix>/site.lock.json`, which every account can read. In a clone of the
-site's repository, run `walk-blocker provenance --sha256 <that hash> --repo .
---ref origin/main`, naming the site's reviewed branch if it is not
-`origin/main` (§11, step 3). Rebuild the payload at the commit it reports as
-`REVIEWED`, copy it to the node, and run the uninstall from there.
+install wrote them.
+
+The refusal prints both hashes, and changes nothing. To uninstall, build the
+configuration that is installed. In a clone of the site's repository, run
+`walk-blocker provenance --sha256 <the installed hash> --repo . --ref
+origin/main`, naming the site's reviewed branch if it is not `origin/main`
+(§11, step 3). Rebuild the payload at the commit it reports as `REVIEWED`,
+copy it to the node, and run the uninstall from there. If the site's history
+no longer holds that commit, copy the installed `<prefix>/site.toml` off the
+node, which every account can read, and build a payload from the copy: its
+hash matches by construction, and its compiled paths are the ones that
+install wrote. A copy whose `schema_version` the current tool no longer
+accepts builds with the release that installed it. There is no flag that
+skips the check; it guards against the wrong payload, not against root.
 
 It reverses the install and is gated on root alone — reversing a control is
 the safer direction and does not need the same ceremony as installing one

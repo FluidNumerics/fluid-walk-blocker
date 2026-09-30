@@ -1,6 +1,7 @@
 # ADR-0013: Site configuration is compiled at build time, not read at run time
 
 **Status:** accepted, 2026-09-16
+The clause "as a record, not as an input" is narrowed by ADR-0027: the uninstall hashes the installed `site.toml` against the digest compiled into it, and refuses on a mismatch.
 **Narrows:** ADR-0005, "a future location change is a commit, not a flag"
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
@@ -85,7 +86,11 @@ artifact is a red build, not a stale node.
 The payload carries `site.toml` and `site.lock.json` — schema version, tool
 version, `VERSION`, the config hash and a hash per emitted file; no timestamp
 and no hostname, so two builds of the same inputs are byte-identical — as a
-record, not as an input. The node can be asked which configuration is
+record. Neither is an input to what the guard, the reaper or the install does.
+The one consequence either has on the node is ADR-0027's: `deploy.py` also
+carries the config hash, stamped on a line marked
+`# GENERATED from SITE_SHA256`, and the uninstall refuses when the installed
+`site.toml` does not hash to it. The node can be asked which configuration is
 deployed and the answer checked against a commit. The artifacts checked in
 under `examples/payload/` are compiled from `site.example.toml`, a fictional
 site.
@@ -130,6 +135,16 @@ configuration.
 
 All of `site.toml`. Every key is compiled, and this record is the reason none
 is read anywhere else.
+
+## Superseded wording
+
+Narrowed by ADR-0027. The Decision above read:
+
+> The payload carries `site.toml` and `site.lock.json` — schema version, tool version, `VERSION`, the config hash and a hash per emitted file; no timestamp and no hostname, so two builds of the same inputs are byte-identical — as a record, not as an input.
+
+The record is still no input to behaviour, but the uninstall's refusal is a
+consequence of it: the installed `site.toml` must hash to the digest compiled
+into the payload that would tear it down.
 
 **This is not to be "fixed" by a later agent.** The question is settled here
 because it kept coming back. If it is revisited, revisit it with a new ADR
