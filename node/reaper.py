@@ -850,10 +850,11 @@ def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None,
                 # into a legitimate run. It still counts toward fanout below.
                 pass
             elif orphaned:
-                # Nothing reads its output: the writer's reader is gone. This
-                # is the originating incident's exact shape -- the `head` at
-                # the other end of the pipe never got its lines, so it never
-                # sent SIGPIPE.
+                # Past the budget with the process that started it gone. The
+                # originating incident had this shape -- the `head` at the
+                # other end of the pipe never got its lines, so it never sent
+                # SIGPIPE -- but ppid 1 alone does not say the output has no
+                # reader; that is why this arm waits for the budget.
                 findings.append(Finding(proc, "orphan_traversal", detail))
             else:
                 findings.append(Finding(proc, "runaway_traversal", detail))
