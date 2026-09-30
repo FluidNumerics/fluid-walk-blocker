@@ -1083,7 +1083,12 @@ def test_a_hook_proof_failure_still_arms_the_reaper(
     monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
     args = _args(tmp_path)
     assert deploy.system_execute(args) == deploy.INSTALL_HOOKS_UNPROVEN == 4
-    assert ["systemctl", "enable", "--now", deploy.TIMER_UNIT] in calls, calls
+    enable = ["systemctl", "enable", "--now", deploy.TIMER_UNIT]
+    assert enable in calls, calls
+    # systemd must re-read the units this deploy just wrote before it can
+    # enable them.
+    assert ["systemctl", "daemon-reload"] in calls, calls
+    assert calls.index(["systemctl", "daemon-reload"]) < calls.index(enable)
     assert os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
     err = capsys.readouterr().err
     assert "Layer 2 is running" in err and "NOT proven" in err, err
@@ -1143,6 +1148,20 @@ def test_a_failed_uncaptured_command_prints_no_stray_none(capsys):
     assert exc.value.code == 7
     err = capsys.readouterr().err
     assert err.startswith("failed: ") and "None" not in err.splitlines(), err
+
+
+def test_a_failed_captured_command_prints_its_stderr_once(capsys):
+    """The other half of the `None` fix: when stderr WAS captured it is still
+    shown, once, on a line of its own. The command's stderr here has no
+    trailing newline, the only input on which the normalisation shows."""
+    with pytest.raises(SystemExit) as exc:
+        deploy.run([sys.executable, "-c",
+                    # Built at run time: the echoed command line must not
+                    # contain the marker the assertion counts.
+                    "import sys; sys.stderr.write('bo' + 'om'); sys.exit(7)"])
+    assert exc.value.code == 7
+    err = capsys.readouterr().err
+    assert err.count("boom") == 1 and err.endswith("boom\n"), err
 
 
 def test_the_post_install_message_names_both_trails_and_the_record(
