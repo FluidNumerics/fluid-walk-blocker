@@ -309,8 +309,9 @@ account (ADR-0004):
   resolves in `[install].tool_search_path`, plus `walk-job`;
 - `[install].spool_dir` as `root:<spool_group> 02750`, its files `0640`:
   writable by root alone, readable by the one group `[install].spool_group`
-  names, so the people who make the `--kill` decision can read the trail and
-  nobody else can (ADR-0025). It is created with `mkdir` and set through a
+  names, so the people who make the `--kill` decision can read the trail and,
+  by its mode bits, nobody else can (ADR-0025). A named ACL entry can widen
+  that, and the deploy lists the accounts it finds. It is created with `mkdir` and set through a
   descriptor opened without following a link, never `install -d`, and it
   carries `.walk-blocker-spool`, the root-owned marker that the relink and the
   reaper require before they write into it as root. The relink
