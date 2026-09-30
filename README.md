@@ -57,8 +57,8 @@ prefix, and every refusal prints its path.
   shows, to any account, whether killing is on at all. A refusal is recorded
   in your own journal (`journalctl -t walk-blocker`) for as long as the node
   keeps it. A kill is not visible to you: it is recorded in the reaper's audit
-  trail and the system journal, which only root and the site's spool group can
-  read. Ask them, with the time and the command. From your shell a kill looks
+  trail and the system journal, which root and the site's spool group read
+  (and anyone the node's ACLs name). Ask them, with the time and the command. From your shell a kill looks
   like `Terminated` or `Killed`, the same as any other signal.
 - **How to avoid it.** Bound the walk to the mount's depth allowance or start
   it deeper, run long walks with `walk-job`, make sure a remote command ends

@@ -457,8 +457,9 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 `io_pressure_delta` and `stalling_slice` — and, on `opaque_traversal`
 alone, `d_polls`, the consecutive polls the process has been seen in D
 (ADR-0020). Read it as a member of `[install].spool_group`; the trail is
-`0640`, readable by root and that group and nobody else, by decision
-(ADR-0025). (`[install].audit_filename`
+`0640`, readable by root and that group by its mode bits, by decision
+(ADR-0025); a named ACL entry can widen that, and the deploy lists the
+accounts it finds. (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account
 cannot append to a root-owned file.)
@@ -566,7 +567,7 @@ record, and whether the record will still be there when someone asks.
 
 | Record | Written by | Readable by | Kept until |
 |---|---|---|---|
-| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root and `[install].spool_group` (ADR-0025) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
+| `<spool_dir>/reaper-audit.jsonl` | the reaper, on every change of action, including every kill and every kill that did not land | root, `[install].spool_group`, and any account a named ACL entry on the spool grants read (ADR-0025; the deploy lists them) | it passes `[reaper].audit_max_bytes`, then one generation more as `.1` |
 | the unit's journal (the reaper's stdout) | the reaper, every finding every poll | root, `adm`, and the spool group when `[install].journal_readable` is on (ADR-0026) | journald vacuums it |
 | Layer 1's journal records | the shim and the relink | the refused user (their own file), plus everyone in the row above | journald vacuums it |
 
