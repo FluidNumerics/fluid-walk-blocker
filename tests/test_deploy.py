@@ -492,8 +492,9 @@ def test_deploy_system_refuses_without_root(tmp_path, monkeypatch):
 
 
 def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
-    """Reversing a control is the safer direction. It needs proof of root,
-    which since ADR-0021 is the whole of the install's gate too."""
+    """Reversing a control is the safer direction. The uninstall that WRITES
+    needs proof of root, which since ADR-0021 is the whole of the install's
+    gate too."""
     args = _args(tmp_path)
 
     monkeypatch.setattr(deploy, "_is_root", lambda: False)
@@ -506,6 +507,71 @@ def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
     assert deploy.system_uninstall(args) == 0
     assert any(c[:3] == ["systemctl", "disable", "--now"] for c in calls)
     assert any("--uninstall" in c for c in calls)
+
+
+def test_the_uninstall_dry_run_needs_no_root_and_writes_nothing(
+        tmp_path, monkeypatch, capsys):
+    """Issue #53: a dry uninstall writes nothing, so it needs no privilege,
+    for the reason ADR-0021 gave the install's dry run. Every command is a
+    dry run, and nothing on disk changes. The writing uninstall is still
+    exit 3 without root. This fails before the fix with 3."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    before = sorted(os.walk(str(tmp_path)))
+    dry = []
+
+    def dry_only(cmd, check=True, capture=True, dry_run=False, env=None):
+        dry.append(dry_run)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(deploy, "run", dry_only)
+    assert deploy.system_uninstall(args) == 0
+    assert dry and all(dry), dry
+    assert sorted(os.walk(str(tmp_path))) == before, "a dry run wrote"
+    assert "NOT CHECKED" not in capsys.readouterr().out
+
+    assert deploy.system_uninstall(_args(tmp_path)) == 3
+
+
+def _locked_prefix(tmp_path, monkeypatch):
+    """A prefix under a parent this user may not search: the stat every
+    uninstall check starts with answers EACCES."""
+    locked = tmp_path / "locked"
+    prefix = str(locked / "prefix")
+    monkeypatch.setattr(deploy, "DEFAULT_PREFIX", prefix)
+    pass_uninstall_checks(monkeypatch, prefix)
+    os.chmod(str(locked), 0)
+    return locked
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root is not denied a stat")
+def test_an_uninstall_dry_run_names_what_it_could_not_check(
+        tmp_path, monkeypatch, capsys):
+    """Unprivileged, EACCES is not an answer about the install: it is named
+    under NOT CHECKED, the ADR-0027 configuration check among them, and the
+    dry run goes on and exits 0. With privilege the same answer refuses,
+    exit 6, with nothing run."""
+    locked = _locked_prefix(tmp_path, monkeypatch)
+    try:
+        monkeypatch.setattr(deploy, "_is_root", lambda: False)
+        monkeypatch.setattr(deploy, "run", recording_run([]))
+        assert deploy.system_uninstall(_args(tmp_path, dry_run=True)) == 0
+        out = capsys.readouterr().out
+        assert "NOT CHECKED" in out, out
+        block = out.split("NOT CHECKED", 1)[1]
+        assert "site.toml (configuration, ADR-0027): could not be checked " \
+            "as this user" in block, block
+        assert deploy.PAYLOAD_MARKER in block, block
+
+        calls = []
+        monkeypatch.setattr(deploy, "_is_root", lambda: True)
+        monkeypatch.setattr(deploy, "run", recording_run(calls))
+        assert deploy.system_uninstall(_args(tmp_path, dry_run=True)) == 6
+        assert calls == [], calls
+        assert "could not be made even as root" in capsys.readouterr().err
+    finally:
+        os.chmod(str(locked), 0o700)
 
 
 def test_the_cli_refuses_the_path_flags_it_used_to_accept():

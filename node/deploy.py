@@ -7,7 +7,11 @@
                                          privilege, and says which checks it
                                          could not make as an ordinary user
     python3 deploy.py --uninstall        as root, reverse a --system install
-    python3 deploy.py --verify           compare the installed files against
+    python3 deploy.py --uninstall --dry-run
+                                         make the uninstall's checks and PRINT
+                                         its commands, writing nothing; needs
+                                         no privilege, like the install's
+    python3 deploy.py --verify          compare the installed files against
                                          the record they were built from
     python3 deploy.py --version
 
@@ -50,9 +54,11 @@ already root, checked with `os.geteuid()` and not reimplemented. There is no
 second authorization flag. Whoever holds root on the target node has the
 authority this installs with, and a script that demanded a further ceremony
 from them would be gainsaying a judgement that is not its to make (ADR-0021,
-narrowing ADR-0004). `--uninstall` is root alone for the same reason it
-always was: reversing a control is the safer direction. It is not gated on
-anything else, but it does refuse an install whose `site.toml` is not the
+narrowing ADR-0004). The uninstall that writes is root alone for the same
+reason it always was: reversing a control is the safer direction. Its dry
+run, like the install's, writes nothing and so needs no privilege; a check
+it could not make as an ordinary user is named rather than reported clean.
+The uninstall is not gated on anything else, but it does refuse an install whose `site.toml` is not the
 configuration this build was compiled from, since every path it would tear
 down is this build's literal (ADR-0027). That guards against the wrong
 payload, not against root.
@@ -2590,9 +2596,18 @@ def installed_config_refusal(prefix):
     can fail to vouch for the install refuses, because an install that cannot
     show its configuration cannot be shown to be the one this payload would
     undo. The installed file is 0644 under a 0755 prefix, so none of this
-    needs root -- which the dry run will rely on once it runs without it.
+    needs root, and the uninstall's dry run makes it as whoever runs it.
+
+    The third outcome is a raised PermissionError: this process was not
+    PERMITTED to look (EACCES or EPERM, on the way to the file or opening
+    it). That is not an answer about the install, so it is not returned as
+    one. The caller decides: the unprivileged dry run reports it as not
+    checked, and a privileged caller refuses on it as on any other reason.
     """
     path = os.path.join(prefix, "site.toml")
+    blind = unstattable_as_me(path)
+    if blind is not None:
+        raise PermissionError(errno.EACCES, blind[1], blind[0])
     bad = irregular_target(path)
     if bad is not None:
         return ("%s %s" % (path, bad), None)
@@ -2606,6 +2621,8 @@ def installed_config_refusal(prefix):
         # O_NOFOLLOW for a link swapped in after the lstat; O_NONBLOCK so a
         # FIFO swapped in cannot hang the open, and the fstat refuses it.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except PermissionError:
+        raise
     except OSError as err:
         return ("%s cannot be read (%s)" % (path, err.strerror), None)
     try:
@@ -2617,6 +2634,8 @@ def installed_config_refusal(prefix):
             if not chunk:
                 break
             digest.update(chunk)
+    except PermissionError:
+        raise
     except OSError as err:
         # Never a match: an unreadable file vouches for nothing.
         return ("%s cannot be read (%s)" % (path, err.strerror), None)
@@ -3541,9 +3560,21 @@ def system_execute(args, env=None):
 
 
 def system_uninstall(args, env=None):
-    if not _is_root():
+    # The uninstall that WRITES is root alone. Its dry run writes nothing, so
+    # it needs no privilege, for the reason ADR-0021 gives the install's: an
+    # operator diagnosing a node should be able to read what an uninstall
+    # would undo without becoming root first (issue #53).
+    if not args.dry_run and not _is_root():
         sys.stderr.write("deploy.py: --uninstall must run as root\n")
         return 3
+    # A fact about the CALLER, as in preflight(): a check this process was
+    # not permitted to make is reported by an unprivileged dry run and
+    # refused by anyone with privilege. On the writing path it is True.
+    privileged = _is_root()
+    unknown = []
+
+    def refuse_unknown():
+        return write_unknown_refusal(unknown, action="uninstall")
 
     # install.sh derives BIN=$PREFIX/bin and removes every shim link in it,
     # so a careless prefix once deleted system binaries as root. That whole
@@ -3555,13 +3586,29 @@ def system_uninstall(args, env=None):
     # checks the install path applies. A disabled hook's file is validated
     # all the same -- the cost is a stat, and a hand-edited copy that
     # re-enables it would otherwise reach strip_block() unchecked. The spool
-    # is excluded because uninstall does not touch it.
-    if validate_root_write_paths(
-            args, attrs=("prefix", "unit_dir", "tmpfiles_dir", "bashrc_file",
-                         "zshenv_file", "fish_conf_file")) != 0:
+    # is excluded because uninstall does not touch it. Scoped to the paths
+    # this process may inspect, as preflight() scopes the install's.
+    inspectable = []
+    for attr in ("prefix", "unit_dir", "tmpfiles_dir", "bashrc_file",
+                 "zshenv_file", "fish_conf_file"):
+        blind = unstattable_as_me(getattr(args, attr))
+        if blind is None:
+            inspectable.append(attr)
+        else:
+            unknown.append(Check("paths", getattr(args, attr), CHECK_UNKNOWN,
+                                 "%s: %s" % blind))
+    if privileged and unknown:
+        return refuse_unknown()
+    if validate_root_write_paths(args, attrs=inspectable) != 0:
         return 6
     dropin = journal_dropin_path(args)
-    if dropin_blocker(dropin) is not None:
+    blind = unstattable_as_me(dropin)
+    if blind is not None:
+        unknown.append(Check("journal_dropin", dropin, CHECK_UNKNOWN,
+                             "%s: %s" % blind))
+        if privileged:
+            return refuse_unknown()
+    elif dropin_blocker(dropin) is not None:
         return 6
 
     # Same rule as the install: a teardown pointed elsewhere would `rm -f`
@@ -3573,8 +3620,15 @@ def system_uninstall(args, env=None):
 
     # And it has to be OUR install. Without the marker a lookalike directory
     # passes every check above, and install.sh then removes what sits in its
-    # bin/.
-    if not os.path.exists(os.path.join(args.prefix, PAYLOAD_MARKER)):
+    # bin/. An lstat with its errno split, not os.path.exists(), which answers
+    # False for "not permitted to look" as well as for "not there".
+    marker = os.path.join(args.prefix, PAYLOAD_MARKER)
+    blind = unstattable_as_me(marker)
+    if blind is not None:
+        unknown.append(Check("marker", marker, CHECK_UNKNOWN, "%s: %s" % blind))
+        if privileged:
+            return refuse_unknown()
+    elif not os.path.lexists(marker):
         sys.stderr.write(
             "deploy.py: refusing prefix=%s: no %s marker, so this is not a\n"
             "  directory walk-blocker installed. Uninstalling would `rm -f`\n"
@@ -3590,10 +3644,36 @@ def system_uninstall(args, env=None):
     # from the same site.toml. Checked in the dry run too, so the preview
     # reaches the same answer; and before the first command, like every
     # refusal above (ADR-0027).
-    reason, installed = installed_config_refusal(args.prefix)
+    config = os.path.join(args.prefix, "site.toml")
+    try:
+        reason, installed = installed_config_refusal(args.prefix)
+    except PermissionError as exc:
+        if privileged:
+            write_installed_config_refusal(
+                args.prefix, "%s cannot be read (%s)" % (config, exc.strerror),
+                None)
+            return 6
+        unknown.append(Check("configuration, ADR-0027", config, CHECK_UNKNOWN,
+                             "%s: %s" % (exc.filename or config,
+                                         exc.strerror)))
+        reason = None
     if reason is not None:
         write_installed_config_refusal(args.prefix, reason, installed)
         return 6
+
+    # The gids an earlier deploy granted, read BEFORE the first command so
+    # that a drop-in root cannot read refuses with nothing touched.
+    try:
+        granted = dropin_gids(dropin)
+    except PermissionError as exc:
+        if privileged:
+            sys.stderr.write("deploy.py: refusing to uninstall: the journal "
+                             "drop-in %s cannot be read (%s).\n"
+                             % (dropin, exc.strerror))
+            return 6
+        unknown.append(Check("journal_dropin", dropin, CHECK_UNKNOWN,
+                             "%s: %s" % (dropin, exc.strerror)))
+        granted = set()
 
     run(["systemctl", "disable", "--now", TIMER_UNIT],
         check=False, dry_run=args.dry_run, env=env)
@@ -3624,7 +3704,6 @@ def system_uninstall(args, env=None):
                         "have the removed units loaded")
     # Whatever the compiled flag says now: the drop-in records which gids an
     # earlier deploy granted, and those are what get revoked (ADR-0026).
-    granted = dropin_gids(dropin)
     if granted:
         if run(["rm", "-f", dropin], check=False,
                dry_run=args.dry_run, env=env).returncode != 0:
@@ -3637,8 +3716,23 @@ def system_uninstall(args, env=None):
                                     "%s" % root)
     # The DEPLOYED helper, verified, and no fallback to this directory. The
     # marker check above has already established that the prefix is one
-    # walk-blocker installed.
-    helper, why = uninstall_helper(args.prefix)
+    # walk-blocker installed. An unprivileged dry run that may not look at
+    # the helper names it as not checked and prints the command it would
+    # run; with privilege, not being able to look is the refusal below.
+    helper_dir = os.path.join(args.prefix, "shim")
+    blind = None
+    if not privileged:
+        for name in ("install.sh", "wrapped_names.sh"):
+            blind = unstattable_as_me(os.path.join(helper_dir, name))
+            if blind is not None:
+                break
+    if blind is not None:
+        unknown.append(Check("teardown_helper",
+                             os.path.join(helper_dir, "install.sh"),
+                             CHECK_UNKNOWN, "%s: %s" % blind))
+        helper, why = os.path.join(helper_dir, "install.sh"), None
+    else:
+        helper, why = uninstall_helper(args.prefix)
     if helper is None:
         hooks = enabled_hook_files(args)
         sys.stderr.write(
@@ -3680,6 +3774,7 @@ def system_uninstall(args, env=None):
             sys.stderr.write("  %s\n" % failure)
         return 8
 
+    write_not_checked(unknown, before="uninstalling")
     print("\nremoved. the audit trail under %s is left in place." % args.spool_dir)
     return 0
 
@@ -3963,9 +4058,9 @@ def main(argv=None):
                       help="compare the installed files against the record "
                            "they were built from; writes nothing")
     parser.add_argument("--dry-run", action="store_true",
-                        help="with --system: make every check and print the "
-                             "commands without running any of them; writes "
-                             "nothing and needs no privilege")
+                        help="with --system or --uninstall: make every check "
+                             "and print the commands without running any of "
+                             "them; writes nothing and needs no privilege")
     args = parser.parse_args(argv)
 
     # The seven locations are deliberately NOT options. argparse rejects
