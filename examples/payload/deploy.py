@@ -51,7 +51,11 @@ second authorization flag. Whoever holds root on the target node has the
 authority this installs with, and a script that demanded a further ceremony
 from them would be gainsaying a judgement that is not its to make (ADR-0021,
 narrowing ADR-0004). `--uninstall` is root alone for the same reason it
-always was: reversing a control is the safer direction.
+always was: reversing a control is the safer direction. It is not gated on
+anything else, but it does refuse an install whose `site.toml` is not the
+configuration this build was compiled from, since every path it would tear
+down is this build's literal (ADR-0027). That guards against the wrong
+payload, not against root.
 
 This repository's own agent sessions never run any of this as root, in any
 mode. That rule no longer has a flag holding it up, so it is stated as an
@@ -109,6 +113,15 @@ __version__ = '0.2.1'  # GENERATED from VERSION
 # and carry one version, because they are deployed as one and a per-file
 # version would invite mixing them. A literal, NOT read at run time: this
 # file is copied onto a node with nothing beside it to read the version from.
+
+# The sha256 of the site.toml bytes this build was compiled from: the same
+# digest the lock records as `site_sha256`. `--uninstall` compares the
+# INSTALLED `<prefix>/site.toml` against it and refuses on a mismatch, so a
+# payload built from some other configuration cannot tear this install down
+# with paths it never wrote (ADR-0027). A literal for the same reason as the
+# version: the payload's own lock is a user-owned file, and reading it here
+# would be a late read of bytes its owner can rewrite (ADR-0006).
+SITE_SHA256 = 'a1112c21b63c7199238a68326c44315b80b749ace4e02dc876f8a2c1c179337b'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -2299,6 +2312,87 @@ def uninstall_helper(prefix):
     return (helper, None)
 
 
+def installed_config_refusal(prefix):
+    """(None, digest) when `<prefix>/site.toml` is the configuration this
+    build was compiled from, else (reason, digest-or-None).
+
+    The file is hashed, never parsed: nothing in it reaches a path, a
+    threshold or a branch other than this one refusal (ADR-0027). Each way it
+    can fail to vouch for the install refuses, because an install that cannot
+    show its configuration cannot be shown to be the one this payload would
+    undo. The installed file is 0644 under a 0755 prefix, so none of this
+    needs root -- which the dry run will rely on once it runs without it.
+    """
+    path = os.path.join(prefix, "site.toml")
+    bad = irregular_target(path)
+    if bad is not None:
+        return ("%s %s" % (path, bad), None)
+    if not os.path.exists(path):
+        return ("%s does not exist: the install did not finish, or the "
+                "file was removed" % path, None)
+    offenders = unowned_by(path)
+    if offenders:
+        return ("%s: %s" % (offenders[0].path, offenders[0].reason), None)
+    try:
+        # O_NOFOLLOW for a link swapped in after the lstat; O_NONBLOCK so a
+        # FIFO swapped in cannot hang the open, and the fstat refuses it.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as err:
+        return ("%s cannot be read (%s)" % (path, err.strerror), None)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ("%s is not a regular file" % path, None)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, _VERIFY_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    except OSError as err:
+        # Never a match: an unreadable file vouches for nothing.
+        return ("%s cannot be read (%s)" % (path, err.strerror), None)
+    finally:
+        os.close(fd)
+    installed = digest.hexdigest()
+    if installed != SITE_SHA256:
+        return ("its site.toml is not the configuration this payload was "
+                "built from", installed)
+    return (None, installed)
+
+
+def write_installed_config_refusal(prefix, reason, installed, out=None):
+    """Said once, so the message names every digest there is -- the
+    installed one only when there is one -- and the recovery that fits: a
+    rebuild when there is an installed digest to rebuild, and a re-install
+    when there is none, since no build can match a file that is
+    not there or cannot be read."""
+    out = sys.stderr if out is None else out
+    out.write("deploy.py: refusing to uninstall prefix=%s: %s.\n"
+              % (prefix, reason))
+    if installed is not None:
+        out.write("  installed site.toml  sha256 %s\n" % installed)
+    out.write("  this payload's       sha256 %s\n" % SITE_SHA256)
+    out.write(
+        "  A payload tears down the unit_dir, journal drop-in and hook files\n"
+        "  compiled into it, which are the install's only when it was built\n"
+        "  from the same configuration. Nothing has been touched.\n")
+    if installed is None:
+        out.write(
+            "  With no installed configuration to vouch for the install, no\n"
+            "  build can match it. Re-run the install from the payload that\n"
+            "  wrote this prefix, or from a build of the site's reviewed\n"
+            "  configuration: the install rewrites site.toml and is never\n"
+            "  refused. Then uninstall from that same payload.\n")
+    else:
+        out.write(
+            "  Uninstall with a build of the installed configuration instead:\n"
+            "  `walk-blocker provenance --sha256 <installed> --repo SITE_REPO`\n"
+            "  names the reviewed commit to rebuild, or build from a copy of\n"
+            "  %s, whose digest matches by construction.\n"
+            % os.path.join(prefix, "site.toml"))
+    out.write("  See docs/operating.md section 14.\n")
+
+
 def irregular_target(path):
     """Why `path` is unfit to be rewritten in place, or None if it is fit.
 
@@ -3200,6 +3294,18 @@ def system_uninstall(args, env=None):
             "  wrapped tool names out of %s/bin, which here would be\n"
             "  somebody else's binaries.\n"
             % (args.prefix, PAYLOAD_MARKER, args.prefix))
+        return 6
+
+    # And it has to be the install THIS payload describes. The marker says
+    # walk-blocker is here; it does not say which configuration, and every
+    # other path this teardown touches -- the unit_dir, the drop-in, the hook
+    # files -- is this build's literal, right only if the install was built
+    # from the same site.toml. Checked in the dry run too, so the preview
+    # reaches the same answer; and before the first command, like every
+    # refusal above (ADR-0027).
+    reason, installed = installed_config_refusal(args.prefix)
+    if reason is not None:
+        write_installed_config_refusal(args.prefix, reason, installed)
         return 6
 
     run(["systemctl", "disable", "--now", TIMER_UNIT],
