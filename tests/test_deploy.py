@@ -38,6 +38,7 @@ from _deploy_helpers import (EXAMPLE_SITE, REQUIRED_SOURCES, ROOT,
                              site_values, source_text,
                              stamped_text, write_stamped_deploy)
 from _install_helpers import Layout, stamped_install
+from _node_helpers import load_module
 import walk_blocker
 from walk_blocker import build, stamp
 
@@ -112,6 +113,19 @@ def pass_uninstall_checks(monkeypatch, prefix):
         open(os.path.join(staged, name), "w").close()
 
 
+def pass_payload_checks(monkeypatch):
+    """Stub the payload's check against its own record (ADR-0029) to a pass.
+
+    The module under test is loaded from a scratch directory holding only
+    `deploy.py`, so REPO is a payload with nothing in it, and a recorded
+    `run` copies nothing into the snapshot either: the real check would
+    refuse both, correctly. Its own tests build a real payload instead. A
+    function on the module, never an environment variable (ADR-0013).
+    """
+    monkeypatch.setattr(deploy, "payload_blockers",
+                        lambda root, privileged: ([], []))
+
+
 def pass_prefix_checks(monkeypatch):
     """Stub the path-trust checks to their post-install answers.
 
@@ -132,6 +146,7 @@ def pass_prefix_checks(monkeypatch):
     # by other users -- the check is right and the fixture is not the shape
     # it judges.
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    pass_payload_checks(monkeypatch)
     # not_a_default() is deliberately NOT stubbed: the autouse _test_paths
     # fixture moves the constants to this tmp tree, so the real check runs
     # and passes for the right reason.
@@ -145,6 +160,7 @@ def pass_ownership_checks(monkeypatch):
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    pass_payload_checks(monkeypatch)
 
 
 def unowned_by_here(tree):
@@ -165,6 +181,13 @@ def _test_paths(tmp_path, monkeypatch):
     because a test that forgot them would try to install into the example
     site's literal prefix for real.
     """
+    _point_at_tmp(deploy, tmp_path, monkeypatch)
+
+
+def _point_at_tmp(module, tmp_path, monkeypatch):
+    """The autouse fixture's moves, applied to `module`: the suite's own
+    stamped deployer, or one loaded from a copy of a built payload."""
+    deploy = module
     monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(tmp_path / "prefix"))
     monkeypatch.setattr(deploy, "DEFAULT_UNIT_DIR", str(tmp_path / "unit-dir"))
     monkeypatch.setattr(deploy, "DEFAULT_TMPFILES_DIR", str(tmp_path / "tmpfiles-dir"))
@@ -895,6 +918,7 @@ def test_a_symlinked_installed_entry_is_rejected_before_any_chmod(
 
 
 def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda p, trusted_uids=(0,), trusted_gids=(): [])
@@ -921,6 +945,7 @@ def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
         tmp_path, monkeypatch):
     """The whole of ADR-0004 rests on this, so a failure stops the install
     rather than being reported after the timer is already enabled."""
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
@@ -979,6 +1004,7 @@ def test_the_ownership_check_covers_the_prefix_directory_itself(tmp_path,
     the prefix DIRECTORY, whose owner can replace shim/ after the check and
     have the timer run it as root. The mutations stay scoped; the check
     does not."""
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
@@ -998,6 +1024,7 @@ def test_the_ownership_check_runs_again_after_the_installer(tmp_path,
                                                             monkeypatch):
     """install.sh creates $prefix/bin -- the directory that holds the shims
     -- after the first assertion."""
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda p, trusted_uids=(0,), trusted_gids=(): [])
@@ -1287,6 +1314,7 @@ def test_untraversable_check_covers_the_prefix_and_the_spool(
     """Both, and the unit directory neither: the trail must be readable by
     the account that decides --kill (ADR-0012), and the unit directory is
     the distribution's."""
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
@@ -1494,6 +1522,7 @@ def test_the_spool_and_unit_dir_get_the_prefix_treatment(tmp_path, monkeypatch):
 
 def test_deploy_refuses_a_populated_directory_that_is_not_its_own(
         tmp_path, monkeypatch):
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
@@ -1792,6 +1821,274 @@ def test_an_untrusted_snapshot_parent_is_refused_not_worked_around(
         assert exit_code.code == 6
     else:
         raise AssertionError("an untrusted staging parent must be refused")
+
+
+# --------------------------------------------------------------------------
+# the payload against its own record (ADR-0029)
+# --------------------------------------------------------------------------
+
+EXAMPLE_PAYLOAD = os.path.join(ROOT, "examples", "payload")
+
+
+def _payload_copy(tmp_path):
+    """A copy of the committed example payload: `build --check` holds it
+    current, and its lock and its deploy.py come from one build."""
+    payload = str(tmp_path / "payload")
+    shutil.copytree(EXAMPLE_PAYLOAD, payload, symlinks=True)
+    return payload
+
+
+def _payload_deploy(payload, tmp_path, monkeypatch):
+    """That payload's own deploy.py, imported so REPO IS the payload, with
+    the autouse fixture's moves applied to it."""
+    module = load_module(os.path.join(payload, "deploy.py"), "payload_deploy")
+    assert module.REPO == payload
+    _point_at_tmp(module, tmp_path, monkeypatch)
+    return module
+
+
+def _truncate(path, size=64):
+    with open(path, "r+b") as fh:
+        fh.truncate(size)
+
+
+def _rewrite_lock(payload, **fields):
+    path = os.path.join(payload, "site.lock.json")
+    with open(path) as fh:
+        lock = json.load(fh)
+    lock.update(fields)
+    with open(path, "w") as fh:
+        json.dump(lock, fh)
+
+
+def _preview_payload(module, monkeypatch, capsys, root=False):
+    """system_preview() over the module's own payload, with preflight passed
+    and every command recorded rather than run: what is under test is the
+    payload check alone."""
+    monkeypatch.setattr(module, "_is_root", lambda: root)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    monkeypatch.setattr(module, "run", recording_run([]))
+    args = argparse.Namespace(dry_run=True, **module.default_paths())
+    rc = module.system_preview(args)
+    out, err = capsys.readouterr()
+    return rc, out, err
+
+
+def test_the_example_payload_matches_its_own_record(tmp_path, monkeypatch):
+    """The control for every case below: the payload as built passes, so a
+    refusal there is the damage the case did and nothing else."""
+    module = _payload_deploy(_payload_copy(tmp_path), tmp_path, monkeypatch)
+    assert module.payload_blockers(module.REPO, privileged=False) == ([], [])
+    assert module.payload_blockers(module.REPO, privileged=True) == ([], [])
+
+
+def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
+                                                 capsys):
+    """Issue #84's oracle. A copy cut short, the way an interrupted scp or
+    rsync leaves one, used to preview clean -- rc 0 and a root command to
+    paste -- and surface only during the root install. The dry run now
+    hashes the payload against its lock and refuses with the install's exit,
+    advertising nothing. This fails before the fix with 0 and the command."""
+    payload = _payload_copy(tmp_path)
+    _truncate(os.path.join(payload, "shim", "guard.sh"))
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    rc, out, err = _preview_payload(module, monkeypatch, capsys)
+    assert rc == 6, (out, err)
+    assert "shim/guard.sh" in err, err
+    assert "differs: shim/guard.sh" in err, err
+    assert "Run as root" not in out, out
+
+
+def _damage_missing(payload):
+    os.unlink(os.path.join(payload, "reaper.py"))
+    return "missing: reaper.py"
+
+
+def _damage_symlinked_docs(payload):
+    os.rename(os.path.join(payload, "docs"), os.path.join(payload, "docs.real"))
+    os.symlink("docs.real", os.path.join(payload, "docs"))
+    return "wrong type: docs is a symlink"
+
+
+def _damage_extra_in_shim(payload):
+    with open(os.path.join(payload, "shim", "stray.sh"), "w") as fh:
+        fh.write("echo stray\n")
+    return "extra: shim/stray.sh"
+
+
+def _damage_unparseable_lock(payload):
+    with open(os.path.join(payload, "site.lock.json"), "w") as fh:
+        fh.write("{ not json")
+    return "cannot vouch for the payload"
+
+
+def _damage_foreign_site_sha256(payload):
+    _rewrite_lock(payload, site_sha256="0" * 64)
+    return "records site_sha256 " + "0" * 64
+
+
+def _damage_foreign_version(payload):
+    _rewrite_lock(payload, version="0.0.0-another-build")
+    return "records version 0.0.0-another-build"
+
+
+def _damage_symlinked_file(payload):
+    os.unlink(os.path.join(payload, "shim", "wrapped_names.sh"))
+    os.symlink("guard.sh", os.path.join(payload, "shim", "wrapped_names.sh"))
+    return "wrong type: shim/wrapped_names.sh is a symlink"
+
+
+PAYLOAD_DAMAGE = {
+    "missing-file": _damage_missing,
+    "symlinked-docs": _damage_symlinked_docs,
+    "extra-in-shim": _damage_extra_in_shim,
+    "unparseable-lock": _damage_unparseable_lock,
+    "foreign-site-sha256": _damage_foreign_site_sha256,
+    "foreign-version": _damage_foreign_version,
+    "symlinked-file-in-shim": _damage_symlinked_file,
+}
+
+
+@pytest.mark.parametrize("damage", sorted(PAYLOAD_DAMAGE))
+def test_the_dry_run_refuses_a_payload_its_record_does_not_vouch_for(
+        damage, tmp_path, monkeypatch, capsys):
+    """Each way a staged payload can fail to be the build: a missing entry,
+    a directory entry that is a link (which the install's `cp -a` copies as
+    a link), a link or a file `cp -a` would install that the record does
+    not list, a lock that will not parse, and a lock from another build --
+    another configuration, or another version. All refuse with 6 and name
+    what differs; none advertises the command."""
+    payload = _payload_copy(tmp_path)
+    expected = PAYLOAD_DAMAGE[damage](payload)
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    rc, out, err = _preview_payload(module, monkeypatch, capsys)
+    assert rc == 6, (out, err)
+    assert expected in err, err
+    assert "Run as root" not in out, out
+
+
+def test_a_fifo_in_the_payload_is_refused_not_opened(tmp_path):
+    """A FIFO where reaper.py should be. `_sha256_file()` would block on its
+    open forever; the check lstats first and opens O_NONBLOCK. Run in a
+    subprocess under a timeout, so a regression fails rather than hangs."""
+    payload = _payload_copy(tmp_path)
+    os.unlink(os.path.join(payload, "reaper.py"))
+    os.mkfifo(os.path.join(payload, "reaper.py"))
+    script = (
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('d', sys.argv[1])\n"
+        "d = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(d)\n"
+        "blocked, unknown = d.payload_blockers(d.REPO, privileged=False)\n"
+        "print('\\n'.join(blocked))\n")
+    proc = subprocess.run(
+        [sys.executable, "-c", script, os.path.join(payload, "deploy.py")],
+        capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "wrong type: reaper.py is not a regular file" in proc.stdout, \
+        proc.stdout
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root reads a mode-000 file")
+def test_an_unreadable_payload_file_is_unchecked_as_a_user_and_refused_as_root(
+        tmp_path, monkeypatch, capsys):
+    """EACCES is not an answer about the payload. Unprivileged, it is named
+    under NOT CHECKED and the dry run goes on, rc 0, command advertised; with
+    privilege the same answer is a refusal, 6."""
+    payload = _payload_copy(tmp_path)
+    survey = os.path.join(payload, "survey.py")
+    os.chmod(survey, 0)
+    try:
+        module = _payload_deploy(payload, tmp_path, monkeypatch)
+        rc, out, err = _preview_payload(module, monkeypatch, capsys)
+        assert rc == 0, (out, err)
+        block = out.split("NOT CHECKED", 1)[1]
+        assert "%s (payload): could not be checked as this user" % survey \
+            in block, block
+        assert "Run as root" in out
+
+        rc, out, err = _preview_payload(module, monkeypatch, capsys, root=True)
+        assert rc == 6, (out, err)
+        assert "unreadable: survey.py" in err, err
+        assert "Run as root" not in out
+    finally:
+        os.chmod(survey, 0o644)
+
+
+def _damage_and_stage(damage, tmp_path, monkeypatch):
+    """A damaged payload's own deploy.py, about to snapshot it with the
+    real `install` and `cp`."""
+    payload = _payload_copy(tmp_path)
+    damage(payload)
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
+    return module
+
+
+STAGE_DAMAGE = {
+    # Before the fix: the snapshot passed and the install went on to exit 0.
+    "truncated": lambda payload: _truncate(
+        os.path.join(payload, "shim", "guard.sh")),
+    # Before the fix: exit 5, after disarming the timer and emptying the
+    # prefix.
+    "symlinked-docs": _damage_symlinked_docs,
+    # Before the fix: exit 1, passed through from `install`.
+    "missing-file": _damage_missing,
+}
+
+
+@pytest.mark.parametrize("damage", sorted(STAGE_DAMAGE))
+def test_the_install_refuses_a_snapshot_its_record_does_not_vouch_for(
+        damage, tmp_path, monkeypatch, capsys):
+    """The install's half of ADR-0029: the SNAPSHOT is judged, after the
+    real copies and before anything else, and refused with the dry run's
+    exit. Before the fix: no exit for the truncated file and the linked
+    directory, and exit 1 for the missing file."""
+    module = _damage_and_stage(STAGE_DAMAGE[damage], tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        module.stage_payload(dry_run=False)
+    assert exc.value.code == 6
+    err = capsys.readouterr().err
+    assert "does not match its own site.lock.json" in err, err
+    assert module.STAGING_PARENT in err, "the snapshot judged is named"
+
+
+def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
+        tmp_path, monkeypatch, capsys):
+    """Through system_execute(): the payload check refuses before the timer
+    is disarmed, so a bad copy costs the node nothing. Copies are real, and
+    every other command is recorded. Before the fix the truncated file was
+    installed, timer and all."""
+    module = _damage_and_stage(STAGE_DAMAGE["truncated"], tmp_path,
+                               monkeypatch)
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    # What the real preflight leaves on `args`, so that without the check
+    # this runs on to a finished install rather than to an AttributeError.
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    with pytest.raises(SystemExit) as exc:
+        module.system_execute(args)
+    assert exc.value.code == 6
+    assert calls and not [c for c in calls if c[0] == "systemctl"], calls
+    assert not os.path.exists(args.prefix)
+    assert "differs: shim/guard.sh" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------
@@ -3035,6 +3332,7 @@ def test_the_exemption_does_not_cover_a_file_this_install_never_wrote(
 def test_the_install_actually_tightens_what_it_declined_to_refuse(
         tmp_path, monkeypatch):
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
@@ -3085,6 +3383,7 @@ def test_the_spool_is_repaired_only_after_the_old_timer_is_down(
     """The other half of #74: the old units, still firing, could undo part
     of the repair before the disable. The repair lands after it."""
     args, _victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "untrusted_prefix_chain",
                         lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
@@ -3106,6 +3405,7 @@ def test_the_spool_is_repaired_only_after_the_old_timer_is_down(
 def test_the_preview_advertises_the_chmod_the_install_will_run(
         tmp_path, monkeypatch):
     args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
     # The preview validates the root-write paths now, exactly as the install
     # does, and a tmp tree's ancestors are this user's -- the same stub the
@@ -4630,6 +4930,7 @@ def test_an_old_0755_spool_with_0644_files_previews_as_repairs_and_installs_as_0
     spool_mode_repairs() return nothing, and the files stay 0644."""
     spool = _old_spool(tmp_path)
     _real_spool_checks(monkeypatch)
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "run", recording_run([]))
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -4779,6 +5080,7 @@ def test_a_spool_that_predates_the_marker_gets_one_from_the_install(
     spool = _old_spool(tmp_path)
     assert not os.path.exists(os.path.join(spool, deploy.SPOOL_MARKER))
     _real_spool_checks(monkeypatch)
+    pass_payload_checks(monkeypatch)
     monkeypatch.setattr(deploy, "run", recording_run([]))
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     with contextlib.redirect_stdout(io.StringIO()):

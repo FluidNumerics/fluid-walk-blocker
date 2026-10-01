@@ -81,6 +81,16 @@ user" rather than reporting it clean; run as root, that same answer is a
 refusal. A dry run stages nothing, so the staging parent is the one check
 it does not make -- in the dry run and in the install alike.
 
+Both also check the PAYLOAD against its own record (ADR-0029): every
+`PAYLOAD_SOURCES` entry is there with its type, nothing extra sits in `shim/`
+or `docs/`, every file hashes to its `site.lock.json` entry, and the lock
+names this build's `SITE_SHA256` and version. The dry run checks the payload
+directory it runs from; the install checks the root-only snapshot it copies
+from, once the snapshot is taken and before its first `systemctl`. Either
+refuses with exit 6. That catches a truncated or partial copy; it is no
+control against the payload's owner, who can rewrite the files and the lock
+together (ADR-0006).
+
 Exit 10 is not a refusal: it is reported after the install, timer armed,
 when the journal grant (ADR-0026) did not land -- which only a written ACL
 can show. The dry run names the causes it can know in advance.
@@ -119,8 +129,12 @@ __version__ = '0.2.1'  # GENERATED from VERSION
 # INSTALLED `<prefix>/site.toml` against it and refuses on a mismatch, so a
 # payload built from some other configuration cannot tear this install down
 # with paths it never wrote (ADR-0027). A literal for the same reason as the
-# version: the payload's own lock is a user-owned file, and reading it here
-# would be a late read of bytes its owner can rewrite (ADR-0006).
+# version: identity comes from the program already loaded, never from the
+# payload's own lock, which is a user-owned file its owner can rewrite
+# (ADR-0006). That lock IS read, for integrity and nothing else: the dry run
+# reads the payload's, the install reads its root-only snapshot's, and both
+# refuse unless the lock names this digest and every payload file hashes to
+# its entry (ADR-0029). It catches a bad copy, not the payload's owner.
 SITE_SHA256 = 'a1112c21b63c7199238a68326c44315b80b749ace4e02dc876f8a2c1c179337b'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
@@ -770,26 +784,28 @@ def system_preview(args, env=None):
     # run as root first, and is also perfectly runnable by the operator as
     # themselves. A root dry run can see everything the install will, so for
     # it "could not check" is the refusal it is for the install.
-    rc, checks = preflight(args, privileged=_is_root())
+    privileged = _is_root()
+    rc, checks = preflight(args, privileged=privileged)
     if rc != 0:
         sys.stderr.write(
             "deploy.py: the install would refuse too, so no command is "
             "advertised here.\n")
         return rc
 
-    # Never silently: a check nobody could make is not a check that passed,
-    # and the whole contract of this dry run is that reading it is enough.
+    # The payload this would install, against its own record (ADR-0029). The
+    # install makes the same check on its snapshot, which a dry run does not
+    # take, so here it is made on the directory the snapshot would be copied
+    # from: a truncated or partial copy refuses now rather than mid-install.
+    blocked, payload_unknown = payload_blockers(REPO, privileged=privileged)
+    if blocked:
+        write_payload_refusal(REPO, blocked)
+        sys.stderr.write(
+            "deploy.py: the install would refuse too, so no command is "
+            "advertised here.\n")
+        return 6
+
     unknown = [check for check in checks if check.state == CHECK_UNKNOWN]
-    if unknown:
-        print()
-        print("# NOT CHECKED. This dry run is running as a user who may not")
-        print("# inspect these paths, so the following were not made -- which")
-        print("# is not the same as made and passed. Re-run the dry run as")
-        print("# root to make them before deploying:")
-        for check in unknown:
-            print("#   %s (%s): could not be checked as this user -- %s"
-                  % (check.subject, check.name, check.reason))
-        print()
+    write_not_checked(unknown + payload_unknown)
 
     print("# Run as root, without --dry-run, to actually install:")
     # No path flags to forward, and that is the fix rather than a
@@ -1952,7 +1968,24 @@ def write_unusable_staging_refusal(parent, reason, out=None):
         "`systemctl` has nowhere to go.\n" % (parent, reason))
 
 
-def write_unknown_refusal(unknowns, out=None):
+def write_not_checked(unknowns, before="deploying", out=None):
+    """The dry run's NOT CHECKED block, said once for both dry runs. Never
+    silently: a check nobody could make is not a check that passed, and the
+    whole contract of a dry run is that reading it is enough."""
+    if not unknowns:
+        return
+    out = sys.stdout if out is None else out
+    out.write("\n# NOT CHECKED. This dry run is running as a user who may not\n"
+              "# inspect these paths, so the following were not made -- which\n"
+              "# is not the same as made and passed. Re-run the dry run as\n"
+              "# root to make them before %s:\n" % before)
+    for check in unknowns:
+        out.write("#   %s (%s): could not be checked as this user -- %s\n"
+                  % (check.subject, check.name, check.reason))
+    out.write("\n")
+
+
+def write_unknown_refusal(unknowns, out=None, action="install"):
     """A check root itself could not make. Returns 6, to be returned on.
 
     Unreachable in practice -- root is not subject to the permission bits
@@ -1964,9 +1997,9 @@ def write_unknown_refusal(unknowns, out=None):
     """
     out = sys.stderr if out is None else out
     out.write(
-        "deploy.py: refusing to install: a check could not be made even as "
+        "deploy.py: refusing to %s: a check could not be made even as "
         "root, and a\n  check that could not be made is not a check that "
-        "passed:\n")
+        "passed:\n" % action)
     for check in unknowns:
         out.write("  %s (%s): %s\n" % (check.subject, check.name,
                                        check.reason))
@@ -1987,6 +2020,13 @@ def preflight(args, privileged, out=None):
     the staging parent, is also the only one a dry run does not make, because
     `stage_payload()` does not make it either -- a dry run creates no
     snapshot, so it has no parent to judge.
+
+    The payload's own check against its record is NOT here, because its
+    subject differs by caller: `system_preview()` runs `payload_blockers()`
+    on the payload directory right after this returns, and `stage_payload()`
+    runs it on the snapshot it just took (ADR-0029). Checking the payload
+    directory here, for the install, would be a second read of user-owned
+    bytes after the one the snapshot makes (ADR-0006).
 
     `privileged` is a fact about the CALLER, not a mode. The install runs as
     root and can inspect everything; the preview runs as whoever reads it. A
@@ -2202,6 +2242,214 @@ def preflight(args, privileged, out=None):
     return 0, checks
 
 
+def _payload_file_digest(path):
+    """The sha256 of the regular file at `path`, or None when it is not one.
+
+    Not `_sha256_file()`, which `--verify` uses: that follows a link and
+    blocks opening a FIFO. O_NOFOLLOW for a link swapped in after the
+    caller's lstat; O_NONBLOCK so a FIFO cannot hang the open, and the fstat
+    then refuses it. Chunked for 3.9 (ADR-0015). Raises OSError.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, _VERIFY_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def _irregular_kind(info):
+    """What a non-regular lstat result is, for a refusal line."""
+    if stat.S_ISLNK(info.st_mode):
+        return "a symlink"
+    if stat.S_ISDIR(info.st_mode):
+        return "a directory"
+    return "not a regular file"
+
+
+def payload_blockers(root, privileged):
+    """`(blocked, unknown)` for the payload under `root`, judged against the
+    `site.lock.json` beside it (ADR-0029).
+
+    `blocked` is a list of lines, one per thing that differs -- `missing:`,
+    `extra:`, `wrong type:`, `differs:`, `unreadable:`, or the record itself
+    -- and any of them refuses, exit 6. `unknown` is a list of Checks for
+    what this process was not PERMITTED to read; `privileged` turns each of
+    those into a blocker instead, exactly as preflight() does.
+
+    An INTEGRITY read, not configuration (ADR-0013): no value in the lock
+    reaches a path, a threshold or any branch but this refusal, and the lock
+    is never an identity -- it must name the `SITE_SHA256` and `__version__`
+    compiled into this program, which is where identity comes from. Called
+    on the payload directory by the dry run and on the root-only snapshot by
+    the install, never on the payload directory by the install (ADR-0006).
+    It catches a bad copy; the payload's owner can rewrite the files, the
+    lock and deploy.py together, and nothing here pretends otherwise.
+
+    Every name is lstat'ed before it is opened, so a link is reported rather
+    than followed and a FIFO is reported rather than opened. Modes are not
+    compared: the install sets them.
+    """
+    blocked, unknown = [], []
+
+    def cannot_read(rel, exc):
+        if exc.errno in (errno.EACCES, errno.EPERM) and not privileged:
+            unknown.append(Check("payload", os.path.join(root, rel),
+                                 CHECK_UNKNOWN, "%s: %s" % (rel, exc.strerror)))
+        else:
+            blocked.append("unreadable: %s (%s)" % (rel, exc.strerror))
+
+    # 1. Each entry's type, by lstat, before anything is opened.
+    fit = set()
+    for rel, is_dir, _mode in PAYLOAD_SOURCES:
+        try:
+            info = os.lstat(os.path.join(root, rel))
+        except FileNotFoundError:
+            blocked.append("missing: %s" % rel)
+            continue
+        except OSError as exc:
+            cannot_read(rel, exc)
+            continue
+        if is_dir and stat.S_ISDIR(info.st_mode):
+            fit.add(rel)
+        elif not is_dir and stat.S_ISREG(info.st_mode):
+            fit.add(rel)
+        else:
+            blocked.append("wrong type: %s is %s, not a %s"
+                           % (rel, _irregular_kind(info),
+                              "directory" if is_dir else "regular file"))
+
+    # 2. The record. Opened only once it is known to be a regular file, so
+    #    read_installed_lock()'s plain open cannot block on a FIFO; probed
+    #    first so a permission answer is told apart from a record that will
+    #    not parse. Without it nothing below can be judged, and step 1 has
+    #    already said why it is unfit.
+    if "site.lock.json" not in fit:
+        return blocked, unknown
+    try:
+        _payload_file_digest(os.path.join(root, "site.lock.json"))
+    except OSError as exc:
+        cannot_read("site.lock.json", exc)
+        return blocked, unknown
+    lock = read_installed_lock(root)
+    if lock is None:
+        blocked.append("site.lock.json is not a record this can read, or it "
+                       "names a path outside the payload: it cannot vouch "
+                       "for the payload")
+        return blocked, unknown
+    if lock.get("site_sha256") != SITE_SHA256:
+        blocked.append("differs: site.lock.json records site_sha256 %s, and "
+                       "this build was compiled from %s"
+                       % (lock.get("site_sha256"), SITE_SHA256))
+    if lock["files"].get("site.toml") != SITE_SHA256:
+        blocked.append("differs: site.lock.json's site.toml entry is not "
+                       "this build's SITE_SHA256")
+    if lock.get("version") != __version__:
+        blocked.append("differs: site.lock.json records version %s, and this "
+                       "build is %s" % (lock.get("version"), __version__))
+
+    # 3. Every file against its entry. site.lock.json cannot hash itself, and
+    #    entries outside PAYLOAD_SOURCES -- deploy.py, which runs from here
+    #    and is never installed -- are not this check's.
+    expected, _not_installed = expected_from_lock(lock)
+
+    def judge(rel, walked=False):
+        try:
+            digest = _payload_file_digest(os.path.join(root, rel))
+        except OSError as exc:
+            cannot_read(rel, exc)
+            return
+        if digest is None:
+            blocked.append("wrong type: %s is not a regular file" % rel)
+        elif rel not in expected:
+            blocked.append(("extra: %s (no site.lock.json entry, and `cp -a` "
+                            "would install it)" if walked else
+                            "unrecorded: %s (no site.lock.json entry)") % rel)
+        elif digest != expected[rel]:
+            blocked.append("differs: %s does not hash to its site.lock.json "
+                           "entry" % rel)
+
+    for rel, is_dir, _mode in PAYLOAD_SOURCES:
+        if is_dir or rel == "site.lock.json" or rel not in fit:
+            continue
+        judge(rel)
+
+    # 4. The directory entries, walked by lstat on every name: `cp -a`
+    #    copies whatever is there, so an extra file is installed, and a link
+    #    or a FIFO is installed as one.
+    seen, unwalked = set(), []
+    for rel, is_dir, _mode in PAYLOAD_SOURCES:
+        if not is_dir or rel not in fit:
+            if is_dir:
+                unwalked.append(rel)
+            continue
+        pending = [rel]
+        while pending:
+            here = pending.pop()
+            try:
+                names = sorted(os.listdir(os.path.join(root, here)))
+            except OSError as exc:
+                cannot_read(here, exc)
+                unwalked.append(here)
+                continue
+            for name in names:
+                child = here + "/" + name
+                try:
+                    info = os.lstat(os.path.join(root, child))
+                except OSError as exc:
+                    cannot_read(child, exc)
+                    unwalked.append(child)
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(child)
+                elif stat.S_ISREG(info.st_mode):
+                    seen.add(child)
+                    judge(child, walked=True)
+                else:
+                    # Not followed, so whatever the record lists below it
+                    # is accounted for by this line rather than listed as
+                    # missing one entry at a time.
+                    blocked.append("wrong type: %s is %s"
+                                   % (child, _irregular_kind(info)))
+                    seen.add(child)
+                    unwalked.append(child)
+    for rel in sorted(expected):
+        if rel in seen or not any(rel.startswith(d + "/")
+                                  for d, is_dir, _m in PAYLOAD_SOURCES
+                                  if is_dir):
+            continue
+        if any(rel == u or rel.startswith(u + "/") for u in unwalked):
+            continue
+        blocked.append("missing: %s" % rel)
+    return blocked, unknown
+
+
+def write_payload_refusal(root, blocked, snapshot=None, out=None):
+    """Said once, so the dry run and the install say it the same way. The
+    install names its snapshot too, since that is what it judged and the
+    snapshot is removed at exit."""
+    out = sys.stderr if out is None else out
+    out.write("deploy.py: refusing the payload at %s: it does not match its "
+              "own site.lock.json\n  (ADR-0029). A copy that was interrupted "
+              "or truncated looks like this.\n" % root)
+    if snapshot is not None:
+        out.write("  Judged on the root-only snapshot of it, %s:\n" % snapshot)
+    for line in blocked[:20]:
+        out.write("  %s\n" % line)
+    if len(blocked) > 20:
+        out.write("  ... and %d more\n" % (len(blocked) - 20))
+    out.write("  Copy the payload again from the build, preserving it whole "
+              "(`tar -p`, not a\n  partial `scp`), and re-run. Nothing has "
+              "been touched.\n")
+
+
 def stage_payload(env=None, dry_run=False):
     """Snapshot the payload into a root-only directory and return its path.
 
@@ -2229,7 +2477,13 @@ def stage_payload(env=None, dry_run=False):
     of the same user-owned directory, read by the same root process, one
     moment earlier. Do not re-open this as a hardening patch.
 
-    0700 and owned by root, since it holds bytes not yet verified.
+    0700 and owned by root, since it holds bytes not yet verified -- until
+    `payload_blockers()` has judged the SNAPSHOT against its own record,
+    which happens here, after the copies and before the caller's first
+    `systemctl` (ADR-0029). Any difference, including a source the copy
+    could not find, is exit 6 with nothing touched. The snapshot is what is
+    hashed, never the payload directory: that would be a second, later read
+    of user-owned bytes.
     """
     if dry_run:
         # A dry run must not create anything, so it has no snapshot and no
@@ -2275,12 +2529,26 @@ def stage_payload(env=None, dry_run=False):
         target = os.path.join(staging, relative)
         run(["install", "-d", "-m", "0700", os.path.dirname(target)],
             dry_run=dry_run, env=env)
+        # check=False, and the failure relayed rather than raised: a source
+        # the copy cannot find is a payload that does not match its record,
+        # and the check below says so with the exit the dry run predicted
+        # (6), where raising here would pass the copy's own status through.
         if is_dir:
-            run(["cp", "-a", "--no-preserve=ownership", source, target],
-                dry_run=dry_run, env=env)
+            copy = ["cp", "-a", "--no-preserve=ownership", source, target]
         else:
-            run(["install", "-m", "0600", source, target],
-                dry_run=dry_run, env=env)
+            copy = ["install", "-m", "0600", source, target]
+        copied = run(copy, check=False, dry_run=dry_run, env=env)
+        if copied.returncode != 0:
+            sys.stderr.write("failed: %s\n" % " ".join(shlex.quote(c)
+                                                       for c in copy))
+            if copied.stderr:
+                sys.stderr.write(copied.stderr.rstrip("\n") + "\n")
+    # The snapshot against its own record, as root: a check root could not
+    # make is a refusal like any other here.
+    blocked, _unknown = payload_blockers(staging, privileged=True)
+    if blocked:
+        write_payload_refusal(REPO, blocked, snapshot=staging)
+        raise SystemExit(6)
     return staging
 
 
