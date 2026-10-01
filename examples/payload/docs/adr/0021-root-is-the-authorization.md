@@ -1,6 +1,7 @@
 # ADR-0021: Root is the authorization; the approval flag is removed
 
 **Status:** accepted, 2026-09-18
+The Consequences bullet on the dry-run asymmetry was amended when issue #53 was decided: `--uninstall --dry-run` no longer needs root. The wording it replaced is recorded under "Superseded wording" below.
 **Narrows:** ADR-0004, "plus explicit authorization (`--i-have-approval`), it self-executes"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0021 — see `docs/evidence.md`
 
@@ -105,10 +106,13 @@ still refuses a writing run from anywhere but the deployed copy.
   on `PATH` for `install.sh`, `monkeypatch.setattr(deploy, "_is_root", ...)`
   for `deploy.py`, and never an environment-variable override, which would be
   the unprivileged bypass ADR-0004 exists to close.
-- **An asymmetry is shipped knowingly:** a dry install needs no root, but
-  `--uninstall --dry-run` still does. Extending the symmetry was not required
-  by this decision and changes who can enumerate a teardown on a shared node,
-  so it is filed rather than folded in.
+- **Both dry runs need no root.** `--uninstall --dry-run`, like the
+  install's, writes nothing, so it needs no privilege, and it names a check
+  it could not make as an ordinary user rather than reporting it clean. The
+  uninstall that writes is still root alone. Extending the symmetry was not
+  required by this decision and changed who can enumerate a teardown on a
+  shared node, so it was decided on its own, in issue #53: the install's
+  dry run already prints the same literals.
 - ADR-0008's exit-code sentence and ADR-0005's and ADR-0006's prose refer to
   the flag by name. They are descriptions of the command's spelling, not
   decisions that rest on it, so they are reworded where they appear and
@@ -128,3 +132,15 @@ to confirm they are root adds a check.
 ## Site config touched
 
 none
+
+## Superseded wording
+
+Amended when issue #53 was decided. The Consequences above read:
+
+> **An asymmetry is shipped knowingly:** a dry install needs no root, but
+> `--uninstall --dry-run` still does. Extending the symmetry was not required
+> by this decision and changes who can enumerate a teardown on a shared node,
+> so it is filed rather than folded in.
+
+`--uninstall --dry-run` now needs no root either; the uninstall that writes
+does.

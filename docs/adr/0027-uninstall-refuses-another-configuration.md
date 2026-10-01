@@ -1,6 +1,7 @@
 # ADR-0027: The uninstall refuses an install that was not built from its own configuration
 
 **Status:** accepted, 2026-09-30
+The clause "The record reaches one exit code, and only this one." is narrowed by ADR-0029: the dry run and the install check the payload against its own lock, and refuse with exit 6 on a difference.
 **Narrows:** ADR-0013, "The payload carries `site.toml` and `site.lock.json` — schema version, tool version, `VERSION`, the config hash and a hash per emitted file; no timestamp and no hostname, so two builds of the same inputs are byte-identical — as a record, not as an input."
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
@@ -89,11 +90,12 @@ replaces the first's units rather than running beside them.
 
 ## Consequences
 
-**The record reaches one exit code, and only this one.** `--verify` still
+**The record reaches exit 6, and no other exit code.** `--verify` still
 hashes the installed tree against the installed lock and decides nothing
-elsewhere. The uninstall's hash reaches exit 6, before anything is touched.
-Neither read parses configuration on the node, neither is moved into
-`reaper.py` or `guard.sh`, and neither runs on a poll. A second consequence of
+elsewhere. The uninstall's hash reaches exit 6, before anything is touched,
+and so, since ADR-0029, does the check of a payload against its own lock.
+None of these reads parses configuration on the node, none is moved into
+`reaper.py` or `guard.sh`, and none runs on a poll. A further consequence of
 the record, anywhere, is a new ADR.
 
 **Identity is bytes.** A comment-only edit to `site.toml` is a different
@@ -131,3 +133,13 @@ confirm that it is undoing its own configuration.
 
 None read on the node. All of `site.toml`, as bytes: its digest is the
 constant the build stamps and the uninstall compares.
+
+## Superseded wording
+
+Narrowed by ADR-0029. The Consequences above read:
+
+> **The record reaches one exit code, and only this one.**
+
+The uninstall's hash is still the only consequence of the installed record.
+The payload's own lock now reaches the same exit, as a check that the copy
+arrived whole and never as its identity.

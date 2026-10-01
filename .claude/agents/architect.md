@@ -88,7 +88,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Make the spool world-readable again, or drop the reader group | ADR-0025 |
 | Accept a group-writable ancestor on the prefix, staging, unit or hook chain, or a listed group with a human member | ADR-0025 |
 | Trust `systemd-tmpfiles`' exit status, name the group instead of the gid, or judge journal access by group membership | ADR-0026 — tmpfiles exits 0 over a skipped line; access is an ACL |
-| Add an override to the uninstall's configuration check, or compare against the payload's own lock | ADR-0027 — the check guards against the wrong payload, not root; the payload is read once, early (ADR-0006) |
+| Add an override to the uninstall's configuration check, or compare against the payload's own lock | ADR-0027 — the check guards against the wrong payload, not root; the payload is read once, early (ADR-0006). The payload check's read of its own lock is integrity, not identity, and the install makes it on the snapshot (ADR-0029) |
 | Key a tool identity on `comm` | rule table docstring and its test — `argv[0]` first; `comm` is the wrapper's name |
 | List an optional-argument flag in `value_flags` | rule table `--color` rule; measured on the tool |
 | `always=True` beside a `dir_action_default` | asserted in `Profile.__init__`; table/shim diverge |
@@ -119,8 +119,9 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
 | 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link, and go only into a spool carrying deploy.py's marker (narrows 0012 and 0019, clarifies 0004) |
 | 0026 | `[install].journal_readable` (off by default) grants the spool group read on the WHOLE journal via a tmpfiles.d drop-in naming the gid; the deploy proves it on each root, `%m` and its files, and exits 10 if it did not land; turning it off or uninstalling revokes the gids the drop-in records |
-| 0027 | `--uninstall` refuses (exit 6, before any command) unless the installed `<prefix>/site.toml` hashes to the build's compiled `SITE_SHA256`; hashed, never parsed; no override; VERSION not compared; the install never refuses; one install per node (narrows 0013) |
+| 0027 | `--uninstall` refuses (exit 6, before any command) unless the installed `<prefix>/site.toml` hashes to the build's compiled `SITE_SHA256`; hashed, never parsed; no override; VERSION not compared; the install never refuses; one install per node (narrows 0013; narrowed by 0029) |
 | 0028 | `orphan_traversal` requires the same `[reaper].traversal_budget_s` as `runaway_traversal`; reparented to init is not proof the output is unwanted; the budget does not gate fan-out membership |
+| 0029 | `--system --dry-run` checks the payload directory, and `--system` its root-only snapshot, against the payload's own `site.lock.json` (every entry's type, nothing extra in `shim/` or `docs/`, every hash, the build's `SITE_SHA256` and version); exit 6 before the first `systemctl`; integrity, never identity; modes not compared; catches a bad copy, not the payload's owner (narrows 0027) |
 
 ## Non-negotiables a prompt must restate
 

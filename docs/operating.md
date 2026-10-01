@@ -236,8 +236,8 @@ root alone: `--system` on its own installs, immediately, with no further
 confirmation.
 
 **It makes every check the install makes**, from the same
-`preflight()` function, so that the install cannot refuse what the
-dry run accepted:
+`preflight()` function and the same payload check, so that the install
+cannot refuse what the dry run accepted:
 
 - the six root-write locations are the literals compiled from `site.toml`;
 - each of them sits in a trust chain that is root-owned end to end, and
@@ -259,6 +259,14 @@ dry run accepted:
   install snapshots nothing, so this is the one check it does not make — it
   names the path it would snapshot into, which is not the same as having
   found that path usable. Re-run as root to make the check before deploying.
+- the payload you are standing in matches its own `site.lock.json`: every
+  entry it installs is there with its type, nothing in `shim/` or `docs/` is
+  missing from the record or extra to it, every file hashes to its entry,
+  and the record names this build's `site_sha256` and version (ADR-0029).
+  A truncated or partial copy refuses here, with exit 6, rather than in the
+  install. The install makes the same check on its snapshot, before its
+  first `systemctl`. The check catches a bad copy; it is not a check on the
+  payload's owner, who could rewrite the files and the record together.
 
 Where one of those refuses, the dry run prints the whole plan, says which
 check refused and why, and **advertises no command** — because the install
@@ -343,7 +351,10 @@ What it verifies, and refuses on:
   trust check, and Layer 1's upkeep must never take Layer 2 down. If the
   ownership check below then refuses, the deploy exits 9 instead, writes no
   unit, and the timer stays disabled. Any other `install.sh` failure leaves
-  the timer disabled and says so;
+  the timer disabled and says so. When more than one step fails, the exit
+  status is the most severe and the rest are reported on stderr only: a
+  hook-proof failure (4) outranks a journal step that did not land (10, or a
+  command's own status);
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;
@@ -814,9 +825,12 @@ install from the payload that wrote the prefix, or from a rebuild of the
 site's reviewed configuration: the install rewrites `site.toml` and is never
 refused. Then uninstall from that same payload.
 
-It reverses the install and is gated on root alone — reversing a control is
-the safer direction and does not need the same ceremony as installing one
-(ADR-0004). It disables and removes the timer and service, strips every
+It reverses the install, and the uninstall that writes is gated on root
+alone — reversing a control is the safer direction and does not need the
+same ceremony as installing one (ADR-0004). `--uninstall --dry-run` is not:
+like the install's dry run it writes nothing, needs no privilege, and names
+any check it could not make as an ordinary user rather than reporting it
+clean (ADR-0021). It disables and removes the timer and service, strips every
 hook block and removes the fish drop-in whether or not that shell still
 resolves (ADR-0008), and removes the prefix. The `<file>.walk-blocker.orig`
 backups and the audit trail under `[install].spool_dir` are records; read
