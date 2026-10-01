@@ -1893,7 +1893,8 @@ uncovered_report() {
 units_are_down() {
     # 0 when neither unit can fire, or 1 with the reason written. Mirrors
     # _units_are_down() in deploy.py, and the pair must agree: judged by the
-    # state WORD systemctl prints, never by its exit status. The disable and
+    # state WORD systemctl prints, never by the exit status of the disable,
+    # the stop or is-active -- only show's is judged, below. The disable and
     # stop before this fail on every full teardown, because deploy.py has
     # already removed the unit files; and a bus error is non-zero too, with
     # nothing printed, which is not the same fact as "inactive".
