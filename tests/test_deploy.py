@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import functools
 import grp
+import hashlib
 import io
 import json
 import os
@@ -33,7 +34,8 @@ import tempfile
 import pytest
 
 from _deploy_helpers import (EXAMPLE_SITE, REQUIRED_SOURCES, ROOT,
-                             load_stamped_deploy, site_values, source_text,
+                             example_site_sha256, load_stamped_deploy,
+                             site_values, source_text,
                              stamped_text, write_stamped_deploy)
 from _install_helpers import Layout, stamped_install
 import walk_blocker
@@ -57,7 +59,7 @@ PATH_FLAGS = ("--prefix", "--unit-dir", "--spool-dir", "--audit",
               "--bashrc-file", "--zshenv-file", "--fish-conf-file")
 
 
-def recording_run(calls, active_units=(), enabled_units=()):
+def recording_run(calls, active_units=(), enabled_units=(), installer_rc=0):
     """A `run` stub that records commands and models systemd honestly.
 
     Both state queries are answered with the state WORD, because that is
@@ -67,10 +69,13 @@ def recording_run(calls, active_units=(), enabled_units=()):
     nothing enabled. Pass `active_units` for a unit that refused to stop,
     `enabled_units` for one whose `disable` left the enablement symlink
     behind -- the shape that used to slip past an is-active-only check.
+    `installer_rc` is what `install.sh --system` exits with.
     """
     def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
         calls.append(cmd)
         returncode, stdout = 0, ""
+        if cmd[-1] == "--system" and any("install.sh" in a for a in cmd):
+            returncode = installer_rc
         if cmd[:2] == ["systemctl", "is-active"]:
             if cmd[-1] in active_units:
                 returncode, stdout = 0, "active\n"
@@ -97,6 +102,9 @@ def pass_uninstall_checks(monkeypatch, prefix):
     monkeypatch.setattr(deploy, "unowned_by", lambda root, uid=0: [])
     os.makedirs(prefix, exist_ok=True)
     open(os.path.join(prefix, deploy.PAYLOAD_MARKER), "w").close()
+    # The configuration the module was stamped from, installed as the build
+    # would install it: the uninstall hashes it against SITE_SHA256.
+    shutil.copyfile(EXAMPLE_SITE, os.path.join(prefix, "site.toml"))
     # The teardown runs the DEPLOYED helper, so it has to be there.
     staged = os.path.join(prefix, "shim")
     os.makedirs(staged, exist_ok=True)
@@ -391,8 +399,13 @@ def test_the_built_payload_ships_deploy_py_executable_and_stamped(built_payload)
     text = path.read_text()
     assert "@@" not in text
     site = walk_blocker.config.load_site(EXAMPLE_SITE)
-    values = stamp.SiteValues(site, walk_blocker.__version__)
+    values = stamp.SiteValues(site, walk_blocker.__version__,
+                              example_site_sha256())
     assert stamp.check_text(text, values, "py", stamp.CONSUMERS["deploy.py"]) == []
+    # The constant the uninstall compares against is the digest the lock
+    # records, so a rebuild found by `provenance` matches by construction.
+    lock = json.loads((built_payload / "site.lock.json").read_text())
+    assert "SITE_SHA256 = %r" % lock["site_sha256"] in text
     proc = subprocess.run([NODE_PYTHON, str(path), "--version"],
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
@@ -1064,6 +1077,165 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
     assert teardown == [deploy.TRUSTED_SH,
                         os.path.join(args.prefix, "shim", "install.sh"),
                         "--uninstall"], teardown
+
+
+def test_a_hook_proof_failure_still_arms_the_reaper(
+        tmp_path, monkeypatch, capsys):
+    """#76. install.sh exits 4 when a required hook cannot be proven to fire,
+    over a payload that is installed and passed every trust check. The units
+    are written and the timer re-enabled -- Layer 1's upkeep must never take
+    Layer 2 down -- and the deploy still exits 4, saying which layer runs.
+    Mutation: raise on any nonzero install.sh exit, as before, and no enable
+    is issued."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == deploy.INSTALL_HOOKS_UNPROVEN == 4
+    enable = ["systemctl", "enable", "--now", deploy.TIMER_UNIT]
+    assert enable in calls, calls
+    # systemd must re-read the units this deploy just wrote before it can
+    # enable them.
+    assert ["systemctl", "daemon-reload"] in calls, calls
+    assert calls.index(["systemctl", "daemon-reload"]) < calls.index(enable)
+    assert os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+    err = capsys.readouterr().err
+    assert "Layer 2 is running" in err and "NOT proven" in err, err
+    # install.sh exits at the proof, before it writes a best-effort hook;
+    # "installed" alone would say otherwise.
+    assert "best-effort hook" in err and "not written" in err, err
+    assert "None" not in err.splitlines(), err
+
+
+def test_a_journal_abort_does_not_hide_the_hook_notice(
+        tmp_path, monkeypatch, capsys):
+    """journal_step() runs run() with check=True, which raises SystemExit
+    when systemd-tmpfiles fails. The timer is already armed by then, so the
+    operator must already have been told Layer 1 is not proven: the notice
+    is the only thing that says so."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+
+    def aborting_journal_step(args, env=None):
+        raise SystemExit(11)
+
+    monkeypatch.setattr(deploy, "journal_step", aborting_journal_step)
+    with pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == 11
+    assert ["systemctl", "enable", "--now", deploy.TIMER_UNIT] in calls, calls
+    assert "NOT proven" in capsys.readouterr().err
+
+
+def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
+        tmp_path, monkeypatch, capsys):
+    """ADR-0008 and the runbook say exit 4 comes only after the post-install
+    ownership check clears. When that check refuses, the deploy exits 9,
+    writes no unit and enables no timer, whatever install.sh exited with."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+
+    def unowned_after_install(root, uid=0):
+        # The same check runs once BEFORE install.sh (exit 5, and it removes
+        # the payload); only the run after it is under test here.
+        ran = any("install.sh" in a for c in calls for a in c)
+        return [(root, "owner", "owned by uid 1000")] if ran else []
+
+    monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+    args = _args(tmp_path)
+    assert deploy.system_execute(args) == 9
+    assert not [c for c in calls if c[:2] == ["systemctl", "enable"]], calls
+    assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
+
+
+def _exit_9_text(tmp_path, monkeypatch, capsys, offender):
+    """stderr of a deploy whose post-install ownership check names
+    `offender(prefix)`."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+
+    def unowned_after_install(root, uid=0):
+        ran = any("install.sh" in a for c in calls for a in c)
+        return [(offender(root), "owner", "owned by uid 1000")] if ran else []
+
+    monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(_args(tmp_path)) == 9
+    return capsys.readouterr().err
+
+
+def test_exit_9_does_not_advise_an_uninstall_that_would_refuse(
+        tmp_path, monkeypatch, capsys):
+    """The uninstall refuses with exit 6 when <prefix>/site.toml fails the
+    ownership test (ADR-0027), so exit 9 naming that file must name the
+    re-install instead (issue #101)."""
+    err = _exit_9_text(tmp_path, monkeypatch, capsys,
+                       lambda root: os.path.join(root, "site.toml"))
+    assert "would refuse" in err and "re-run this install" in err, err
+    assert "to reverse them" not in err, err
+
+
+def test_exit_9_advises_the_uninstall_when_site_toml_is_not_the_offender(
+        tmp_path, monkeypatch, capsys):
+    err = _exit_9_text(tmp_path, monkeypatch, capsys,
+                       lambda root: os.path.join(root, "bin"))
+    assert "`python3 deploy.py --uninstall` to reverse them" in err, err
+    assert "would refuse" not in err, err
+
+
+# 3 is install.sh's own refusal; the rest are what a script under `set -e`
+# passes through from a failing command: 1 generic, 5 and 64 near the hook
+# proof's 4, 127 a missing program, 137 a killed one. Only exactly 4 is the
+# hook proof; a test over 3 alone cannot tell `== 4` from `>= 4`.
+@pytest.mark.parametrize("installer_rc", [1, 3, 5, 64, 127, 137])
+def test_any_other_installer_failure_leaves_the_timer_off_and_says_so(
+        tmp_path, monkeypatch, capsys, installer_rc):
+    """A refusal of install.sh's own (exit 3) or any other failure keeps the
+    timer disabled, as before -- root must not keep executing a payload this
+    run did not accept -- but the operator is now told it is disabled."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run",
+                        recording_run(calls, installer_rc=installer_rc))
+    with pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == installer_rc
+    assert not [c for c in calls if c[:2] == ["systemctl", "enable"]], calls
+    err = capsys.readouterr().err
+    assert "STILL DISABLED" in err and deploy.TIMER_UNIT in err, err
+
+
+def test_a_failed_uncaptured_command_prints_no_stray_none(capsys):
+    """run(capture=False) has no stderr to print: the command already wrote
+    its own to the terminal. It used to print result.stderr regardless, and
+    the operator saw a line reading `None`."""
+    with pytest.raises(SystemExit) as exc:
+        deploy.run([sys.executable, "-c", "import sys; sys.exit(7)"],
+                   capture=False)
+    assert exc.value.code == 7
+    err = capsys.readouterr().err
+    assert err.startswith("failed: ") and "None" not in err.splitlines(), err
+
+
+def test_a_failed_captured_command_prints_its_stderr_once(capsys):
+    """The other half of the `None` fix: when stderr WAS captured it is still
+    shown, once, on a line of its own. The command's stderr here has no
+    trailing newline, the only input on which the normalisation shows."""
+    with pytest.raises(SystemExit) as exc:
+        deploy.run([sys.executable, "-c",
+                    # Built at run time: the echoed command line must not
+                    # contain the marker the assertion counts.
+                    "import sys; sys.stderr.write('bo' + 'om'); sys.exit(7)"])
+    assert exc.value.code == 7
+    err = capsys.readouterr().err
+    assert err.count("boom") == 1 and err.endswith("boom\n"), err
 
 
 def test_the_post_install_message_names_both_trails_and_the_record(
@@ -2000,6 +2172,134 @@ def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
     assert not any("install.sh" in arg for c in calls for arg in c), calls
 
 
+# The installed configuration must be this payload's (ADR-0027). Every case
+# refuses with 6 before the first command, so the assertion is on `calls`
+# being empty, not merely on install.sh being absent from it.
+
+def _uninstall_with_installed_site(tmp_path, monkeypatch, write_site,
+                                   **overrides):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path, **overrides)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    site = os.path.join(args.prefix, "site.toml")
+    os.unlink(site)
+    write_site(site)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    return deploy.system_uninstall(args), calls
+
+
+def _other_config(site):
+    with open(EXAMPLE_SITE, "rb") as fh:
+        data = fh.read()
+    with open(site, "wb") as fh:
+        fh.write(data + b"# a comment is a different configuration\n")
+
+
+def test_uninstall_proceeds_when_the_installed_config_is_this_payloads(
+        tmp_path, monkeypatch):
+    """The fixture installs the file the module was stamped from, and its
+    empty marker names no version: VERSION is deliberately not compared."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 0
+    assert any("install.sh" in a for c in calls for a in c)
+
+
+def test_uninstall_refuses_an_install_of_another_configuration(
+        tmp_path, monkeypatch, capsys):
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, _other_config)
+    assert code == 6
+    assert calls == [], "nothing may run before the refusal"
+    err = capsys.readouterr().err
+    with open(os.path.join(_args(tmp_path).prefix, "site.toml"), "rb") as fh:
+        installed = hashlib.sha256(fh.read()).hexdigest()
+    assert installed in err and deploy.SITE_SHA256 in err, err
+    assert "walk-blocker provenance --sha256" in err, err
+    assert "Re-run the install" not in err, err
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["run", "preview"])
+def test_uninstall_preview_refuses_another_configuration_too(
+        tmp_path, monkeypatch, capsys, dry_run):
+    """The dry run reaches the same answer, and names the same recovery, as
+    the run it previews."""
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, _other_config, dry_run=dry_run)
+    assert code == 6
+    assert calls == []
+    assert "walk-blocker provenance --sha256" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["run", "preview"])
+def test_uninstall_refuses_when_the_installed_config_is_absent(
+        tmp_path, monkeypatch, capsys, dry_run):
+    """The marker lands first, so an install that stopped half way can be
+    marked with no configuration beside it. No build can match a file that
+    is not there, so the recovery named is the re-install, never a rebuild
+    of a digest that does not exist."""
+    code, calls = _uninstall_with_installed_site(
+        tmp_path, monkeypatch, lambda site: None, dry_run=dry_run)
+    assert (code, calls) == (6, [])
+    err = capsys.readouterr().err
+    assert "does not exist" in err, err
+    assert "installed site.toml  sha256" not in err, "no digest to print"
+    assert "Re-run the install" in err, err
+    assert "provenance" not in err, err
+
+
+def test_uninstall_refuses_a_symlinked_installed_config(tmp_path, monkeypatch):
+    """Even to a file with the right bytes: the link is not what the install
+    wrote."""
+    def link(site):
+        target = str(tmp_path / "elsewhere.toml")
+        shutil.copyfile(EXAMPLE_SITE, target)
+        os.symlink(target, site)
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch, link)
+    assert (code, calls) == (6, [])
+
+
+def test_uninstall_refuses_an_installed_config_that_is_not_a_regular_file(
+        tmp_path, monkeypatch):
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch,
+                                                 os.mkfifo)
+    assert (code, calls) == (6, [])
+
+
+def test_uninstall_refuses_an_installed_config_owned_by_someone_else(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    site = os.path.join(args.prefix, "site.toml")
+
+    def unowned(root, uid=0):
+        if root == site:
+            return [deploy.Unowned(site, "owner", "owned by uid 1000")]
+        return []
+    monkeypatch.setattr(deploy, "unowned_by", unowned)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_uninstall(args) == 6
+    assert calls == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-0 file")
+def test_uninstall_refuses_an_unreadable_installed_config(tmp_path,
+                                                          monkeypatch):
+    """Never a match: a file this cannot read vouches for nothing."""
+    def unreadable(site):
+        shutil.copyfile(EXAMPLE_SITE, site)
+        os.chmod(site, 0)
+    code, calls = _uninstall_with_installed_site(tmp_path, monkeypatch,
+                                                 unreadable)
+    assert (code, calls) == (6, [])
+
+
 def test_uninstall_refuses_a_symlinked_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     calls = []
@@ -2749,6 +3049,58 @@ def test_the_install_actually_tightens_what_it_declined_to_refuse(
     assert stat.S_IMODE(info.st_mode) == 0o640, oct(info.st_mode)
     assert info.st_gid == os.getgid()
     assert not [c for c in calls if c[:1] == ["chmod"] and victim in c], calls
+
+
+def test_a_refused_install_leaves_the_spool_exactly_as_it_found_it(
+        tmp_path, monkeypatch):
+    """#74. The repair used to run inside preflight, before the refusals
+    after it and before the old timer was disabled, so a refused install had
+    already re-grouped and re-moded the spool. Here a spool that needs
+    repair meets a refusal after the spool step (a prefix the users cannot
+    reach). Nothing on it may change, and no command may run. Mutation:
+    call repair_spool() from preflight again and the file comes out 0640."""
+    args, victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    closed = deploy.canonical_prefix(args.prefix)
+    monkeypatch.setattr(
+        deploy, "untraversable_for_users",
+        lambda path: [(os.path.dirname(closed), "no o+x")]
+        if deploy.canonical_prefix(path) == closed else [])
+    before = [(os.lstat(p).st_mode, os.lstat(p).st_gid)
+              for p in (args.spool_dir, victim)]
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_execute(args) == 6
+    assert calls == [], calls
+    after = [(os.lstat(p).st_mode, os.lstat(p).st_gid)
+             for p in (args.spool_dir, victim)]
+    assert after == before, (before, after)
+
+
+def test_the_spool_is_repaired_only_after_the_old_timer_is_down(
+        tmp_path, monkeypatch):
+    """The other half of #74: the old units, still firing, could undo part
+    of the repair before the disable. The repair lands after it."""
+    args, _victim = _spool_with(tmp_path, monkeypatch, "reaper-state.json", 0o664)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda prefix, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    real = deploy.repair_spool
+
+    def recorded(spool, gid, **kw):
+        calls.append(["<repair_spool>"])
+        return real(spool, gid, **kw)
+
+    monkeypatch.setattr(deploy, "repair_spool", recorded)
+    assert deploy.system_execute(args) == 0
+    disable = calls.index(["systemctl", "disable", "--now", deploy.TIMER_UNIT])
+    assert calls.index(["<repair_spool>"]) > disable, calls
 
 
 def test_the_preview_advertises_the_chmod_the_install_will_run(

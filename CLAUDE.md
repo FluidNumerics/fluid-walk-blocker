@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0026` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0028` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed. This file is the part that is easy to get wrong.
 
@@ -57,14 +57,20 @@ advisory guard (ADR-0001), not a test seam. The other `WALK_BLOCKER_*`
 variables are test seams, audited when they change the outcome, and they gain
 no siblings. See ADR-0013.
 
-The one node-side read of the record is `deploy.py --verify`, which hashes
-the installed files against the installed `site.lock.json`. That is integrity,
-not configuration: nothing it reads reaches a decision, a path, a threshold or
-an exit code anywhere else, and a record it cannot parse is its own exit code
-rather than a behaviour. The reaper's rejected JSON reader was rejected
-because its parse failure had no right answer — an empty mount list reads as a
-clean bill of health. Here, refusing to answer is the right answer. Do not
-move this read into `reaper.py` or `guard.sh`, and do not put it on a poll.
+Two node-side reads touch the record, and neither parses configuration.
+`deploy.py --verify` hashes the installed files against the installed
+`site.lock.json`. That is integrity, not configuration: nothing it reads
+reaches a decision, a path, a threshold or an exit code anywhere else, and a
+record it cannot parse is its own exit code rather than a behaviour.
+`deploy.py --uninstall` hashes the installed `site.toml` against the
+`SITE_SHA256` compiled into it, and its one consequence is a refusal, exit 6,
+before any teardown: a payload built from another configuration would tear
+down paths that install never wrote. No value from the file reaches a path, a
+threshold or a branch (ADR-0027). The reaper's rejected JSON reader was
+rejected because its parse failure had no right answer — an empty mount list
+reads as a clean bill of health. Here, refusing to answer is the right answer.
+Do not move either read into `reaper.py` or `guard.sh`, do not put either on a
+poll, and do not give the record a third consequence without an ADR.
 
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
@@ -284,7 +290,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0026`, in order — the decisions
+3. `docs/adr/0001` … `0028`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/operating.md` — the operator's runbook, from `site.toml` to a node
    that reports

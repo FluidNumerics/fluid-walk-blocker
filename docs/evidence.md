@@ -48,7 +48,7 @@ the ADR it bears on.
 | 0010 `opaque_traversal` names unmodelled tools | The first trail reading, by verdict and tool |
 | 0011 Layer 2 reads stdin from /proc | `ugrep` stdin behaviour by version; fd/0 device probes; per-process `stat` cost |
 | 0012 Audit trail root-writable-only, readable (narrowed by 0025: by one site-named group) | Audit directory mode as deployed, and who could read it |
-| 0013 Site configuration is compiled at build time, not read at run time | n/a: structural |
+| 0013 Site configuration is compiled at build time, not read at run time (narrowed by 0027: the uninstall refuses another configuration) | n/a: structural |
 | 0014 The generic tree carries decisions, not site evidence | n/a: structural |
 | 0015 Node code is POSIX `sh` or stdlib-only Python 3.9, and the shim is the `sh` part | `sh` versus `python3 -S` start cost; the budget history against load |
 | 0016 A mount's class defaults from remoteness, is overridden per mount in site config, and is measured only out of band | n/a: design discussion |
@@ -62,6 +62,8 @@ the ADR it bears on.
 | 0024 A refusal is legible to a caller that reads neither stderr nor a pipeline's exit code | n/a: structural |
 | 0025 The audit trail is readable by a site-named group, and a listed service group may hold a spool ancestor | The spool ancestors' owner, group and mode before and after the package upgrade that changed them, and the membership of the group it left holding write |
 | 0026 A site may grant the spool group read on the whole journal, and the deployer proves the grant landed | journald's storage and split mode, the journal directories' and files' ACLs by class of entry, how many journal files the reader could open, and a root pull of the same window showing the refusals that reader could not see |
+| 0027 The uninstall refuses an install that was not built from its own configuration | n/a: structural |
+| 0028 An orphaned traversal is a finding only past the traversal budget | The trail row naming a reparented known-tool walk shortly after it started, and the same process's age at a later firing |
 
 ## What this file is not
 

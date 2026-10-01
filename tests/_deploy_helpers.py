@@ -15,6 +15,7 @@ seam (ADR-0005). Tests that `monkeypatch.undo()` to read the compiled
 literals therefore see the fictional site's, which is what the shape
 assertions are about. Nothing here is a site's value (ADR-0014).
 """
+import hashlib
 import os
 
 import _node_helpers as _node
@@ -31,6 +32,7 @@ DEPLOY_SOURCE = os.path.join(paths.node_dir(), "deploy.py")
 # independently of the table.
 REQUIRED_SOURCES = (
     "VERSION",
+    "SITE_SHA256",
     "site.toml:install.prefix",
     "site.toml:install.unit_dir",
     "site.toml:install.spool_dir",
@@ -61,11 +63,12 @@ REQUIRED_SOURCES = (
 
 
 def site_values(**overrides):
-    """The `values` mapping for `stamp_text`: VERSION plus every key of the
-    fictional site that `deploy.py` reads. `overrides` are keyed the way the
-    mapping is (`"site.toml:install.prefix"`), or by the bare dotted key."""
+    """The `values` mapping for `stamp_text`: VERSION, the fictional site
+    file's digest, and every key of that site that `deploy.py` reads.
+    `overrides` are keyed the way the mapping is (`"site.toml:install.prefix"`),
+    or by the bare dotted key."""
     data = example_site()
-    values = {"VERSION": __version__}
+    values = {"VERSION": __version__, "SITE_SHA256": example_site_sha256()}
     for section in ("install", "timer", "trusted_binaries", "site"):
         for key, value in data[section].items():
             values["%s%s.%s" % (stamp.SITE_PREFIX, section, key)] = value
@@ -73,10 +76,19 @@ def site_values(**overrides):
         for key, value in data["hooks"][shell].items():
             values["%shooks.%s.%s" % (stamp.SITE_PREFIX, shell, key)] = value
     for key, value in overrides.items():
-        full = key if key == "VERSION" or key.startswith(stamp.SITE_PREFIX) \
+        full = key if key in ("VERSION", "SITE_SHA256") \
+            or key.startswith(stamp.SITE_PREFIX) \
             else stamp.SITE_PREFIX + key
         values[full] = value
     return values
+
+
+def example_site_sha256():
+    """The digest a build of the example site stamps as `SITE_SHA256`:
+    computed from the file, never written down, so an edit to the example
+    cannot leave a stale copy of it in the suite."""
+    with open(EXAMPLE_SITE, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
 
 
 def source_text():

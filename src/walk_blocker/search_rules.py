@@ -1960,7 +1960,7 @@ def depth_malformed(profile, argv):
     is the false refusal that teaches people to alias around an advisory
     layer. The reaper is handed a process that EXISTS -- it is in the table,
     it has an age, and the arms that make a finding of it want it past
-    budget or orphaned. For that process the prediction has already been
+    budget. For that process the prediction has already been
     falsified: the tool did not exit during argument parsing, so whatever
     this function models about that tool's validation does not hold for the
     binary actually running. Suppressing the finding on the strength of a

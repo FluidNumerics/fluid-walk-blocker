@@ -841,13 +841,22 @@ def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None,
 
         if known_tool and on_expensive_mount:
             traversals.append(proc)
-            if orphaned:
-                # Nothing reads its output: the writer's reader is gone. This
-                # is the originating incident's exact shape -- the `head` at
-                # the other end of the pipe never got its lines, so it never
-                # sent SIGPIPE.
+            if not past_budget:
+                # The same budget for both arms (ADR-0028). A reparented walk
+                # is not proof that nobody wants it: `nohup`, `setsid`, a
+                # closed tmux pane and a client that detaches on purpose all
+                # reparent a live, wanted walk to init. Age is what separates
+                # the founding incident -- days old -- from a walk seconds
+                # into a legitimate run. It still counts toward fanout below.
+                pass
+            elif orphaned:
+                # Past the budget with the process that started it gone. The
+                # originating incident had this shape -- the `head` at the
+                # other end of the pipe never got its lines, so it never sent
+                # SIGPIPE -- but ppid 1 alone does not say the output has no
+                # reader; that is why this arm waits for the budget.
                 findings.append(Finding(proc, "orphan_traversal", detail))
-            elif past_budget:
+            else:
                 findings.append(Finding(proc, "runaway_traversal", detail))
             continue
 

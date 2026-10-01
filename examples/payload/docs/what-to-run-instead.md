@@ -28,9 +28,9 @@ them about a traversal tool walking a guarded mount:
 
 - the walk ran longer than 900 seconds while the process that started it was
   still alive;
-- the process that started the walk had gone, for example an ssh session
-  that closed without taking its command with it. This one has no time
-  limit: an orphaned walk can be killed at the next run, however young;
+- the walk ran longer than that, counted from its own start, and the process
+  that started it had gone, for example an ssh session that closed without
+  taking its command with it;
 - 4 or more such walks were running at once under one parent.
 
 It never kills a command it could not parse, a tool it does not model (even
@@ -82,8 +82,7 @@ less than a day.
   over `find`. Run one bounded walk, or submit the parallel version with
   `walk-job`.
 - Put your own limit on a walk you expect to be long: `timeout` below 900
-  seconds ends it on your terms. It does not protect a walk whose session
-  has gone; only ending the walk with its session does.
+  seconds ends it on your terms, whether or not your session is still open.
 
 ## The mounts this node guards
 
