@@ -38,8 +38,9 @@ mode — not `--system`, not `--uninstall`, not `--relink`, not `--verify` —
 and `--dry-run` is not an exemption when the session is already root.
 
 What a session here *may* run, as an ordinary user, is `deploy.py --system
---dry-run` and `deploy.py --verify`. Both write nothing, and the dry run
-names the checks it could not make rather than reporting them clean. Do not
+--dry-run`, `deploy.py --uninstall --dry-run` and `deploy.py --verify`. All
+three write nothing, and each dry run names the checks it could not make
+rather than reporting them clean. Do not
 "just check" something with sudo. The installer is written to be run by an
 already-root, authorized operator; that is a property of the artifact, not a
 licence for an agent. See ADR-0004 and ADR-0021.
@@ -57,7 +58,7 @@ advisory guard (ADR-0001), not a test seam. The other `WALK_BLOCKER_*`
 variables are test seams, audited when they change the outcome, and they gain
 no siblings. See ADR-0013.
 
-Two node-side reads touch the record, and neither parses configuration.
+Three node-side reads touch the record, and none parses configuration.
 `deploy.py --verify` hashes the installed files against the installed
 `site.lock.json`. That is integrity, not configuration: nothing it reads
 reaches a decision, a path, a threshold or an exit code anywhere else, and a
@@ -66,11 +67,18 @@ record it cannot parse is its own exit code rather than a behaviour.
 `SITE_SHA256` compiled into it, and its one consequence is a refusal, exit 6,
 before any teardown: a payload built from another configuration would tear
 down paths that install never wrote. No value from the file reaches a path, a
-threshold or a branch (ADR-0027). The reaper's rejected JSON reader was
-rejected because its parse failure had no right answer — an empty mount list
-reads as a clean bill of health. Here, refusing to answer is the right answer.
-Do not move either read into `reaper.py` or `guard.sh`, do not put either on a
-poll, and do not give the record a third consequence without an ADR.
+threshold or a branch (ADR-0027). `deploy.py --system --dry-run` checks the
+payload directory, and `deploy.py --system` its root-only snapshot, against
+the payload's own `site.lock.json`, and the one consequence is the same
+refusal, exit 6, before the first `systemctl`. That is integrity too: the
+lock must name the compiled `SITE_SHA256` and version, and no value from it
+reaches a path, a threshold or any other branch. The install hashes the
+snapshot, never the payload directory (ADR-0029, ADR-0006). The reaper's
+rejected JSON reader was rejected because its parse failure had no right
+answer — an empty mount list reads as a clean bill of health. Here, refusing
+to answer is the right answer. Do not move any of these reads into
+`reaper.py` or `guard.sh`, do not put any on a poll, and do not give the
+record a further consequence without an ADR.
 
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
