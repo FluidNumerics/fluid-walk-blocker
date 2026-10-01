@@ -2180,7 +2180,7 @@ SYS
             in_spool rm -f -- "./$UNCOVERED_NAME" || :
         fi
         echo "walk-blocker: removed from$_removed and $BIN"
-        echo "walk-blocker: $SG_TIMER_UNIT is stopped and disabled, so Layer 2 (the reaper) is not running either"
+        echo "walk-blocker: $SG_TIMER_UNIT is stopped and not enabled, so Layer 2 (the reaper) is not running either"
         echo "walk-blocker: \`python3 deploy.py --system\` from a payload restores both layers"
         echo "walk-blocker: $SG_SPOOL_DIR left in place; it holds the audit trail"
         ;;

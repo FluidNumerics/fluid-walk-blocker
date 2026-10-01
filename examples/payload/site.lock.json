@@ -41,7 +41,7 @@
     "reaper.py": "225c8a0827ac4ae85f49bca1d8530fa4da3e44ee73d9bed38534280ebbfeb471",
     "search_rules.py": "07145a38a8f270f972dbab14427e301bf6613d7b435af39ab7888b932cc7325e",
     "shim/guard.sh": "862e3908fe88dafba3c6eff825c079a39f88a565721a971bf2559f23010a0d3d",
-    "shim/install.sh": "47c964768a178a4fc9cb3295a0e8ae2a1a71ca5f707791646e93ce1056028695",
+    "shim/install.sh": "cbb9ff8bdda1c1f10c539276d56d15356095c1851b0b0a461c64fba2cc8df9a2",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "e01a5022cbdb3b684cfe4d9d9e3070bc4349eced3b79f981a8cfc6f9289a249b",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",

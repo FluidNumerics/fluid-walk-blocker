@@ -2226,6 +2226,10 @@ def test_an_uninstall_after_the_units_are_removed_succeeds(tmp_path):
     assert "disable --now walk-blocker.timer" in [
         argv for argv, _b in H.systemctl_calls(layout.toolbin)]
     assert result.stderr == "", "a gone unit is not news: %r" % result.stderr
+    # A unit with no file is not "disabled": the line claims only what every
+    # state units_are_down accepts ('', disabled, static, masked) makes true.
+    assert "walk-blocker.timer is stopped and not enabled" in result.stdout
+    assert "disabled" not in result.stdout
 
 
 @pytest.mark.parametrize("quirk, absent", [
