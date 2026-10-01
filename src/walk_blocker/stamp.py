@@ -14,7 +14,11 @@ The marker grammar:
 
     <indent><identifier> = <value>  # GENERATED from <source>
 
-where `<source>` is either `VERSION` or `site.toml:<dotted.key>`. A dotted
+where `<source>` is `VERSION`, `SITE_SHA256` or `site.toml:<dotted.key>`.
+`SITE_SHA256` is the sha256 of the site file's own bytes, the same digest the
+lock records as `site_sha256`: the uninstall compares the installed
+`site.toml` against it (ADR-0027). It is a source of its own rather than a
+`site.toml:` key so that no future key can collide with it. A dotted
 key is resolved through `SiteConfig.lookup`, so `filesystems.mounts[0].path`
 addresses into an array. One transform exists for lists: a key ending in
 `[:]` means "join the elements with `:`" -- the shape of a PATH -- and an
@@ -56,7 +60,7 @@ MARKER = "# GENERATED from"
 MARKER_RE = re.compile(
     r"^([ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=(?!=)[ \t]*)"
     r"(.*?)"
-    r"([ \t]+# GENERATED from (site\.toml:[a-z0-9_.:\[\]]+|VERSION))$",
+    r"([ \t]+# GENERATED from (site\.toml:[a-z0-9_.:\[\]]+|VERSION|SITE_SHA256))$",
     re.MULTILINE)
 
 SITE_PREFIX = "site.toml:"
@@ -68,7 +72,7 @@ JOIN_SUFFIX = "[:]"
 # the build (see `build.py`), so a row cannot be forgotten silently.
 CONSUMERS = {
     "deploy.py": (
-        "VERSION",
+        "VERSION", "SITE_SHA256",
         "site.toml:install.prefix", "site.toml:install.unit_dir",
         "site.toml:install.spool_dir", "site.toml:install.audit_filename",
         "site.toml:install.spool_group", "site.toml:install.trusted_groups",
@@ -169,17 +173,24 @@ def find_markers(text):
 
 
 class SiteValues(object):
-    """The `values` mapping a build hands to `stamp_text`: `VERSION` and
-    `site.toml:<dotted.key>` through `SiteConfig.lookup`. A plain dict keyed
-    the same way works too, which is what the tests use."""
+    """The `values` mapping a build hands to `stamp_text`: `VERSION`,
+    `SITE_SHA256` and `site.toml:<dotted.key>` through `SiteConfig.lookup`. A
+    plain dict keyed the same way works too, which is what the tests use."""
 
-    def __init__(self, site, version):
+    def __init__(self, site, version, site_sha256=None):
         self.site = site
         self.version = version
+        self.site_sha256 = site_sha256
 
     def __getitem__(self, key):
         if key == "VERSION":
             return self.version
+        if key == "SITE_SHA256":
+            # None only for a caller that stamps nothing needing it; a
+            # consumer that does fails the build as unresolvable, not as ''.
+            if self.site_sha256 is None:
+                raise KeyError(key)
+            return self.site_sha256
         if key.startswith(SITE_PREFIX):
             dotted = key[len(SITE_PREFIX):]
             if dotted.startswith("derived."):

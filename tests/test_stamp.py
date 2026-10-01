@@ -266,10 +266,14 @@ def test_site_values_resolve_through_the_config(tmp_path):
     assert values["VERSION"] == "9.9.9"
     assert values["site.toml:install.prefix"] == site.lookup("install.prefix")
     assert values["site.toml:filesystems.mounts[0].path"] == site.lookup("filesystems.mounts[0].path")
+    # SITE_SHA256 among them: built without a digest, a consumer that needs
+    # one fails the build as unresolvable rather than stamping ''.
     for bad in ("site.toml:install.nope", "site.toml:filesystems.mounts[99].path",
-                "OTHER", "site.toml:install.prefix.deeper"):
+                "OTHER", "site.toml:install.prefix.deeper", "SITE_SHA256"):
         with pytest.raises(KeyError):
             values[bad]
+    digest = "ab" * 32
+    assert stamp.SiteValues(site, "9.9.9", digest)["SITE_SHA256"] == digest
 
 
 def test_consumers_rows_are_well_formed():

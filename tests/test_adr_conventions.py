@@ -8,6 +8,7 @@ the conventions are pinned rather than re-derived each round.
 import glob
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -78,10 +79,10 @@ def _by_number(number):
     return matches[0]
 
 
-def test_there_are_twenty_five_adrs_numbered_without_gaps():
+def test_there_are_twenty_seven_adrs_numbered_without_gaps():
     numbers = [_number(p) for p in ADRS]
     assert numbers == ["%04d" % i for i in range(1, len(numbers) + 1)]
-    assert len(numbers) == 26
+    assert len(numbers) == 27
 
 
 @pytest.mark.parametrize("path", ADRS, ids=_number)
@@ -173,16 +174,17 @@ def _prose_files():
     `examples/payload/` is excluded for the reason `test_boundary_prose.py`
     gives: it is a build product, `build --check` already proves it identical to
     these sources, and scanning both reports every finding twice.
+
+    Tracked, from `git ls-files`, rather than walked: a walk also reads a
+    `.venv`'s installed copy of the README and every checkout under
+    `.claude/worktrees/`, each a record behind or ahead of this tree, so the
+    test failed on files that are not part of it.
     """
-    out = []
-    for base, dirs, names in os.walk(ROOT):
-        dirs[:] = [d for d in dirs
-                   if d not in {".git", "__pycache__", "node_modules"}
-                   and os.path.join(base, d) != os.path.join(ROOT, "examples", "payload")]
-        for name in sorted(names):
-            if name.endswith(".md"):
-                out.append(os.path.relpath(os.path.join(base, name), ROOT))
-    return sorted(out)
+    listed = subprocess.run(["git", "ls-files", "-z", "--", "*.md"], cwd=ROOT,
+                            capture_output=True, check=True).stdout
+    payload = "examples/payload/"
+    return sorted(rel for rel in listed.decode("utf-8").split("\0")
+                  if rel and not rel.startswith(payload))
 
 
 def test_every_adr_range_in_prose_names_the_real_last_record():
