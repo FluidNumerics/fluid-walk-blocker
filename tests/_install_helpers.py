@@ -230,6 +230,119 @@ def stat_stub(spool_owner=None, stale_gid_until=None):
 
 
 STAT_ROOT_755 = stat_stub()
+
+
+# A RECORDING, STATEFUL `systemctl`. The real one is never on a test PATH: a
+# root `--uninstall` disables and stops units by name, and a test that
+# reached the real binary would act on this machine's units. Its state lives
+# in a file beside the fake bin, not in it, because populate_bin() empties
+# that directory on every run and a test drives several runs over one state.
+#
+# TIMER_FILE is the timer's unit-file state: `absent` (no unit files, the
+# default -- "units already gone", deploy.py's sequence), `enabled` or
+# `disabled`. QUIRK models a systemctl that does not do what it was told:
+#   sticky-active  the timer still reads `active` after the disable
+#   show-fails     `show` exits non-zero
+#   bus-error      every call prints nothing and exits 1
+#   half-disable   `disable --now` stops the timer and leaves it enabled
+#
+# Every call is logged with whether the bash hook block was present in
+# $WALK_BLOCKER_TEST_BASHRC when it ran -- read by this stub only, like the
+# shell stubs' variables -- which is how a test sees the ORDER of the
+# disable and the strip.
+SYSTEMCTL_DEFAULT_STATE = {"TIMER_FILE": "absent", "TIMER_ACTIVE": "inactive",
+                           "SERVICE_ACTIVE": "inactive", "QUIRK": ""}
+
+SYSTEMCTL_STUB = r"""#!/bin/sh
+state='%(state)s'
+log='%(log)s'
+. "$state"
+block=absent
+if [ -n "${WALK_BLOCKER_TEST_BASHRC:-}" ] && [ -f "$WALK_BLOCKER_TEST_BASHRC" ]; then
+    while IFS= read -r _l; do
+        [ "$_l" = '# >>> walk-blocker >>>' ] && block=present
+    done < "$WALK_BLOCKER_TEST_BASHRC"
+fi
+printf '%%s\tblock=%%s\n' "$*" "$block" >> "$log"
+save() {
+    printf 'TIMER_FILE=%%s\nTIMER_ACTIVE=%%s\nSERVICE_ACTIVE=%%s\nQUIRK=%%s\n' \
+        "$TIMER_FILE" "$TIMER_ACTIVE" "$SERVICE_ACTIVE" "$QUIRK" > "$state"
+}
+[ "$QUIRK" = bus-error ] && exit 1
+unit=''
+for a in "$@"; do
+    case $a in walk-blocker.*) unit=$a ;; esac
+done
+case $1 in
+    disable)
+        [ "$TIMER_FILE" = absent ] && { echo "Unit file $unit does not exist." >&2; exit 1; }
+        case " $* " in *' --now '*) TIMER_ACTIVE=inactive ;; esac
+        if [ "$QUIRK" = half-disable ]; then save; exit 1; fi
+        TIMER_FILE=disabled; save; exit 0 ;;
+    enable)
+        [ "$TIMER_FILE" = absent ] && exit 1
+        TIMER_FILE=enabled
+        case " $* " in *' --now '*) TIMER_ACTIVE=active ;; esac
+        save; exit 0 ;;
+    stop)
+        [ "$TIMER_FILE" = absent ] && { echo "Unit $unit not loaded." >&2; exit 5; }
+        case $unit in
+            *.timer) TIMER_ACTIVE=inactive ;;
+            *.service) SERVICE_ACTIVE=inactive ;;
+        esac
+        save; exit 0 ;;
+    is-active)
+        case $unit in
+            *.timer) s=$TIMER_ACTIVE; [ "$QUIRK" = sticky-active ] && s=active ;;
+            *.service) s=$SERVICE_ACTIVE ;;
+            *) s=unknown ;;
+        esac
+        echo "$s"
+        [ "$s" = active ] && exit 0
+        exit 3 ;;
+    show)
+        [ "$QUIRK" = show-fails ] && exit 1
+        if [ "$TIMER_FILE" = absent ]; then echo ''; else echo "$TIMER_FILE"; fi
+        exit 0 ;;
+esac
+exit 1
+"""
+
+
+def systemctl_paths(fake_bin):
+    """`(state, log)` for the systemctl stub in `fake_bin`: siblings of the
+    directory, so they survive populate_bin() emptying it."""
+    fake_bin = pathlib.Path(str(fake_bin))
+    return (fake_bin.parent / (fake_bin.name + ".systemctl-state"),
+            fake_bin.parent / (fake_bin.name + ".systemctl-log"))
+
+
+def set_systemctl_state(fake_bin, **state):
+    """Overwrite the stub's state: the default, updated with `state`."""
+    path, _log = systemctl_paths(fake_bin)
+    values = dict(SYSTEMCTL_DEFAULT_STATE)
+    for key, value in state.items():
+        assert key in values, key
+        values[key] = value
+    path.write_text("".join("%s=%s\n" % (k, v) for k, v in values.items()))
+    return path
+
+
+def systemctl_state(fake_bin):
+    path, _log = systemctl_paths(fake_bin)
+    return dict(line.split("=", 1) for line in path.read_text().splitlines())
+
+
+def systemctl_calls(fake_bin):
+    """Every recorded call, as `(argv string, block present?)`."""
+    _state, log = systemctl_paths(fake_bin)
+    if not log.exists():
+        return []
+    calls = []
+    for line in log.read_text().splitlines():
+        argv, block = line.rsplit("\tblock=", 1)
+        calls.append((argv, block == "present"))
+    return calls
 TOOL_STUB = "#!/bin/sh\nexit 0\n"
 
 
@@ -399,11 +512,16 @@ def stage_readme(prefix):
 def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
                  stat_body=STAT_ROOT_755, bash=BASH_STUB_SOURCES_HOOK,
                  zsh=ZSH_STUB_SOURCES_HOOK, fish=FISH_STUB_SOURCES_HOOK,
-                 logger_log=None, chgrp_flag=None):
+                 logger_log=None, chgrp_flag=None, systemctl=True,
+                 systemctl_body=None):
     """A closed PATH: the utilities install.sh needs, the shell stubs, the
-    stub tools, and -- optionally -- a fake `id`, a fake `stat` and a
-    recording logger under TEST_LOGGER. `stat_body=None` keeps the real
-    stat, so the walk sees the tmp tree's true ownership."""
+    stub tools, the recording systemctl stub, and -- optionally -- a fake
+    `id`, a fake `stat` and a recording logger under TEST_LOGGER.
+    `stat_body=None` keeps the real stat, so the walk sees the tmp tree's
+    true ownership. `systemctl=False` leaves systemctl off PATH entirely;
+    the real one is never on it. The stub's state is kept across calls, and
+    starts as SYSTEMCTL_DEFAULT_STATE; `systemctl_body` replaces the stub
+    with a fixed answerer of the caller's own."""
     fake_bin = pathlib.Path(str(fake_bin))
     if fake_bin.exists():
         for stale in fake_bin.iterdir():
@@ -440,6 +558,12 @@ def populate_bin(fake_bin, tools=("find", "grep", "du"), fake_uid=None,
         write_stub(fake_bin / tool, TOOL_STUB)
     if logger_log is not None:
         write_stub(fake_bin / TEST_LOGGER, recording_logger_stub(logger_log))
+    state, log = systemctl_paths(fake_bin)
+    if not state.exists():
+        set_systemctl_state(fake_bin)
+    if systemctl:
+        write_stub(fake_bin / "systemctl", systemctl_body
+                   or SYSTEMCTL_STUB % {"state": state, "log": log})
     if chgrp_flag is not None:
         write_stub(fake_bin / "chgrp", "#!/bin/sh\n: > '%s'\nexec %s \"$@\"\n"
                    % (chgrp_flag, _which("chgrp")))
@@ -466,7 +590,8 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
                 fish_ignores_conf=False, fish_absent=False, zsh_absent=False,
                 fake_uid=None, layout=None, script=None, real_stat=False,
                 stat_body=None, timeout=60, walk_job=True, env=None,
-                shell=None, cwd=None, spool=True, **site_overrides):
+                shell=None, cwd=None, spool=True, systemctl_absent=False,
+                systemctl_body=None, **site_overrides):
     """Stamp, stage and run the installer once. Returns `(result, layout)`.
 
     An APPROVED install must run from $PREFIX/shim, because link_farm points
@@ -483,7 +608,8 @@ def run_install(tmp_path, args, tools=("find", "grep", "du"),
         zsh=None if zsh_absent else (
             ZSH_STUB_IGNORES_HOOK if zsh_ignores_zshenv else ZSH_STUB_SOURCES_HOOK),
         fish=None if fish_absent else (
-            FISH_STUB_IGNORES_HOOK if fish_ignores_conf else FISH_STUB_SOURCES_HOOK))
+            FISH_STUB_IGNORES_HOOK if fish_ignores_conf else FISH_STUB_SOURCES_HOOK),
+        systemctl=not systemctl_absent, systemctl_body=systemctl_body)
 
     # deploy.py creates and marks the spool before a writing install runs
     # install.sh; `spool=False` models a spool it never made.

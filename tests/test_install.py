@@ -1585,6 +1585,8 @@ def test_a_root_uninstall_validates_the_directory_it_sources_from(tmp_path):
     assert result.returncode == 3, result.stdout + result.stderr
     assert "not root" in result.stderr
     assert layout.bashrc.read_text() == STOCK_BASHRC
+    assert H.systemctl_calls(layout.toolbin) == [], (
+        "a refusal before the units are touched must not touch them")
 
 
 def test_a_relative_path_does_not_hang_the_trusted_chain_walk(tmp_path):
@@ -1742,6 +1744,38 @@ def test_the_stub_shells_and_sink_are_what_the_harness_says(tmp_path):
     assert FIXTURE_POLICY.mounts["/opt/site-tools"] == ("cheap", None)
     stage_walk_job(tmp_path / "p")
     assert (tmp_path / "p" / "walk-job").exists()
+
+    # The systemctl stub: on PATH, never the real one, starting from "units
+    # already gone", and modelling a disable as systemd does.
+    stub = fake_bin / "systemctl"
+    assert shutil.which("systemctl", path=str(fake_bin)) == str(stub)
+    assert "#!/bin/sh\nstate=" in stub.read_text()
+    assert H.systemctl_state(fake_bin) == H.SYSTEMCTL_DEFAULT_STATE
+
+    def ctl(*argv):
+        return subprocess.run([str(stub)] + list(argv), capture_output=True,
+                              text=True, env=env)
+    assert ctl("disable", "--now", "walk-blocker.timer").returncode == 1
+    probe = ctl("is-active", "walk-blocker.timer")
+    assert (probe.returncode, probe.stdout) == (3, "inactive\n")
+    probe = ctl("show", "walk-blocker.timer", "--property=UnitFileState", "--value")
+    assert (probe.returncode, probe.stdout) == (0, "\n")
+    H.set_systemctl_state(fake_bin, TIMER_FILE="enabled", TIMER_ACTIVE="active")
+    assert ctl("is-active", "walk-blocker.timer").stdout == "active\n"
+    assert ctl("disable", "--now", "walk-blocker.timer").returncode == 0
+    assert H.systemctl_state(fake_bin)["TIMER_FILE"] == "disabled"
+    assert H.systemctl_state(fake_bin)["TIMER_ACTIVE"] == "inactive"
+    # The order record: whether the hook block was there when each call ran.
+    hook.write_text("%s\nx\n%s\n" % (BEGIN, END))
+    ctl("stop", "walk-blocker.service")
+    calls = H.systemctl_calls(fake_bin)
+    assert calls[-1] == ("stop walk-blocker.service", True), calls
+    assert calls[0] == ("disable --now walk-blocker.timer", False), calls
+    # Kept across populate_bin(), which empties the directory every run.
+    populate_bin(fake_bin, tools=())
+    assert H.systemctl_state(fake_bin)["TIMER_FILE"] == "disabled"
+    populate_bin(fake_bin, tools=(), systemctl=False)
+    assert shutil.which("systemctl", path=str(fake_bin)) is None
 
 
 def test_the_next_copy_dir_is_fresh_after_every_install(tmp_path):
@@ -2115,3 +2149,183 @@ def test_the_three_spool_marker_literals_agree():
     for name in ("deploy.py", "reaper.py"):
         src = open(os.path.join(ROOT, "node", name)).read()
         assert '\nSPOOL_MARKER = "%s"\n' % H.SPOOL_MARKER in src, name
+
+
+# --------------------------------------------------------------------------
+# the uninstall disarms the timer before it strips anything (issue #68)
+# --------------------------------------------------------------------------
+
+def _hooked_layout(tmp_path, **state):
+    """A root --system install, with the systemctl stub set to `state` --
+    which deploy.py's `enable --now` would leave as enabled and active."""
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(STOCK_BASHRC)
+    if state:
+        H.set_systemctl_state(layout.toolbin, **state)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert BEGIN in layout.bashrc.read_text()
+    assert H.systemctl_calls(layout.toolbin) == [], "the install touched the units"
+    return layout
+
+
+ARMED = {"TIMER_FILE": "enabled", "TIMER_ACTIVE": "active",
+         "SERVICE_ACTIVE": "active"}
+
+
+@pytest.mark.parametrize("shell", ["dash", "bash"])
+def test_the_next_poll_after_an_uninstall_does_not_rebuild_the_farm(tmp_path, shell):
+    """The oracle for issue #68. The uninstall stripped the hooks and removed
+    $BIN while the timer stayed armed, and the next poll's ExecStartPre
+    relink rebuilt $BIN under a "removed" line. The poll is simulated as
+    systemd would run it: only if the timer is still enabled or active.
+
+    Fails without the fix: no systemctl call is made, the poll runs, and
+    $BIN is back."""
+    if not shutil.which(shell):
+        pytest.skip("%s is not installed" % shell)
+    layout = _hooked_layout(tmp_path, **ARMED)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 script=layout.script, shell=shutil.which(shell))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not layout.bin.exists()
+
+    state = H.systemctl_state(layout.toolbin)
+    if state["TIMER_FILE"] == "enabled" or state["TIMER_ACTIVE"] == "active":
+        _r, layout = run_install(tmp_path, ["--relink"], fake_uid=0, layout=layout,
+                                 script=layout.script, shell=shutil.which(shell))
+    assert not layout.bin.exists(), (
+        "the next poll rebuilt the farm the uninstall said it removed")
+    assert state == dict(ARMED, QUIRK="", TIMER_FILE="disabled", TIMER_ACTIVE="inactive",
+                         SERVICE_ACTIVE="inactive"), state
+
+    calls = H.systemctl_calls(layout.toolbin)
+    argvs = [argv for argv, _block in calls]
+    assert "disable --now walk-blocker.timer" in argvs, calls
+    assert "stop walk-blocker.service" in argvs, calls
+    for argv, block in calls:
+        if argv in ("disable --now walk-blocker.timer", "stop walk-blocker.service"):
+            assert block, "%r ran after the hook block was stripped" % argv
+    assert argvs.index("disable --now walk-blocker.timer") < argvs.index(
+        "stop walk-blocker.service"), argvs
+    assert BEGIN not in layout.bashrc.read_text()
+    assert "Layer 2" in result.stdout and "not running" in result.stdout, result.stdout
+    assert "python3 deploy.py --system" in result.stdout, result.stdout
+
+
+def test_an_uninstall_after_the_units_are_removed_succeeds(tmp_path):
+    """deploy.py --uninstall's sequence: it disables and stops the units,
+    removes their files and reloads, THEN runs this. The disable fails on a
+    unit that no longer exists, and that is not a refusal."""
+    layout = _hooked_layout(tmp_path)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout, script=layout.script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not layout.bin.exists()
+    assert BEGIN not in layout.bashrc.read_text()
+    assert "disable --now walk-blocker.timer" in [
+        argv for argv, _b in H.systemctl_calls(layout.toolbin)]
+    assert result.stderr == "", "a gone unit is not news: %r" % result.stderr
+    # A unit with no file is not "disabled": the line claims only what every
+    # state units_are_down accepts ('', disabled, static, masked) makes true.
+    assert "walk-blocker.timer is stopped and not enabled" in result.stdout
+    assert "disabled" not in result.stdout
+
+
+@pytest.mark.parametrize("quirk, absent", [
+    ("sticky-active", False),   # is-active still says active after the disable
+    ("show-fails", False),      # the enablement read exits non-zero
+    ("", True),                 # systemctl is not on PATH
+    ("bus-error", False),       # every call prints nothing and fails
+    ("half-disable", False),    # stopped, but still enabled
+], ids=["still-active", "show-fails", "no-systemctl", "bus-error", "half-disable"])
+def test_an_uninstall_that_cannot_confirm_the_timer_is_down_strips_nothing(
+        tmp_path, quirk, absent):
+    """Indeterminate is not down. Every one of these leaves a timer that can
+    fire --relink over the stripped hooks, so the uninstall refuses with
+    everything still in place, and says the timer may be half-disarmed."""
+    layout = _hooked_layout(tmp_path, QUIRK=quirk, **ARMED)
+    before = {p: p.read_text() for p in (layout.bashrc, layout.zshenv, layout.fishconf)}
+    farm = sorted(os.listdir(str(layout.bin)))
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 script=layout.script, systemctl_absent=absent)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "half-disarmed" in result.stderr, result.stderr
+    assert "Nothing has been stripped" in result.stderr, result.stderr
+    assert {p: p.read_text() for p in before} == before
+    assert sorted(os.listdir(str(layout.bin))) == farm
+    assert "removed from" not in result.stdout
+
+
+def test_a_non_root_uninstall_touches_no_unit(tmp_path):
+    layout = _hooked_layout(tmp_path, **ARMED)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=1000,
+                                 layout=layout, script=layout.script)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert H.systemctl_calls(layout.toolbin) == []
+    assert H.systemctl_state(layout.toolbin) == dict(H.SYSTEMCTL_DEFAULT_STATE, **ARMED)
+
+
+def _stamped_deploy():
+    from _deploy_helpers import load_stamped_deploy, site_values as deploy_values
+    return load_stamped_deploy(deploy_values())
+
+
+def test_the_unit_literals_are_deploy_pys():
+    """install.sh names the units it disables as literals; deploy.py installs
+    them under its own. A rename on one side would disable nothing."""
+    deploy = _stamped_deploy()
+    text = open(INSTALL_SH).read()
+    assert "\nSG_TIMER_UNIT=%s\n" % deploy.TIMER_UNIT in text
+    assert "\nSG_SERVICE_UNIT=%s\n" % deploy.SERVICE_UNIT in text
+
+
+def _state_word_cases():
+    cases = []
+    for word, down in (("inactive", True), ("failed", True), ("unknown", True),
+                       ("not-found", True), ("active", False), ("activating", False),
+                       ("deactivating", False), ("reloading", False), ("", False)):
+        cases.append(pytest.param(word, "inactive", 0, "", down,
+                                  id="timer-%s" % (word or "empty")))
+        cases.append(pytest.param("inactive", word, 0, "", down,
+                                  id="service-%s" % (word or "empty")))
+    for rc, word, down in ((0, "", True), (0, "disabled", True), (0, "static", True),
+                           (0, "masked", True), (0, "enabled", False),
+                           (0, "enabled-runtime", False), (0, "linked", False),
+                           (1, "", False), (1, "disabled", False)):
+        cases.append(pytest.param("inactive", "inactive", rc, word, down,
+                                  id="show-%d-%s" % (rc, word or "empty")))
+    return cases
+
+
+@pytest.mark.parametrize("timer_word, service_word, show_rc, show_word, down",
+                         _state_word_cases())
+def test_the_state_words_agree_with_deploy_py(tmp_path, monkeypatch, timer_word,
+                                              service_word, show_rc, show_word, down):
+    """The same answers, read by deploy.py's _units_are_down() and by
+    install.sh, reach the same verdict -- so the two halves of one teardown
+    cannot drift into one accepting a state the other refuses. is-active
+    always exits 3 here, so a check that read its status instead of its word
+    would wave the live states through."""
+    deploy = _stamped_deploy()
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if cmd[:2] == ["systemctl", "is-active"]:
+            word = timer_word if cmd[2] == deploy.TIMER_UNIT else service_word
+            return subprocess.CompletedProcess(cmd, 3, word + "\n", "")
+        assert cmd[:2] == ["systemctl", "show"], cmd
+        return subprocess.CompletedProcess(cmd, show_rc, show_word + "\n", "")
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert (deploy._units_are_down({}) == 0) is down
+
+    body = ("#!/bin/sh\n"
+            "case $1 in\n"
+            "  is-active) case $2 in *.timer) printf '%%s\\n' '%s' ;;"
+            " *) printf '%%s\\n' '%s' ;; esac; exit 3 ;;\n"
+            "  show) printf '%%s\\n' '%s'; exit %d ;;\n"
+            "esac\nexit 0\n" % (timer_word, service_word, show_word, show_rc))
+    layout = _hooked_layout(tmp_path)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 script=layout.script, systemctl_body=body)
+    assert result.returncode == (0 if down else 3), result.stdout + result.stderr
+    assert layout.bin.exists() is not down
