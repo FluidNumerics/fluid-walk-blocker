@@ -121,6 +121,7 @@ privilege. Mode bits are not compared, because the install sets them.
   not by the install's copy.** `install` opens its source to copy it, so
   that copy can block before the check runs. The dry run's lstat names the
   FIFO first, which is one more reason to read the dry run before installing.
+  The install's own hang is issue #108.
 - **What the check establishes, and what it does not.** It proves the copy
   matches the record built with it. It does not prove the record is the
   reviewed one. That is `walk-blocker provenance`'s question, asked of the

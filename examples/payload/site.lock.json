@@ -31,7 +31,7 @@
     "docs/adr/0026-journal-readable-by-the-spool-group.md": "f6ff9b48c6b25f97318981b0a494987cd22c430ee6e6f0d3b8cae6cb7f183c25",
     "docs/adr/0027-uninstall-refuses-another-configuration.md": "f5f610b568f2d59bdc7f0e8e3610909373028a28813b4ad924129efff2631b41",
     "docs/adr/0028-an-orphaned-walk-has-the-same-budget.md": "4757dde827e36c2f64b9d2e37090c65b54e713843088b4bfa1359de2504859f7",
-    "docs/adr/0029-the-payload-is-checked-against-its-own-record.md": "554c94396b7116357adeb7d1d1d0b40800d4151b29c0587756254a06b3be3544",
+    "docs/adr/0029-the-payload-is-checked-against-its-own-record.md": "8cff0e87195f927da5103927dc56b8090fa0f42d9ebd2d7fe9721bf2d864b2c1",
     "docs/adr/TEMPLATE.md": "2f91c335abaaab317e1337a6b1a99ffe73e54e1e8e1541111480073b9391733b",
     "docs/alternatives.md": "847b77f60d40fbead0393434bbcb2403d653caa34fbb51781a9bb7c4f8ecea05",
     "docs/evidence.md": "51ee0f8ee410fb13a7f275ac5a42307fc2b3ca462c8698a81ba7dabda2de690c",
