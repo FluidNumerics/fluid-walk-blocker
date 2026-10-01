@@ -8,8 +8,9 @@ checked against the tree's own help text.
 Two rules frame every step below. **Layer 1 is advisory** (ADR-0001): the
 shim refuses the naive command and names the alternative, and an absolute
 path, a private `PATH`, a container, a batch script, a shell function or a
-session that started before the install all go around it. **The reaper reports by default**: nothing is killed until a
-human reads real findings and decides otherwise (ADR-0009).
+session that started before the install all go around it. **The reaper
+reports by default**: nothing is killed until a human reads real findings
+and decides otherwise (ADR-0009).
 
 ## 1. Prerequisites
 
@@ -555,19 +556,19 @@ It carries three kinds of record:
   readable by the spool's group.
 
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
-override was used,
-every hook block is present and fires, the audit directory has the right
-mode, and no expensive mount is running uncovered. **What it does not
-mean** is that no unbounded walk ran. Every Layer 1 bypass — an absolute
-path, a private `PATH`, a container, a batch script, a shell function, a
-second-level shell, a session that started before the install (§8) — leaves no journal record, because the shim never ran.
-A hook that is not on anyone's `PATH` also produces silence, and the
-reconcile's `hook_check` distinguishes that case only when it can see the
-block is gone. The journal tells you what overrode Layer 1 and when Layer 1
-stopped being installed; the reaper's trail is what tells you what reached
-the node regardless. Read both, for several days, before deciding anything.
-Whether the journal persists across a reboot is a property of the node's
-journald configuration, not of this tree.
+override was used, every hook block is present and fires, the audit
+directory has the right mode, and no expensive mount is running uncovered.
+**What it does not mean** is that no unbounded walk ran. Every Layer 1
+bypass — an absolute path, a private `PATH`, a container, a batch script, a
+shell function, a second-level shell, a session that started before the
+install (§8) — leaves no journal record, because the shim never ran. A hook
+that is not on anyone's `PATH` also produces silence, and the reconcile's
+`hook_check` distinguishes that case only when it can see the block is gone.
+The journal tells you what overrode Layer 1 and when Layer 1 stopped being
+installed; the reaper's trail is what tells you what reached the node
+regardless. Read both, for several days, before deciding anything. Whether
+the journal persists across a reboot is a property of the node's journald
+configuration, not of this tree.
 
 ### Who can see what, and for how long
 
@@ -757,8 +758,9 @@ install writes to the new path and leaves what the old build wrote at the
 old path in place (§14), including, for `tmpfiles_dir`, the journal read its
 drop-in granted. Uninstall with the old payload first, then install the new
 one. The new payload cannot do it: it was built from a different
-configuration, so its uninstall refuses the old install (§14). A change to `[timer].on_calendar` must be re-surveyed against the live
-schedule of the node, not carried over (ADR-0017).
+configuration, so its uninstall refuses the old install (§14). A change to
+`[timer].on_calendar` must be re-surveyed against the live schedule of the
+node, not carried over (ADR-0017).
 
 ## 14. Uninstall
 
@@ -773,32 +775,33 @@ installs. Use the payload the install came from, or a rebuild of the same
 reviewed configuration. Every path the uninstall touches is compiled in from
 that build's `site.toml`, so before it touches anything it hashes the
 installed `<prefix>/site.toml` and refuses, with exit 6, unless the hash is
-the `site_sha256` its own build recorded (ADR-0027). A payload built from any
-other configuration is refused, even one that differs by a comment, and so is
-an install whose `site.toml` is missing or is not the root-owned regular file
-the install wrote. A payload for a different `[install].prefix` is refused
-sooner, because the prefix it names carries no payload marker. The check
-holds because a node carries one walk-blocker install: the timer and service
-have fixed names, so systemd loads one of each. A second install under
-another prefix overwrites the first's unit files, or, with a different
+the `site_sha256` its own build recorded (ADR-0027). A payload built from
+any other configuration is refused, even one that differs by a comment, and
+so is an install whose `site.toml` is missing or is not the root-owned
+regular file the install wrote. A payload for a different `[install].prefix`
+is refused sooner, because the prefix it names carries no payload marker.
+The check holds because a node carries one walk-blocker install: the timer
+and service have fixed names, so systemd loads one of each. A second install
+under another prefix overwrites the first's unit files, or, with a different
 `[install].unit_dir`, the copy in whichever directory systemd searches first
 is the one that runs; the two never run side by side. Nothing refuses a
-second install, so uninstall the first before installing again. Where two prefixes carry the marker anyway, the uninstall removes the
-one its payload was built for, and stops the one pair of units whichever
-install wrote them.
+second install, so uninstall the first before installing again. Where two
+prefixes carry the marker anyway, the uninstall removes the one its payload
+was built for, and stops the one pair of units whichever install wrote them.
 
 The refusal changes nothing. On a mismatch it prints both hashes. To
-uninstall, build the configuration that is installed. In a clone of the site's repository, run
-`walk-blocker provenance --sha256 <the installed hash> --repo . --ref
-origin/main`, naming the site's reviewed branch if it is not `origin/main`
-(§11, step 3). Rebuild the payload at the commit it reports as `REVIEWED`,
-copy it to the node, and run the uninstall from there. If the site's history
-no longer holds that commit, copy the installed `<prefix>/site.toml` off the
-node, which every account can read, and build a payload from the copy: its
-hash matches by construction, and its compiled paths are the ones that
-install wrote. A copy whose `schema_version` the current tool no longer
-accepts builds with the release that installed it. There is no flag that
-skips the check; it guards against the wrong payload, not against root.
+uninstall, build the configuration that is installed. In a clone of the
+site's repository, run `walk-blocker provenance --sha256 <the installed
+hash> --repo . --ref origin/main`, naming the site's reviewed branch if it
+is not `origin/main` (§11, step 3). Rebuild the payload at the commit it
+reports as `REVIEWED`, copy it to the node, and run the uninstall from
+there. If the site's history no longer holds that commit, copy the installed
+`<prefix>/site.toml` off the node, which every account can read, and build a
+payload from the copy: its hash matches by construction, and its compiled
+paths are the ones that install wrote. A copy whose `schema_version` the
+current tool no longer accepts builds with the release that installed it.
+There is no flag that skips the check; it guards against the wrong payload,
+not against root.
 
 A refusal that prints no installed hash — the `site.toml` is missing, a
 symlink, not a regular file, not root-owned or unreadable — has nothing to

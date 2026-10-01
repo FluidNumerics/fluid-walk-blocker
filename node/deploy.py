@@ -3172,9 +3172,24 @@ def system_execute(args, env=None):
             _write_offenders(offenders)
             sys.stderr.write(
                 "  No systemd unit was written and no timer enabled, but the\n"
-                "  hook blocks (%s) and the shim farm ARE in place. Run\n"
-                "  `python3 deploy.py --uninstall` to reverse them.\n"
+                "  hook blocks (%s) and the shim farm ARE in place.\n"
                 % ", ".join(enabled_hook_files(args)))
+            # The uninstall applies this same ownership test to site.toml
+            # and refuses before any teardown when it fails (exit 6,
+            # ADR-0027), so advising it here would name a step that cannot
+            # succeed. Decided from the offender list, not by reading the
+            # file: the record keeps its one consequence.
+            config = os.path.join(args.prefix, "site.toml")
+            if any(o[0] == config for o in offenders):
+                sys.stderr.write(
+                    "  `python3 deploy.py --uninstall` would refuse this\n"
+                    "  install while %s fails this check. Fix the cause\n"
+                    "  above and re-run this install, which rewrites it;\n"
+                    "  then uninstall from this payload if it is not wanted.\n"
+                    % config)
+            else:
+                sys.stderr.write(
+                    "  Run `python3 deploy.py --uninstall` to reverse them.\n")
             return 9
 
     service, timer = render_units(args.prefix, spool)

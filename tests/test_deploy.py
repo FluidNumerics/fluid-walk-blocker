@@ -1153,6 +1153,42 @@ def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
     assert not os.path.exists(os.path.join(args.unit_dir, deploy.TIMER_UNIT))
 
 
+def _exit_9_text(tmp_path, monkeypatch, capsys, offender):
+    """stderr of a deploy whose post-install ownership check names
+    `offender(prefix)`."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+
+    def unowned_after_install(root, uid=0):
+        ran = any("install.sh" in a for c in calls for a in c)
+        return [(offender(root), "owner", "owned by uid 1000")] if ran else []
+
+    monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    assert deploy.system_execute(_args(tmp_path)) == 9
+    return capsys.readouterr().err
+
+
+def test_exit_9_does_not_advise_an_uninstall_that_would_refuse(
+        tmp_path, monkeypatch, capsys):
+    """The uninstall refuses with exit 6 when <prefix>/site.toml fails the
+    ownership test (ADR-0027), so exit 9 naming that file must name the
+    re-install instead (issue #101)."""
+    err = _exit_9_text(tmp_path, monkeypatch, capsys,
+                       lambda root: os.path.join(root, "site.toml"))
+    assert "would refuse" in err and "re-run this install" in err, err
+    assert "to reverse them" not in err, err
+
+
+def test_exit_9_advises_the_uninstall_when_site_toml_is_not_the_offender(
+        tmp_path, monkeypatch, capsys):
+    err = _exit_9_text(tmp_path, monkeypatch, capsys,
+                       lambda root: os.path.join(root, "bin"))
+    assert "`python3 deploy.py --uninstall` to reverse them" in err, err
+    assert "would refuse" not in err, err
+
+
 # 3 is install.sh's own refusal; the rest are what a script under `set -e`
 # passes through from a failing command: 1 generic, 5 and 64 near the hook
 # proof's 4, 127 a missing program, 137 a killed one. Only exactly 4 is the
