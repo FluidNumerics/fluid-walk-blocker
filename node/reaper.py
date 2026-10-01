@@ -842,7 +842,7 @@ def classify(procs, mounts, budget_s=None, fanout_n=None, policy=None,
         if known_tool and on_expensive_mount:
             traversals.append(proc)
             if not past_budget:
-                # The same budget for both arms (ADR-0027). A reparented walk
+                # The same budget for both arms (ADR-0028). A reparented walk
                 # is not proof that nobody wants it: `nohup`, `setsid`, a
                 # closed tmux pane and a client that detaches on purpose all
                 # reparent a live, wanted walk to init. Age is what separates

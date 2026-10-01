@@ -1,7 +1,7 @@
-# ADR-0027: An orphaned traversal is a finding only past the traversal budget, the same budget a runaway has
+# ADR-0028: An orphaned traversal is a finding only past the traversal budget, the same budget a runaway has
 
 **Status:** accepted, 2026-09-30
-**Evidence:** held privately by Fluid Numerics, keyed ADR-0027 — see `docs/evidence.md`
+**Evidence:** held privately by Fluid Numerics, keyed ADR-0028 — see `docs/evidence.md`
 
 ## Context
 

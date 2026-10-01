@@ -311,7 +311,7 @@ def test_users_guidance_comes_before_the_mount_table(page):
 
 def test_the_orphan_reason_carries_the_budget(page):
     """classify() names an orphaned traversal only past the traversal budget
-    (ADR-0027, test_an_orphan_traversal_must_run_past_the_budget_first), so
+    (ADR-0028, test_an_orphan_traversal_must_run_past_the_budget_first), so
     the page's orphan reason must carry the budget's condition, and must not
     tell people an orphan can be killed however young.
 

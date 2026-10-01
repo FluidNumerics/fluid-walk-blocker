@@ -78,8 +78,9 @@ launched by other tooling — noise, not a personal interactive shell.
 `file` the block is written to, the `package` that likely owns that file, and
 a `gate` of `"required"` or `"best-effort"`.**
 
-A **required** shell fails the install (`--system` exits
-non-zero) if `verify_<shell>_hook` cannot prove the file fires under
+A **required** shell fails the install (`install.sh --system` exits 4, and
+`deploy.py` exits 4 after it, unless its own post-install ownership check
+refuses first and exits 9) if `verify_<shell>_hook` cannot prove the file fires under
 remote-command conditions with the shim directory stripped from `PATH` — the
 probe must not pass merely because the caller's own `PATH` already carries it.
 For bash that is `SHLVL=0`, `SSH_CLIENT` set, stdin `/dev/null`, requiring a
@@ -153,6 +154,11 @@ absence is ordinary. Do not soften one to match the other.
   audit trail reporting a kill that did not land; the required/best-effort
   split exists so that "verified" and "not applicable" are never spelled the
   same way.
+- **A failed required-hook proof does not take Layer 2 down.** The deploy
+  writes the reaper's units and re-enables its timer over a payload that
+  passed every trust check, then exits 4 naming Layer 1 as unproven. Only a
+  refusal, where root must not keep running what it rejected, leaves the
+  timer disabled, and the deploy says that it has.
 
 ## Re-measure when
 

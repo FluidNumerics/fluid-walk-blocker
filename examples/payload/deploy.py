@@ -51,7 +51,11 @@ second authorization flag. Whoever holds root on the target node has the
 authority this installs with, and a script that demanded a further ceremony
 from them would be gainsaying a judgement that is not its to make (ADR-0021,
 narrowing ADR-0004). `--uninstall` is root alone for the same reason it
-always was: reversing a control is the safer direction.
+always was: reversing a control is the safer direction. It is not gated on
+anything else, but it does refuse an install whose `site.toml` is not the
+configuration this build was compiled from, since every path it would tear
+down is this build's literal (ADR-0027). That guards against the wrong
+payload, not against root.
 
 This repository's own agent sessions never run any of this as root, in any
 mode. That rule no longer has a flag holding it up, so it is stated as an
@@ -109,6 +113,15 @@ __version__ = '0.2.1'  # GENERATED from VERSION
 # and carry one version, because they are deployed as one and a per-file
 # version would invite mixing them. A literal, NOT read at run time: this
 # file is copied onto a node with nothing beside it to read the version from.
+
+# The sha256 of the site.toml bytes this build was compiled from: the same
+# digest the lock records as `site_sha256`. `--uninstall` compares the
+# INSTALLED `<prefix>/site.toml` against it and refuses on a mismatch, so a
+# payload built from some other configuration cannot tear this install down
+# with paths it never wrote (ADR-0027). A literal for the same reason as the
+# version: the payload's own lock is a user-owned file, and reading it here
+# would be a late read of bytes its owner can rewrite (ADR-0006).
+SITE_SHA256 = 'a1112c21b63c7199238a68326c44315b80b749ace4e02dc876f8a2c1c179337b'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -220,6 +233,13 @@ TRUSTED_PYTHON3 = '/usr/bin/python3'  # GENERATED from site.toml:trusted_binarie
 DISPLAY_NAME = 'Example HPC login node'  # GENERATED from site.toml:site.display_name
 
 SERVICE_UNIT = "walk-blocker.service"
+# install.sh --system's `verify_hooks || exit 4`: a required hook could not be
+# proven to fire, over a payload that is installed and passed every trust
+# check. Its refusals exit 3. Under `set -e` another failing command could in
+# principle exit 4 too; reading that as a hook failure only re-arms a timer
+# the post-install ownership check has already cleared, never a payload
+# install.sh refused.
+INSTALL_HOOKS_UNPROVEN = 4
 TIMER_UNIT = "walk-blocker.timer"
 
 # Exactly what this installs under the prefix, and therefore exactly what it
@@ -587,7 +607,11 @@ def run(cmd, check=True, capture=True, dry_run=False, env=None):
         return subprocess.CompletedProcess(cmd, 0, "", "")
     result = subprocess.run(cmd, capture_output=capture, text=True, env=env)
     if check and result.returncode != 0:
-        sys.stderr.write("failed: %s\n%s\n" % (printable, result.stderr))
+        sys.stderr.write("failed: %s\n" % printable)
+        # Only what was captured: uncaptured, the command already wrote its
+        # own stderr to the terminal, and result.stderr is None.
+        if result.stderr:
+            sys.stderr.write(result.stderr.rstrip("\n") + "\n")
         raise SystemExit(result.returncode)
     return result
 
@@ -1372,12 +1396,13 @@ def _open_spool_dir(spool, uid):
 
 
 def repair_spool(spool, gid, uid=0, dry_run=False, out=None):
-    """The one-time read-scope sweep, before the spool is judged.
+    """The one-time read-scope sweep, after preflight has judged the spool
+    and the previous units are down (#74).
 
     Only what spool_mode_repairs() lists, and each entry is re-judged on the
     fd it is repaired through: an entry that changed between the listing and
-    the open is skipped rather than repaired, and the blockers that run next
-    see it as whatever it now is. Every entry is opened relative to the
+    the open is skipped rather than repaired, and create_spool(), which runs
+    later in system_execute(), judges it as whatever it now is. Every entry is opened relative to the
     spool's fd, O_NOFOLLOW and O_NONBLOCK -- a link is refused by the open,
     and a fifo planted under a trail's name cannot hang the install.
     """
@@ -1948,7 +1973,7 @@ def write_unknown_refusal(unknowns, out=None):
     return 6
 
 
-def preflight(args, privileged, repair=None, out=None):
+def preflight(args, privileged, out=None):
     """Every check `system_execute()` makes before its first `systemctl`, in
     the order it makes them -- run from ONE place, by both callers.
 
@@ -1969,13 +1994,13 @@ def preflight(args, privileged, repair=None, out=None):
     the preview REPORTS -- never as clean, and never as a blocker
     manufactured out of the reader's uid -- and which the install refuses.
 
-    `repair` is the install's one asymmetry, named here rather than
-    duplicated: it sets the read scope of the spool and its own files before
-    judging them, because that is the state this code exists to correct,
-    where the preview advertises the identical list from the identical
-    function. It runs after the paths are judged and before the audit
-    directory is, exactly where the install used to do it inline, and it is
-    handed the reader group's gid, resolved here.
+    Nothing here writes to the spool. The install's one asymmetry with the
+    preview is that it sets the read scope of the spool and its own files,
+    and it does that in `system_execute()`, after these checks and after the
+    previous units are down (#74); the preview advertises the identical list
+    from the identical function. The spool is judged here as the install
+    will leave it: `audit_dir_blockers()` does not refuse over a path
+    `spool_mode_repairs()` lists.
 
     The groups come first (ADR-0025): the reader group must resolve, and
     every listed service group must be proven free of people, before the
@@ -2090,10 +2115,10 @@ def preflight(args, privileged, repair=None, out=None):
     spool = canonical_prefix(args.spool_dir)
     prefix = canonical_prefix(args.prefix)
 
-    # 2. The audit directory -- after the install has repaired the files
-    #    whose mode is its own to assert.
-    if repair is not None:
-        repair(spool, spool_gid)
+    # 2. The audit directory, judged as the install will leave it and
+    #    without writing: audit_dir_blockers() does not refuse over a path
+    #    spool_mode_repairs() lists, and system_execute() makes those
+    #    repairs only after the previous timer is down (#74).
     blind = unstattable_as_me(spool)
     if blind is not None:
         checks.append(Check("spool", spool, CHECK_UNKNOWN, "%s: %s" % blind))
@@ -2286,6 +2311,87 @@ def uninstall_helper(prefix):
     if chain:
         return (None, "%s: %s" % chain[0])
     return (helper, None)
+
+
+def installed_config_refusal(prefix):
+    """(None, digest) when `<prefix>/site.toml` is the configuration this
+    build was compiled from, else (reason, digest-or-None).
+
+    The file is hashed, never parsed: nothing in it reaches a path, a
+    threshold or a branch other than this one refusal (ADR-0027). Each way it
+    can fail to vouch for the install refuses, because an install that cannot
+    show its configuration cannot be shown to be the one this payload would
+    undo. The installed file is 0644 under a 0755 prefix, so none of this
+    needs root -- which the dry run will rely on once it runs without it.
+    """
+    path = os.path.join(prefix, "site.toml")
+    bad = irregular_target(path)
+    if bad is not None:
+        return ("%s %s" % (path, bad), None)
+    if not os.path.exists(path):
+        return ("%s does not exist: the install did not finish, or the "
+                "file was removed" % path, None)
+    offenders = unowned_by(path)
+    if offenders:
+        return ("%s: %s" % (offenders[0].path, offenders[0].reason), None)
+    try:
+        # O_NOFOLLOW for a link swapped in after the lstat; O_NONBLOCK so a
+        # FIFO swapped in cannot hang the open, and the fstat refuses it.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as err:
+        return ("%s cannot be read (%s)" % (path, err.strerror), None)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ("%s is not a regular file" % path, None)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, _VERIFY_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    except OSError as err:
+        # Never a match: an unreadable file vouches for nothing.
+        return ("%s cannot be read (%s)" % (path, err.strerror), None)
+    finally:
+        os.close(fd)
+    installed = digest.hexdigest()
+    if installed != SITE_SHA256:
+        return ("its site.toml is not the configuration this payload was "
+                "built from", installed)
+    return (None, installed)
+
+
+def write_installed_config_refusal(prefix, reason, installed, out=None):
+    """Said once, so the message names every digest there is -- the
+    installed one only when there is one -- and the recovery that fits: a
+    rebuild when there is an installed digest to rebuild, and a re-install
+    when there is none, since no build can match a file that is
+    not there or cannot be read."""
+    out = sys.stderr if out is None else out
+    out.write("deploy.py: refusing to uninstall prefix=%s: %s.\n"
+              % (prefix, reason))
+    if installed is not None:
+        out.write("  installed site.toml  sha256 %s\n" % installed)
+    out.write("  this payload's       sha256 %s\n" % SITE_SHA256)
+    out.write(
+        "  A payload tears down the unit_dir, journal drop-in and hook files\n"
+        "  compiled into it, which are the install's only when it was built\n"
+        "  from the same configuration. Nothing has been touched.\n")
+    if installed is None:
+        out.write(
+            "  With no installed configuration to vouch for the install, no\n"
+            "  build can match it. Re-run the install from the payload that\n"
+            "  wrote this prefix, or from a build of the site's reviewed\n"
+            "  configuration: the install rewrites site.toml and is never\n"
+            "  refused. Then uninstall from that same payload.\n")
+    else:
+        out.write(
+            "  Uninstall with a build of the installed configuration instead:\n"
+            "  `walk-blocker provenance --sha256 <installed> --repo SITE_REPO`\n"
+            "  names the reviewed commit to rebuild, or build from a copy of\n"
+            "  %s, whose digest matches by construction.\n"
+            % os.path.join(prefix, "site.toml"))
+    out.write("  See docs/operating.md section 14.\n")
 
 
 def irregular_target(path):
@@ -2857,17 +2963,6 @@ def system_execute(args, env=None):
         print("# pattern -- the only part of these commands a dry run cannot")
         print("# know. Everything else is what will run:")
 
-    def repair(spool, gid):
-        # Repair before judging. These are this installer's own directory
-        # and files, and their read scope is its to assert; the preview
-        # advertises the identical list from the identical function.
-        # audit_dir_blockers() already declines to refuse over them, so the
-        # order is belt and braces -- but doing it first means the check
-        # runs against the state the operator will actually be left in.
-        # Through fds, never paths: no root write into the spool follows a
-        # link (ADR-0025).
-        repair_spool(spool, gid, dry_run=args.dry_run)
-
     # Every check, from the function the dry run calls: an install that
     # refuses something the dry run accepted is a guardrail that fails
     # exactly when it is being installed, half-applied, on a shared node.
@@ -2875,7 +2970,7 @@ def system_execute(args, env=None):
     # here as an ordinary user: for a check that user cannot make, "could
     # not check" is the honest answer and system_preview() above has already
     # said so. On the writing path _is_root() is True or we returned 3.
-    rc, _checks = preflight(args, privileged=_is_root(), repair=repair)
+    rc, _checks = preflight(args, privileged=_is_root())
     if rc != 0:
         return rc
 
@@ -2885,7 +2980,8 @@ def system_execute(args, env=None):
     # Snapshot the payload HERE: after the checks, which are pure Python and
     # cannot block, and before the first `systemctl`, which can (ADR-0006).
     # Not earlier: every refusal above returns without issuing a single
-    # command, and there are tests pinning that. Not later: placed just
+    # command or making a single root write, and there are tests pinning
+    # that. Not later: placed just
     # before the copies it would leave the window as wide as a `systemctl
     # stop --now` takes.
     # One source for both runs. A dry run gets the planned path rather than a
@@ -2906,6 +3002,19 @@ def system_execute(args, env=None):
         check=False, dry_run=args.dry_run, env=env)
     if not args.dry_run and _units_are_down(env) != 0:
         return 7
+
+    # The spool's read scope, repaired only now: after every refusal
+    # preflight makes and after the previous units are down (#74). Refusals
+    # below this point (ownership, spool creation, install.sh) come once the
+    # payload is being replaced and can follow this repair; the spool they
+    # leave is the ADR-0025 state, not a half-repair. Repaired during preflight,
+    # a refused install still re-grouped and re-moded the spool, and the old
+    # timer, still firing, could undo part of it first -- an old relink's
+    # `install -d -m 0755` keeps the setgid bit, leaving 2755. These are this
+    # installer's own directory and files; the preview lists the identical
+    # repairs from spool_mode_repairs(). Through fds, never paths: no root
+    # write into the spool follows a link (ADR-0025).
+    repair_spool(spool, args.spool_gid, dry_run=args.dry_run)
 
     # 0700 while the payload is being assembled, widened to 0755 only once
     # every check below has passed. `cp -a --no-preserve=ownership` preserves
@@ -3033,9 +3142,23 @@ def system_execute(args, env=None):
     # No path flags: install.sh carries the same literals, stamped from the
     # same site.toml by the same build. From the DEPLOYED copy, which is the
     # only place install.sh will run a writing install from.
-    run([TRUSTED_SH, os.path.join(args.prefix, "shim", "install.sh"),
-         "--system"],
-        capture=False, dry_run=args.dry_run, env=env)
+    shim_cmd = [TRUSTED_SH, os.path.join(args.prefix, "shim", "install.sh"),
+                "--system"]
+    installed = run(shim_cmd, check=False, capture=False,
+                    dry_run=args.dry_run, env=env)
+    hooks_unproven = installed.returncode == INSTALL_HOOKS_UNPROVEN
+    if installed.returncode != 0 and not hooks_unproven:
+        # A refusal or a failure of install.sh's own. The timer was disabled
+        # above and stays that way: root must not keep executing a payload
+        # this run did not accept. Say so, since nothing else will.
+        sys.stderr.write(
+            "failed: %s\n"
+            "  The reaper's timer (%s) was disabled at the start of this\n"
+            "  install and is STILL DISABLED: Layer 2 is not running. Fix the\n"
+            "  cause above and re-run this install. Re-enabling the timer by\n"
+            "  hand would run a payload this install did not accept.\n"
+            % (" ".join(shlex.quote(c) for c in shim_cmd), TIMER_UNIT))
+        raise SystemExit(installed.returncode)
 
     # Re-assert AFTER install.sh, because it creates $prefix/bin -- the
     # directory that actually holds the shims -- and the earlier check ran
@@ -3049,9 +3172,24 @@ def system_execute(args, env=None):
             _write_offenders(offenders)
             sys.stderr.write(
                 "  No systemd unit was written and no timer enabled, but the\n"
-                "  hook blocks (%s) and the shim farm ARE in place. Run\n"
-                "  `python3 deploy.py --uninstall` to reverse them.\n"
+                "  hook blocks (%s) and the shim farm ARE in place.\n"
                 % ", ".join(enabled_hook_files(args)))
+            # The uninstall applies this same ownership test to site.toml
+            # and refuses before any teardown when it fails (exit 6,
+            # ADR-0027), so advising it here would name a step that cannot
+            # succeed. Decided from the offender list, not by reading the
+            # file: the record keeps its one consequence.
+            config = os.path.join(args.prefix, "site.toml")
+            if any(o[0] == config for o in offenders):
+                sys.stderr.write(
+                    "  `python3 deploy.py --uninstall` would refuse this\n"
+                    "  install while %s fails this check. Fix the cause\n"
+                    "  above and re-run this install, which rewrites it;\n"
+                    "  then uninstall from this payload if it is not wanted.\n"
+                    % config)
+            else:
+                sys.stderr.write(
+                    "  Run `python3 deploy.py --uninstall` to reverse them.\n")
             return 9
 
     service, timer = render_units(args.prefix, spool)
@@ -3082,9 +3220,26 @@ def system_execute(args, env=None):
     run(["systemctl", "enable", "--now", TIMER_UNIT],
         dry_run=args.dry_run, env=env)
 
+    # Told BEFORE the journal step, not after: journal_step() can end the run
+    # through run()'s SystemExit, and this notice is the only thing that says
+    # the timer is armed over a Layer 1 that is not proven.
+    if hooks_unproven:
+        sys.stderr.write(
+            "\ndeploy.py: installed with Layer 1 NOT proven. install.sh could\n"
+            "  not prove a required hook fires (above). The payload passed\n"
+            "  every ownership and trust check, so the units are written and\n"
+            "  %s is enabled: Layer 2 is running. Layer 1's upkeep\n"
+            "  must never take Layer 2 down. install.sh stopped at that\n"
+            "  proof, so a best-effort hook, which it writes after the\n"
+            "  required ones, was not written either. Fix the hook, then\n"
+            "  re-run this install; until then, sessions that do not source\n"
+            "  the hook are unguarded by Layer 1.\n" % TIMER_UNIT)
+
     # Last, after the timer is armed: the grant is about who can READ
     # Layer 1's records, and a failure in it must not cost the node Layer 2.
     rc = journal_step(args, env=env)
+    if hooks_unproven:
+        return INSTALL_HOOKS_UNPROVEN
     if rc != 0:
         return rc
 
@@ -3158,6 +3313,18 @@ def system_uninstall(args, env=None):
             "  wrapped tool names out of %s/bin, which here would be\n"
             "  somebody else's binaries.\n"
             % (args.prefix, PAYLOAD_MARKER, args.prefix))
+        return 6
+
+    # And it has to be the install THIS payload describes. The marker says
+    # walk-blocker is here; it does not say which configuration, and every
+    # other path this teardown touches -- the unit_dir, the drop-in, the hook
+    # files -- is this build's literal, right only if the install was built
+    # from the same site.toml. Checked in the dry run too, so the preview
+    # reaches the same answer; and before the first command, like every
+    # refusal above (ADR-0027).
+    reason, installed = installed_config_refusal(args.prefix)
+    if reason is not None:
+        write_installed_config_refusal(args.prefix, reason, installed)
         return 6
 
     run(["systemctl", "disable", "--now", TIMER_UNIT],

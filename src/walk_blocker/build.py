@@ -148,7 +148,9 @@ def render_payload(site, site_bytes, version):
         put(rel, _verbatim(rel, source))
 
     # Stamped consumers: the source is the same relative path under node/.
-    values = stamp.SiteValues(site, version)
+    # The digest the lock records as `site_sha256`, from the same function
+    # and the same bytes, so the constant and the record cannot disagree.
+    values = stamp.SiteValues(site, version, manifest.sha256(site_bytes))
     for rel, required in sorted(stamp.CONSUMERS.items()):
         kind = "py" if rel.endswith(".py") else "sh"
         text = _read(os.path.join(node, rel)).decode("utf-8")
