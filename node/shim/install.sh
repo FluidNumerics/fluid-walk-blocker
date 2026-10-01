@@ -17,7 +17,14 @@
 #                                      and mode, and the mount table. The
 #                                      reaper's timer
 #                                      runs this as root on every poll.
-#   install.sh --uninstall             as root, reverse a --system install
+#   install.sh --uninstall             as root, reverse a --system install:
+#                                      stop and disable the reconcile timer
+#                                      and stop its service FIRST -- which
+#                                      stops Layer 2 too, since the one
+#                                      timer drives both -- then strip the
+#                                      hooks and remove the shim farm. The
+#                                      unit files stay; `deploy.py --system`
+#                                      restores both layers.
 #   install.sh --version
 #   install.sh --help
 #
@@ -41,6 +48,12 @@ set -eu
 VERSION='@@VERSION@@'  # GENERATED from VERSION
 # One payload, one number -- see deploy.py. A literal because this script
 # runs on the node with nothing to read it from.
+
+# The two units deploy.py installs, which `--uninstall` stops and disables
+# before it removes anything. Not site values, and not stamped: they must
+# equal deploy.py's TIMER_UNIT and SERVICE_UNIT, and a test pins them there.
+SG_TIMER_UNIT=walk-blocker.timer
+SG_SERVICE_UNIT=walk-blocker.service
 
 sg_banner() {
     # The maze on the README. printf is a builtin, so this answers where
@@ -80,7 +93,9 @@ sg_usage() {
         '                        writes nothing and needs no privilege' \
         '  --relink              reconcile the shim farm, hooks, audit directory and' \
         '                        mount table; the timer runs this as root every poll' \
-        '  --uninstall           as root, reverse a --system install' \
+        '  --uninstall           as root, stop and disable the timer -- which stops' \
+        '                        the reaper too -- then reverse a --system install;' \
+        '                        `python3 deploy.py --system` restores both layers' \
         '  --version             the walk-blocker version this was built from' \
         '' \
         'There are no path flags: every location is stamped in from site.toml.'
@@ -1875,6 +1890,55 @@ uncovered_report() {
     return 0
 }
 
+units_are_down() {
+    # 0 when neither unit can fire, or 1 with the reason written. Mirrors
+    # _units_are_down() in deploy.py, and the pair must agree: judged by the
+    # state WORD systemctl prints, never by its exit status. The disable and
+    # stop before this fail on every full teardown, because deploy.py has
+    # already removed the unit files; and a bus error is non-zero too, with
+    # nothing printed, which is not the same fact as "inactive".
+    # Indeterminate is not down. Inactive is not disabled either: a
+    # half-landed `disable --now` leaves the timer stopped and still enabled,
+    # armed again at the next boot. `show --value` prints '' for a unit with
+    # no file, and its exit status is judged first, because a broken bus
+    # also prints nothing.
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "install.sh: refusing: systemctl is not on PATH, so whether the" >&2
+        echo "  reconcile timer is stopped cannot be read. It may be half-disarmed," >&2
+        echo "  and its next poll would rebuild $BIN." >&2
+        echo "  Nothing has been stripped." >&2
+        return 1
+    fi
+    for _ud_unit in "$SG_TIMER_UNIT" "$SG_SERVICE_UNIT"; do
+        _ud_state=$(systemctl is-active "$_ud_unit" 2>/dev/null) || :
+        case $_ud_state in
+            inactive|failed|unknown|not-found) ;;
+            *)
+                echo "install.sh: refusing: cannot confirm $_ud_unit is inactive" >&2
+                echo "  (systemctl said '${_ud_state:-<nothing>}'). The timer may be half-disarmed," >&2
+                echo "  and its next poll would rebuild $BIN." >&2
+                echo "  Nothing has been stripped. Stop and disable both units by hand and" >&2
+                echo "  re-run." >&2
+                return 1
+                ;;
+        esac
+    done
+    if _ud_state=$(systemctl show "$SG_TIMER_UNIT" --property=UnitFileState --value 2>/dev/null); then
+        case $_ud_state in
+            ''|disabled|static|masked) return 0 ;;
+        esac
+        _ud_why="still $_ud_state"
+    else
+        _ud_why="in an undetermined enablement state"
+    fi
+    echo "install.sh: refusing: $SG_TIMER_UNIT is stopped but $_ud_why." >&2
+    echo "  The timer may be half-disarmed: a stopped-but-enabled timer restarts" >&2
+    echo "  at the next boot, and its first poll rebuilds $BIN." >&2
+    echo "  Nothing has been stripped. \`systemctl disable --now $SG_TIMER_UNIT\`" >&2
+    echo "  by hand and re-run." >&2
+    return 1
+}
+
 # --------------------------------------------------------------------------
 # the three arms
 # --------------------------------------------------------------------------
@@ -2036,10 +2100,13 @@ SYS
 #   - point WALK_BLOCKER_AUDIT at $AUDIT
 #
 # Reverting: as root, from the built payload (it also removes the systemd
-# unit):
+# units):
 #   python3 deploy.py --uninstall
-# or just this installer's own half, from the DEPLOYED copy:
+# or, from the DEPLOYED copy, stop and disable the timer and strip Layer 1,
+# leaving the payload and the disabled unit files in place:
 #   sh $PREFIX/shim/install.sh --uninstall
+# The one timer drives the relink and the reaper both, so that stops Layer 2
+# as well. \`python3 deploy.py --system\` from a payload restores both layers.
 #
 # Not from a checkout: a root teardown sources wrapped_names.sh, and
 # load_wrapped_names() refuses one that is not root-owned -- which a
@@ -2071,6 +2138,22 @@ SYS
             fi
         done
         load_wrapped_names
+        # The units FIRST, before anything is stripped. The service's
+        # ExecStartPre is `--relink`, which rebuilds $BIN on the next poll and
+        # reads the hook blocks' absence as damage (ADR-0008) -- so an
+        # uninstall that left the timer armed was undone one interval later,
+        # under a "removed" line that had stopped being true. The one timer
+        # drives the reaper as well, so this stops Layer 2 too, and the
+        # output says so. The unit files stay: they are deploy.py's, and
+        # `deploy.py --system` re-enables them.
+        #
+        # Statuses discarded, and stderr with them: deploy.py --uninstall
+        # removes the unit files BEFORE it runs this, so on every full
+        # teardown both calls fail on units that no longer exist. What
+        # counts is the state read back by units_are_down().
+        systemctl disable --now "$SG_TIMER_UNIT" 2>/dev/null || :
+        systemctl stop "$SG_SERVICE_UNIT" 2>/dev/null || :
+        units_are_down || exit 3
         for _uh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
             hook_select "$_uh"
             case $HK_KIND in
@@ -2096,6 +2179,8 @@ SYS
             in_spool rm -f -- "./$UNCOVERED_NAME" || :
         fi
         echo "walk-blocker: removed from$_removed and $BIN"
+        echo "walk-blocker: $SG_TIMER_UNIT is stopped and disabled, so Layer 2 (the reaper) is not running either"
+        echo "walk-blocker: \`python3 deploy.py --system\` from a payload restores both layers"
         echo "walk-blocker: $SG_SPOOL_DIR left in place; it holds the audit trail"
         ;;
 esac

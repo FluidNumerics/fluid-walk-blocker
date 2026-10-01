@@ -823,6 +823,22 @@ backups and the audit trail under `[install].spool_dir` are records; read
 its output for what it left, and copy the trail somewhere before removing
 it if the evidence is still wanted.
 
-`install.sh --uninstall` exists too, but it refuses to run from anywhere but
-the deployed copy under the prefix, for the same reason a writing run
-does: a checkout is writable by the account that owns it (ADR-0005).
+`install.sh --uninstall` exists too, and takes Layer 1 off without removing
+the payload. Run it as root from the deployed copy,
+`sh <prefix>/shim/install.sh --uninstall`: as root it sources the
+`wrapped_names.sh` beside it, and refuses one that is not root-owned or
+whose directory chain an ordinary account could write, which a checkout's
+copy is. It stops and disables the timer and stops the service first, and
+refuses with exit 3, having stripped nothing, unless systemd then reports
+both units inactive and the timer not enabled. The one timer drives the
+relink and the reaper both, so this stops Layer 2 too, and the output says
+so. It then strips every hook block, removes the fish drop-in, and removes
+`<prefix>/bin` and the uncovered-mounts memory in the spool. It leaves in
+place the payload under the prefix, the disabled unit files, the journal
+drop-in and the grant it records, the `<file>.walk-blocker.orig` backups,
+and the spool with its audit trail. To restore both layers, run
+`python3 deploy.py --system` from a payload; to finish the teardown, run
+`python3 deploy.py --uninstall` from the payload, as above. Never re-arm
+the timer with `systemctl enable` by hand: its first poll runs a relink over
+the removed hooks, which rebuilds `<prefix>/bin` and reports each missing
+block as damage (ADR-0008).
