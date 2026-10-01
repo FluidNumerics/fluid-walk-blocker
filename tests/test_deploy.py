@@ -1206,21 +1206,70 @@ def test_a_journal_abort_does_not_hide_the_hook_notice(
     """journal_step() runs run() with check=True, which raises SystemExit
     when systemd-tmpfiles fails. The timer is already armed by then, so the
     operator must already have been told Layer 1 is not proven: the notice
-    is the only thing that says so."""
+    is the only thing that says so. And the abort does not take the exit
+    status either: worst case wins, so it is 4 (issue #97, D2), with the
+    journal's failure left on stderr by run() itself.
+    Mutation: let the SystemExit propagate, and the deploy exits 11."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     pass_prefix_checks(monkeypatch)
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
 
     def aborting_journal_step(args, env=None):
+        sys.stderr.write("failed: systemd-tmpfiles --create\n")
         raise SystemExit(11)
 
     monkeypatch.setattr(deploy, "journal_step", aborting_journal_step)
-    with pytest.raises(SystemExit) as exc:
+    assert deploy.system_execute(_args(tmp_path)) \
+        == deploy.INSTALL_HOOKS_UNPROVEN == 4
+    assert ["systemctl", "enable", "--now", deploy.TIMER_UNIT] in calls, calls
+    err = capsys.readouterr().err
+    assert "NOT proven" in err
+    assert "failed: systemd-tmpfiles --create" in err, err
+
+
+def test_a_journal_abort_without_a_hook_failure_keeps_its_own_status(
+        tmp_path, monkeypatch):
+    """The other half of D2: only an unproven hook outranks the journal
+    step. With the hooks proven, its SystemExit is the deploy's status, as
+    before. Mutation: swallow the SystemExit unconditionally, and this
+    returns instead of raising."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    def aborting_journal_step(args, env=None):
+        raise SystemExit(11)
+
+    monkeypatch.setattr(deploy, "journal_step", aborting_journal_step)
+    with contextlib.redirect_stdout(io.StringIO()), \
+            pytest.raises(SystemExit) as exc:
         deploy.system_execute(_args(tmp_path))
     assert exc.value.code == 11
-    assert ["systemctl", "enable", "--now", deploy.TIMER_UNIT] in calls, calls
-    assert "NOT proven" in capsys.readouterr().err
+
+
+def test_a_hook_proof_failure_outranks_a_journal_grant_that_did_not_land(
+        tmp_path, monkeypatch):
+    """Issue #97: worst case wins. When install.sh cannot prove a required
+    hook (4) and the journal grant does not land (10), the deploy exits 4,
+    the more severe, and the grant's failure is reported on stderr only.
+    Mutation that must fail this pin: swap the `hooks_unproven` and `rc`
+    returns at the end of system_execute(), and the deploy exits 10."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls, installer_rc=4))
+    _granting(monkeypatch, gaps=[("/j/m/system.journal", "no access entry")])
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(err):
+        assert deploy.system_execute(_args(tmp_path)) \
+            == deploy.INSTALL_HOOKS_UNPROVEN == 4
+    assert "NOT proven" in err.getvalue()
+    # The journal step's own text, which is the only report of exit 10.
+    assert "the journal grant did not land" in err.getvalue(), err.getvalue()
+    assert "/j/m/system.journal: no access entry" in err.getvalue()
+    assert any(c[:3] == ["systemctl", "enable", "--now"] for c in calls)
 
 
 def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(

@@ -3524,7 +3524,20 @@ def system_execute(args, env=None):
 
     # Last, after the timer is armed: the grant is about who can READ
     # Layer 1's records, and a failure in it must not cost the node Layer 2.
-    rc = journal_step(args, env=env)
+    try:
+        rc = journal_step(args, env=env)
+    except SystemExit:
+        # run() has already written the failed command and its stderr, so
+        # the journal's failure is reported; under an unproven hook it does
+        # not get the exit status as well (worst case wins, below).
+        if not hooks_unproven:
+            raise
+        return INSTALL_HOOKS_UNPROVEN
+    # Worst case wins. When more than one step fails, the exit status is the
+    # most severe and the rest are reported on stderr only: a hook-proof
+    # failure (4) outranks a journal step that did not land (10, or a
+    # command's own status), whose explanation journal_step() has written
+    # above. Swapping these two returns would let the journal hide the hook.
     if hooks_unproven:
         return INSTALL_HOOKS_UNPROVEN
     if rc != 0:
