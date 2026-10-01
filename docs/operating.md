@@ -349,8 +349,8 @@ What it verifies, and refuses on:
   `0644` trail files — is repaired, after every preflight refusal has had
   its chance and after the previous timer is disabled, so an install refused
   before it begins replacing the payload leaves the spool exactly as it found
-  it (a later refusal leaves the repaired state); group- or other-writable, setuid, or setgid
-  anywhere below the spool directory is a refusal;
+  it (a later refusal leaves the repaired state); group- or other-writable,
+  setuid, or setgid anywhere below the spool directory is a refusal;
 - **the groups.** `[install].spool_group` must resolve. Each group in
   `[install].trusted_groups` must resolve, have a gid below `GID_MIN`, and
   have no member — in `gr_mem` or by primary gid — with a uid in

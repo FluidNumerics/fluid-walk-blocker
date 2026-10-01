@@ -172,10 +172,10 @@ none; ADR-0012's "never read or written" still holds for writing.
   every preflight refusal has passed and the previous units are down, so an
   install refused at preflight writes nothing to the spool and an old relink
   cannot undo half the repair first. A refusal after the payload starts
-  being replaced can follow the repair and leaves the repaired state. A group- or
-  other-writable spool, a setuid bit, or a setgid bit anywhere below the
-  spool directory itself still refuses. The spool directory's own setgid
-  bit is the decision, not a finding.
+  being replaced can follow the repair and leaves the repaired state. A
+  group- or other-writable spool, a setuid bit, or a setgid bit anywhere
+  below the spool directory itself still refuses. The spool directory's own
+  setgid bit is the decision, not a finding.
 - **The reaper has a fifth exit code.** `4` means the spool failed its check
   or a write into it failed: the poll scanned, printed every finding to the
   unit's journal, wrote nothing and sent no signal.
