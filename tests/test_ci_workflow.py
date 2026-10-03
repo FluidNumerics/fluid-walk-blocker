@@ -210,3 +210,55 @@ def test_the_report_only_job_is_not_a_required_gate_by_accident():
         "there is no merge base to compare against, so it has nothing to "
         "measure and would report a failure about the runner rather than the "
         "change")
+
+
+def _run_measure_step(tmp_path, stub_rc, stub_out):
+    """Run the measure job's ratio step for real, under bash -e as Actions
+    runs it, with `measure.sh` replaced by a stub that prints `stub_out` and
+    exits `stub_rc`. Returns (step exit, stdout, step summary)."""
+    import subprocess
+
+    steps = [s for s in _steps("measure") if "measure.sh" in str(s.get("run", ""))]
+    assert len(steps) == 1, "expected one step in measure that runs measure.sh"
+    shim = tmp_path / "node" / "shim"
+    shim.mkdir(parents=True)
+    (shim / "measure.sh").write_text(
+        "cat <<'OUT'\n%s\nOUT\nexit %d\n" % (stub_out, stub_rc))
+    runner = tmp_path / "runner"
+    for side in ("base", "head"):
+        (runner / side / "shim").mkdir(parents=True)
+        (runner / side / "shim" / "guard.sh").write_text("#!/bin/sh\n")
+    summary = tmp_path / "summary.md"
+    env = dict(os.environ, RUNNER_TEMP=str(runner),
+               GITHUB_STEP_SUMMARY=str(summary))
+    r = subprocess.run(["bash", "-e", "-c", steps[0]["run"]], cwd=str(tmp_path),
+                       capture_output=True, text=True, env=env, timeout=60)
+    return r.returncode, r.stdout, summary.read_text()
+
+
+def test_a_ratio_run_that_compared_nothing_is_not_reported_as_green(tmp_path):
+    """The step is continue-on-error, so its exit status alone reaches nobody:
+    a run whose every pair was discarded showed the same green as one that
+    compared two shims and found them equal. It has to say so where it is
+    seen -- an annotation, and the step summary."""
+    rc, out, summary = _run_measure_step(
+        tmp_path, 3,
+        "pair 1 DISCARDED: an overhead at or below zero\n"
+        "=== 0/8 usable pairs ===")
+    assert rc == 3, "the step swallowed measure.sh's exit status"
+    assert "::warning title=measure compared nothing::" in out, out
+    assert "COMPARED NOTHING" in summary and "0/8" in summary, summary
+    assert "DISCARDED" in summary, "the summary hides which check discarded"
+
+
+def test_a_ratio_run_that_compared_carries_no_warning(tmp_path):
+    """The inverse, or the test above passes against a step that warns on
+    every run -- which is noise people learn to skip."""
+    rc, out, summary = _run_measure_step(
+        tmp_path, 0,
+        "=== 8/8 usable pairs ===\n"
+        "fast-path ratio (median)        1.004 x")
+    assert rc == 0
+    assert "::warning" not in out, out
+    assert "compared 8/8 usable pairs" in summary, summary
+    assert "fast-path ratio (median)" in summary, summary
