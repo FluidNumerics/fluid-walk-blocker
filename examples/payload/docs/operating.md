@@ -421,6 +421,38 @@ predecessor's directory on its `PATH`. After a complete uninstall the
 removed `<prefix>/bin` is simply absent from every such `PATH`, and a lookup
 falls through to the real tool, which is harmless.
 
+### What `deploy.py` exits with
+
+Every status `deploy.py` returns, in each mode, and the step that returns
+it.
+
+| Exit | Mode | Step that produces it | What it means |
+|---|---|---|---|
+| 0 | every mode | the end of the run | `--system`: installed. A dry run: nothing would refuse, and the commands are printed. `--uninstall`: removed. `--verify`: every installed file matches its record. |
+| 1 | `--verify` | the comparison | drift: an installed file differs from its record, is missing, or is extra |
+| 2 | every mode | argument parsing | a usage error: no mode, two modes, `--verify --dry-run`, or an unknown argument, which includes every path flag such as `--prefix` (ADR-0005) |
+| 3 | `--system`, `--uninstall` | the root gate, before any check | a writing run as an ordinary user. Its dry run needs no root. |
+| 4 | `--system` | `install.sh --system`'s required-hook proof | Layer 1 is not proven. The units are written and the timer enabled, so Layer 2 is running; best-effort hooks were not written (§8, "What it verifies"). |
+| 4 | `--verify` | reading the record and the files | no answer: the prefix is not a directory, `site.lock.json` is missing or not a record it can read, or a file could not be read. Not a clean result. |
+| 5 | `--system` | after the payload is copied | a copied entry is a symlink, the prefix fails the ownership check before `install.sh` runs, or the spool could not be created. No unit is written and the timer stays disabled. |
+| 5 | `--uninstall`, `--uninstall --dry-run` | the teardown helper | the deployed `shim/install.sh` failed its checks. In the writing run the units and the journal drop-in are already removed by then; the message says what to finish by hand. |
+| 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (dry run only); or a check could not be made with privilege. |
+| 7 | `--system`, `--uninstall` | the units-down check | the timer or service could not be confirmed inactive, or the timer is still enabled, after both were told to stop. Nothing under the prefix was touched. |
+| 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero, or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
+| 9 | `--system` | the ownership check after `install.sh` | the hook blocks and the shim farm are in place, no unit was written and the timer stays disabled |
+| 10 | `--system` | the journal step, last | the journal grant did not land (ADR-0026). The timer is armed and Layer 2 is reporting. |
+| a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command such as `cp`, `install`, `chown`, `chmod`, `systemctl daemon-reload` or `enable`, `systemd-tmpfiles` or `setfacl` failed, and the run stopped there |
+
+When more than one step fails, worst case wins, as §8 states under "What it
+verifies": the status is the most severe and the rest are reported on stderr
+only. Every refusal and almost every failure ends the run where it happens,
+so only one status is possible; the one pair that can both occur is the hook
+proof and the journal step, and 4 outranks 10 or a command's own status
+there. A status can mean different things in different modes (4 in
+`--system` and in `--verify`), and a command's own status can coincide with
+one of the codes above (`install.sh`'s 3), so read the status with the mode
+and with stderr. An uncaught Python exception exits 1, with a traceback.
+
 ## 9. Measure the shim
 
 The shim runs on every `grep`, `find` and `du` on the node, and its cost is
