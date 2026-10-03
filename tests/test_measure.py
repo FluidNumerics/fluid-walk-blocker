@@ -282,7 +282,9 @@ def test_a_run_with_too_few_usable_pairs_fails_as_unmeasurable(guard):
     survive, which is not the behaviour under test."""
     r = run_measure(["--against", guard, guard, "1", "3", "1.5"],
                     env={"WALK_BLOCKER_MEASURE_DRIFT_PCT": "-1"})
-    assert r.returncode == 1, r.stdout + r.stderr
+    # 3, not the gate failure's 1: a caller reading only the status must be
+    # able to tell "compared nothing" from "got slower" (issue #63).
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "only 0 pairs survived" in r.stderr
     assert "statement about the machine" in r.stderr
 
@@ -614,7 +616,7 @@ def test_the_floor_discard_fires_when_it_is_asked_for(guard, slow_guard):
     mismatch appearing."""
     r = run_measure(["--against", guard, slow_guard, "1", "3", "100", "100"],
                     env=dict(NO_DISCARD, WALK_BLOCKER_MEASURE_FLOOR_PCT="-1"))
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "about how fast the machine is" in r.stdout
     assert "only 0 pairs survived" in r.stderr
 
