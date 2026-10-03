@@ -125,5 +125,6 @@ Narrowed by ADR-0025. The Consequences above read:
 
 > **One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change.
 
-The memory is `0640`, readable by root and the spool's reader group, and by
-nobody else.
+The memory is `0640`, readable by root and the spool's reader group, and, by
+its mode bits, by nobody else. A named ACL entry can widen the reader set, and
+the deploy reports each one (ADR-0025).

@@ -115,7 +115,8 @@ and, after its account of the historical bug:
 > What changes is `other` gaining `r-x`.
 
 The spool is `root:<spool_group> 02750`: writable by root alone, readable by
-one site-named group, and by nobody else.
+one site-named group, and, by its mode bits, by nobody else. A named ACL entry
+can widen the reader set, and the deploy reports each one (ADR-0025).
 
 Its asymmetry's first bullet read:
 
