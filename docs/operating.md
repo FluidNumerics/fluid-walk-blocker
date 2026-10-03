@@ -279,6 +279,12 @@ check refused and why, and **advertises no command** — because the install
 would refuse too, and it would do so after the timer had already
 been disabled and stopped.
 
+The checks before the payload's stop at the first that refuses. The payload
+check is made even then, because it reads only the payload directory and
+none of the others is a precondition for it, so one dry run names both a
+refusing check and a bad copy. Either is exit 6. The install's order is
+unchanged: it never snapshots past an earlier refusal.
+
 Where the dry run is run by an account that may not make one of those
 stats — an ancestor with no `o+x`, a root-only file — it says
 `could not be checked as this user` and names the path. That is neither
