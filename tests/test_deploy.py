@@ -1984,13 +1984,13 @@ def _rewrite_lock(payload, **fields):
         json.dump(lock, fh)
 
 
-def _preview_payload(module, monkeypatch, capsys, root=False):
+def _preview_payload(module, monkeypatch, capsys, root=False,
+                     preflight=lambda args, privileged, out=None: (0, [])):
     """system_preview() over the module's own payload, with preflight passed
     and every command recorded rather than run: what is under test is the
     payload check alone."""
     monkeypatch.setattr(module, "_is_root", lambda: root)
-    monkeypatch.setattr(module, "preflight",
-                        lambda args, privileged, out=None: (0, []))
+    monkeypatch.setattr(module, "preflight", preflight)
     monkeypatch.setattr(module, "run", recording_run([]))
     args = argparse.Namespace(dry_run=True, **module.default_paths())
     rc = module.system_preview(args)
@@ -2020,6 +2020,31 @@ def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
     assert rc == 6, (out, err)
     assert "shim/guard.sh" in err, err
     assert "differs: shim/guard.sh" in err, err
+    assert "Run as root" not in out, out
+
+
+def test_the_dry_run_names_a_truncated_payload_when_preflight_refuses_too(
+        tmp_path, monkeypatch, capsys):
+    """Issue #113. A preflight refusal used to end the dry run before the
+    payload check, so a truncated copy was reported only on the run after
+    the first cause was fixed. Both are named in one run now, still exit 6
+    and still with no command advertised. Before the fix the preflight line
+    is there and `differs: shim/guard.sh` is not."""
+    payload = _payload_copy(tmp_path)
+    _truncate(os.path.join(payload, "shim", "guard.sh"))
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+
+    def refusing_preflight(args, privileged, out=None):
+        sys.stderr.write("deploy.py: refusing: a preflight check refused\n")
+        return 6, [module.Check("arguments", None, module.CHECK_BLOCKED,
+                                "a preflight check refused")]
+
+    rc, out, err = _preview_payload(module, monkeypatch, capsys,
+                                    preflight=refusing_preflight)
+    assert rc == 6, (out, err)
+    assert "a preflight check refused" in err, err
+    assert "differs: shim/guard.sh" in err, err
+    assert err.count("so no command is advertised here") == 1, err
     assert "Run as root" not in out, out
 
 
