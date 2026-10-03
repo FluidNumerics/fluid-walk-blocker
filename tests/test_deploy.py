@@ -26,6 +26,7 @@ import os
 import py_compile
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -2237,6 +2238,71 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
     assert calls and not [c for c in calls if c[0] == "systemctl"], calls
     assert not os.path.exists(args.prefix)
     assert "differs: shim/guard.sh" in capsys.readouterr().err
+
+
+def _fifo_for_reaper(payload):
+    os.unlink(os.path.join(payload, "reaper.py"))
+    os.mkfifo(os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is not a regular file"
+
+
+def _symlink_for_reaper(payload):
+    os.rename(os.path.join(payload, "reaper.py"),
+              os.path.join(payload, "reaper.real"))
+    os.symlink("reaper.real", os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is a symlink, not a regular file"
+
+
+@pytest.mark.parametrize("damage", [_fifo_for_reaper, _symlink_for_reaper],
+                         ids=["fifo", "symlink"])
+def test_a_file_entry_that_is_not_a_regular_file_is_refused_before_any_copy(
+        damage, tmp_path, monkeypatch, capsys):
+    """Issue #108. `install` opens its source, so a FIFO where reaper.py
+    should be hung the install's copy before the snapshot check could name
+    it, and a symlink there was followed. Both are now refused by lstat with
+    the dry run's line, exit 6, before the snapshot is created, before any
+    copy and before any systemctl. Through system_execute(), with the copies
+    real; under an alarm, so a regression fails rather than hangs the suite.
+    Before the fix the FIFO case trips the alarm."""
+    found = []
+    module = _damage_and_stage(lambda p: found.append(damage(p)), tmp_path,
+                               monkeypatch)
+    expected = found[0]
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    def hung(_signum, _frame):
+        raise AssertionError("the install's copy blocked on the payload")
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            module.system_execute(args)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert exc.value.code == 6
+    assert calls == [], calls
+    assert os.listdir(module.STAGING_PARENT) == []
+    err = capsys.readouterr().err
+    assert expected in err, err
+    assert "does not match its own site.lock.json" in err, err
 
 
 def test_a_staged_guard_that_lost_its_execute_bit_is_installed_executable(
