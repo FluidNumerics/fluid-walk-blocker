@@ -568,6 +568,15 @@ It carries three kinds of record:
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
   readable by the spool's group.
 
+Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
+so `logger` does not cut it at its 1 KiB default. Each string field is
+bounded so the record always fits: a path field (`root`, `mount`,
+`resolved`, `shadow_resolved`, `pwd`) at 1024 bytes as escaped, every other
+string at 128, and an `uncovered_mount` record's `fstype` at 128. A field
+that was cut is followed by `"<field>_truncated":true` — `"pwd_truncated":true`
+from a deep working directory, say. A record with no such key holds every
+field whole.
+
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
 directory has the right mode, and no expensive mount is running uncovered.

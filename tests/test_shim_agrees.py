@@ -663,7 +663,7 @@ def test_escape_hatch_sink_does_not_resolve_through_the_callers_path(rendered_sh
     block = block[:block.index("\n}\n")]
 
     assert "SG_LOGGER='%s'" % site["trusted_binaries"]["logger"] in shim
-    assert '"$SG_LOGGER" -t walk-blocker' in block
+    assert '"$SG_LOGGER" --size "$SG_LOG_SIZE" -t walk-blocker' in block
     assert block.index('[ -x "$SG_LOGGER" ]') < block.index("elif command -v logger")
     assert "SG_AWK='%s'" % site["trusted_binaries"]["awk"] in shim
     assert "SG_ID='%s'" % site["trusted_binaries"]["id"] in shim
