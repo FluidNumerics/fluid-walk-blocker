@@ -311,6 +311,20 @@ PAYLOAD_SOURCES = (
     ("docs", True, None),
 )
 
+# The members of a directory entry that are executed directly, with the mode
+# each is installed at -- the same as the build gives them. `cp -a` keeps the
+# SOURCE's mode bits and `a+rX` adds execute only where someone already has
+# it, so without this a payload whose bits were lost in transit (an `scp`
+# without `-p`) installs a 0644 guard.sh: every shim on PATH then points at a
+# file no shell will run, and the shell quietly runs the real tool instead.
+# Set after the recursive chmods, on the copy under the prefix; the snapshot
+# it came from was already judged to hold regular files here (ADR-0029).
+PAYLOAD_MEMBER_MODES = (
+    ("shim/guard.sh", "0755"),
+    ("shim/install.sh", "0755"),
+    ("shim/measure.sh", "0755"),
+)
+
 # The hook files, with the shell each belongs to and the module constant
 # that says whether the site enabled it. Read through hook_table() rather
 # than captured here, so a test that moves a constant is reflected.
@@ -1185,7 +1199,9 @@ def write_trusted_groups_refusal(refusals, out=None):
 
 
 def ownership_commands(prefix):
-    """The recursive commands the install issues, in the order it issues them.
+    """The ownership and mode commands the install issues after the copy, in
+    the order it issues them: recursive per installed entry, then one exact
+    mode per directly-executed member of a directory entry.
 
     One source for both the preview and the execution. They drifted once in
     the predecessor: the preview printed `chown -R root:root $prefix` while
@@ -1207,9 +1223,12 @@ def ownership_commands(prefix):
         # not group/other writable), the hook verifies pass because they run
         # as root -- and then every user has a shim on PATH that none of
         # them can execute. `+X` adds execute only where it already exists
-        # or on directories, so guard.sh stays executable and
-        # search_rules.py does not become one.
+        # or on directories, so search_rules.py does not become one -- and
+        # guard.sh does not become one either when the source lost its bit,
+        # which is what PAYLOAD_MEMBER_MODES is for.
         commands.append(["chmod", "-R", "a+rX,go-w", target])
+    for relative, mode in PAYLOAD_MEMBER_MODES:
+        commands.append(["chmod", mode, os.path.join(prefix, relative)])
     return commands
 
 
