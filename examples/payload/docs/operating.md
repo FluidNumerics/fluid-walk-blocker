@@ -662,6 +662,7 @@ python3 walk-blocker-payload/deploy.py --verify
 sha256sum <prefix>/site.lock.json      # against payload/site.lock.json there
 
 # 3. off the node: is that configuration on the reviewed branch?
+#    --ref is whatever branch this site reviews on; origin/main is only the default
 walk-blocker provenance --payload payload/ --repo . --ref origin/main
 ```
 

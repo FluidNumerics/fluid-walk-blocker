@@ -249,6 +249,37 @@ def test_git_missing_from_the_path_is_exit_2_and_never_a_traceback(
     assert "cannot run git" in err
 
 
+def test_an_unresolvable_ref_names_both_remedies_and_the_branches_that_exist(
+        repo, capsys):
+    """A repository whose reviewed branch is not called the default is the
+    likelier case, and `git fetch` does nothing for it. The message must name
+    --ref as well, and say what the branches here are called."""
+    _git(repo, "update-ref", "refs/remotes/upstream/trunk",
+         _git(repo, "rev-parse", "HEAD").strip())
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD",
+         "refs/remotes/origin/main")
+    code, _out, err = _run(capsys, sha256=P.sha256_bytes(CONFIG_B),
+                           repo=str(repo), ref="origin/no-such-branch")
+    assert code == P.EXIT_ERROR
+    assert "git fetch" in err
+    assert "--ref" in err
+    listed = err.split("Branches here: ", 1)[1].strip()
+    # Remote-tracking branches first, the remote's HEAD symref skipped.
+    assert listed == "origin/main, upstream/trunk, main", listed
+
+
+def test_the_branches_listed_for_an_unresolvable_ref_are_bounded(repo, capsys):
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    for i in range(P.BRANCHES_SHOWN + 3):
+        _git(repo, "update-ref", "refs/remotes/many/b%02d" % i, head)
+    code, _out, err = _run(capsys, sha256=P.sha256_bytes(CONFIG_B),
+                           repo=str(repo), ref="origin/no-such-branch")
+    assert code == P.EXIT_ERROR
+    listed = err.split("Branches here: ", 1)[1].strip()
+    assert listed.endswith(", ..."), listed
+    assert len(listed[:-len(", ...")].split(", ")) == P.BRANCHES_SHOWN
+
+
 # --------------------------------------------------------------------------
 # reading the hash from a payload, and the machine-readable form
 # --------------------------------------------------------------------------
