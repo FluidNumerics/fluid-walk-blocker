@@ -636,6 +636,11 @@ def test_the_absolute_budget_still_gates_in_single_guard_mode(slow_guard):
     r = run_measure([slow_guard, "1", "0", "0"], env=NO_DISCARD)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "exceeds the" in r.stderr and "0 ms budget" in r.stderr
+    # Both budgets are 0, and the guarded gate would refuse with the same exit
+    # and the same three fragments if the fast gate never fired. Only the fast
+    # gate puts "shim overhead" on STDERR; the table row of that name goes to
+    # stdout.
+    assert "shim overhead" in r.stderr, "the guarded gate gated, not the fast one"
 
 
 def test_a_budget_the_shim_clears_passes(slow_guard):
