@@ -1,6 +1,7 @@
 # ADR-0029: The dry run and the install check the payload against its own record
 
 **Status:** accepted, 2026-10-01
+The Consequences bullet on a FIFO where a top-level file entry should be was amended when issue #108 was decided: the install now refuses one by lstat before its copy. The wording it replaced is recorded under "Superseded wording" below.
 **Narrows:** ADR-0027, "The record reaches one exit code, and only this one."
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
@@ -117,11 +118,15 @@ privilege. Mode bits are not compared, because the install sets them.
   copy could not find becomes a `missing:` line from the check, exit 6, as
   the dry run predicted, rather than exit 1 passed through from `install`.
   The copy's own stderr is still relayed.
-- **A FIFO where a top-level file entry should be is caught by the dry run,
-  not by the install's copy.** `install` opens its source to copy it, so
-  that copy can block before the check runs. The dry run's lstat names the
-  FIFO first, which is one more reason to read the dry run before installing.
-  The install's own hang is issue #108.
+- **A top-level file entry that is not a regular file is refused before the
+  install's copy.** `install` opens its source to copy it, so a FIFO there
+  would block that copy before the check runs, and a symlink there would be
+  followed. `stage_payload()` lstats each file entry of the payload
+  directory first and refuses a non-regular one with the dry run's line,
+  exit 6, before the snapshot is created. That is a metadata read, not a
+  second read of the bytes, so ADR-0006's "read once" holds. Directory
+  entries need no such look: `cp -a` recreates a FIFO, link or device inside
+  them as one, without opening it, and the check on the snapshot names it.
 - **What the check establishes, and what it does not.** It proves the copy
   matches the record built with it. It does not prove the record is the
   reviewed one. That is `walk-blocker provenance`'s question, asked of the
@@ -145,3 +150,15 @@ the record built with it.
 None read on the node. The check reads the payload's `site.lock.json` as a
 record, and compares it against the build's compiled `SITE_SHA256` and
 version.
+
+## Superseded wording
+
+Amended when issue #108 was decided. The Consequences above read:
+
+> - **A FIFO where a top-level file entry should be is caught by the dry run,
+>   not by the install's copy.** `install` opens its source to copy it, so
+>   that copy can block before the check runs. The dry run's lstat names the
+>   FIFO first, which is one more reason to read the dry run before installing.
+>   The install's own hang is issue #108.
+
+The install now refuses such an entry itself, before the copy.
