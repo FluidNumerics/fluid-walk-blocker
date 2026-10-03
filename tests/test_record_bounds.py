@@ -125,7 +125,7 @@ FIELDS = ("TS", "ACTION", "SEAM", "TOOL", "ROOT", "MOUNT", "FS", "REASON",
 
 def _run_record_awk(guard_text, **fields):
     awk = shutil.which("awk")
-    env = {"LC_ALL": "C", "SG_J_UID": "4294967294"}
+    env = {"LC_ALL": "C", "SG_J_UID": str(2 ** 32 - 2)}
     for name in FIELDS:
         env["SG_J_" + name] = fields.get(name, "")
     out = subprocess.run([awk, _record_awk(guard_text)], env=env,
