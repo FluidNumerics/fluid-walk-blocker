@@ -2572,6 +2572,29 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
     assert os.path.join(args.prefix, "bin") in err
 
 
+def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
+        tmp_path, monkeypatch, capsys):
+    """Issue #110. The helper was checked after `systemctl disable --now`
+    and `systemctl stop`, so its refusal (exit 5) left Layer 2 down and
+    Layer 1 installed. It is now checked before the first command, like
+    every other uninstall refusal: exit 5, no command at all, and the text
+    no longer says the units are stopped. Before the fix both systemctl
+    calls are recorded."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "wrapped_names.sh"))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 5
+    assert calls == [], calls
+    err = capsys.readouterr().err
+    assert "refusing to run the teardown helper" in err, err
+    assert "Nothing has been touched" in err, err
+    assert "already stopped" not in err, err
+
+
 def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
                                                                    monkeypatch):
     """Both files, because install.sh SOURCES wrapped_names.sh into its own

@@ -3743,6 +3743,57 @@ def system_uninstall(args, env=None):
                              "%s: %s" % (dropin, exc.strerror)))
         granted = set()
 
+    # The DEPLOYED helper, verified, and no fallback to this directory. The
+    # marker check above has already established that the prefix is one
+    # walk-blocker installed. An unprivileged dry run that may not look at
+    # the helper names it as not checked and prints the command it would
+    # run; with privilege, not being able to look is the refusal below.
+    #
+    # Checked here, before the first command, like every refusal above
+    # (issue #110), so a refusal leaves the timer and the service as they
+    # were. It is still EXECUTED after the units are down, so the gap between
+    # this check and that read is the one uninstall_helper() describes, and
+    # no wider in kind: the files are root's, in a chain only root can write.
+    helper_dir = os.path.join(args.prefix, "shim")
+    blind = None
+    if not privileged:
+        for name in ("install.sh", "wrapped_names.sh"):
+            blind = unstattable_as_me(os.path.join(helper_dir, name))
+            if blind is not None:
+                break
+    if blind is not None:
+        unknown.append(Check("teardown_helper",
+                             os.path.join(helper_dir, "install.sh"),
+                             CHECK_UNKNOWN, "%s: %s" % blind))
+        helper, why = os.path.join(helper_dir, "install.sh"), None
+    else:
+        helper, why = uninstall_helper(args.prefix)
+    if helper is None:
+        hooks = enabled_hook_files(args)
+        sys.stderr.write(
+            "deploy.py: refusing to run the teardown helper: %s\n" % why)
+        sys.stderr.write(
+            "  This would have to come from the payload directory instead, and\n"
+            "  a file read this late can be replaced by its owner after you\n"
+            "  started. Nothing has been touched: the timer and the service\n"
+            "  are as they were. Put a root-owned install.sh and\n"
+            "  wrapped_names.sh back under %s, in a chain only root\n"
+            "  can write, and run the uninstall again. Or, by hand, as root:\n"
+            "  `systemctl disable --now %s`, `systemctl stop %s`, remove\n"
+            "  both unit files from %s and `systemctl daemon-reload`, strip\n"
+            "  the block between the walk-blocker markers in each shared hook\n"
+            "  file, remove the fish drop-in outright (the whole file is\n"
+            "  walk-blocker's) -- the hook files are %s -- then remove %s.\n"
+            % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
+               ", ".join(hooks) or "none on this site",
+               os.path.join(args.prefix, "bin")))
+        if granted:
+            sys.stderr.write(
+                "  Then remove %s and revoke the journal read it\n"
+                "  granted to gid %s (ADR-0026).\n"
+                % (dropin, ", ".join(str(g) for g in sorted(granted))))
+        return 5
+
     run(["systemctl", "disable", "--now", TIMER_UNIT],
         check=False, dry_run=args.dry_run, env=env)
     # Disabling the timer does not stop a service instance already running,
@@ -3782,40 +3833,6 @@ def system_uninstall(args, env=None):
                        dry_run=args.dry_run, env=env).returncode != 0:
                     failures.append("could not revoke the journal ACL under "
                                     "%s" % root)
-    # The DEPLOYED helper, verified, and no fallback to this directory. The
-    # marker check above has already established that the prefix is one
-    # walk-blocker installed. An unprivileged dry run that may not look at
-    # the helper names it as not checked and prints the command it would
-    # run; with privilege, not being able to look is the refusal below.
-    helper_dir = os.path.join(args.prefix, "shim")
-    blind = None
-    if not privileged:
-        for name in ("install.sh", "wrapped_names.sh"):
-            blind = unstattable_as_me(os.path.join(helper_dir, name))
-            if blind is not None:
-                break
-    if blind is not None:
-        unknown.append(Check("teardown_helper",
-                             os.path.join(helper_dir, "install.sh"),
-                             CHECK_UNKNOWN, "%s: %s" % blind))
-        helper, why = os.path.join(helper_dir, "install.sh"), None
-    else:
-        helper, why = uninstall_helper(args.prefix)
-    if helper is None:
-        hooks = enabled_hook_files(args)
-        sys.stderr.write(
-            "deploy.py: refusing to run the teardown helper: %s\n" % why)
-        sys.stderr.write(
-            "  This would have to come from the payload directory instead, and\n"
-            "  a file read this late can be replaced by its owner after you\n"
-            "  started. The units are already stopped and disabled. To finish\n"
-            "  by hand, as root: strip the block between the walk-blocker\n"
-            "  markers in each shared hook file, remove the fish drop-in\n"
-            "  outright (the whole file is walk-blocker's) -- the hook files\n"
-            "  are %s -- then remove %s.\n"
-            % (", ".join(hooks) or "none on this site",
-               os.path.join(args.prefix, "bin")))
-        return 5
     removal = run([TRUSTED_SH, helper, "--uninstall"],
                   capture=False, check=False, dry_run=args.dry_run, env=env)
 
