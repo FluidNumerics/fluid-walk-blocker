@@ -60,6 +60,12 @@ PATH_FLAGS = ("--prefix", "--unit-dir", "--spool-dir", "--audit",
               "--bashrc-file", "--zshenv-file", "--fish-conf-file")
 
 
+def runs_installer(cmd):
+    """A command that runs install.sh, as against one that only names it:
+    the install also sets install.sh's mode with a `chmod`."""
+    return cmd[0] != "chmod" and any("install.sh" in arg for arg in cmd)
+
+
 def recording_run(calls, active_units=(), enabled_units=(), installer_rc=0):
     """A `run` stub that records commands and models systemd honestly.
 
@@ -75,7 +81,7 @@ def recording_run(calls, active_units=(), enabled_units=(), installer_rc=0):
     def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
         calls.append(cmd)
         returncode, stdout = 0, ""
-        if cmd[-1] == "--system" and any("install.sh" in a for a in cmd):
+        if cmd[-1] == "--system" and runs_installer(cmd):
             returncode = installer_rc
         if cmd[:2] == ["systemctl", "is-active"]:
             if cmd[-1] in active_units:
@@ -792,8 +798,10 @@ def test_preview_prints_exactly_the_ownership_commands_execution_runs(
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_execute(args) == 0
 
-    executed = [c for c in calls
-                if c[:2] in (["chown", "-R"], ["chmod", "-R"])]
+    # Under the prefix only: the prefix itself is widened to 0755 once every
+    # check has passed, which is a step of its own and not one of these.
+    executed = [c for c in calls if c[0] in ("chown", "chmod")
+                and c[-1].startswith(args.prefix + "/")]
     assert executed == deploy.ownership_commands(args.prefix), executed
     for cmd in executed:
         assert " ".join(cmd) in previewed, "not in the preview: %s" % cmd
@@ -930,7 +938,7 @@ def test_the_payload_is_staged_root_only_and_widened_only_when_clean(
     widen = next(i for i, c in enumerate(calls)
                  if c[:2] == ["chmod", "0755"] and c[-1] == args.prefix)
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert widen < installer, "widened before the guard is wired up, not after"
 
     strips = [c for c in calls if c[:2] == ["chmod", "-R"] and "a-s" in c]
@@ -1003,7 +1011,7 @@ def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
     removed = [c[-1] for c in calls if c[:2] == ["rm", "-rf"]]
     for entry in deploy.INSTALLED_ENTRIES:
         assert os.path.join(args.prefix, entry) in removed, entry
-    assert not any(c[:2] == ["chmod", "0755"] for c in calls), \
+    assert not any(c == ["chmod", "0755", args.prefix] for c in calls), \
         "a rejected prefix must stay root-only"
 
 
@@ -1027,7 +1035,7 @@ def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 5
 
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
     assert not any(c[:2] == ["systemctl", "enable"] for c in calls), calls
     assert not any(c[:2] == ["systemctl", "daemon-reload"] for c in calls), calls
     assert [c for c in calls if c[:2] == ["systemctl", "stop"]], \
@@ -1053,7 +1061,7 @@ def test_deploy_reasserts_root_ownership_before_anything_runs_it(
 
     chown = index_of(lambda c: c[:2] == ["chown", "-R"] and "root:root" in c)
     chmod = index_of(lambda c: c[:2] == ["chmod", "-R"] and any("go-w" in a for a in c))
-    installer = index_of(lambda c: any("install.sh" in arg for arg in c))
+    installer = index_of(lambda c: runs_installer(c))
     # Copies INTO THE PREFIX: the spool's `install -d` deliberately lands
     # after the chown, and holds no payload.
     last_copy = max(i for i, c in enumerate(calls)
@@ -1104,7 +1112,7 @@ def test_the_ownership_check_runs_again_after_the_installer(tmp_path,
 
     assert deploy.system_execute(_args(tmp_path)) == 0
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert len(checked) >= 2, "the check runs once, before install.sh"
     assert any(at > installer for at in checked), \
         "no ownership check after install.sh created $prefix/bin"
@@ -1121,7 +1129,7 @@ def test_deploy_system_executes_when_root_and_approved(tmp_path, monkeypatch):
 
     assert any(c[0] == "install" and args.prefix in c for c in calls), calls
     assert any(
-        any("install.sh" in arg for arg in c)
+        runs_installer(c)
         and "--system" in c and "--dry-run" not in c
         for c in calls), calls
     assert any(c[:2] == ["systemctl", "daemon-reload"] for c in calls)
@@ -1158,7 +1166,7 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
 
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 0
-    installer = next(c for c in calls if any("install.sh" in a for a in c))
+    installer = next(c for c in calls if runs_installer(c))
     assert installer == [deploy.TRUSTED_SH,
                          os.path.join(args.prefix, "shim", "install.sh"),
                          "--system"], installer
@@ -1166,7 +1174,7 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
     pass_uninstall_checks(monkeypatch, args.prefix)
     calls.clear()
     assert deploy.system_uninstall(args) == 0
-    teardown = next(c for c in calls if any("install.sh" in a for a in c))
+    teardown = next(c for c in calls if runs_installer(c))
     assert teardown == [deploy.TRUSTED_SH,
                         os.path.join(args.prefix, "shim", "install.sh"),
                         "--uninstall"], teardown
@@ -1284,7 +1292,7 @@ def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
     def unowned_after_install(root, uid=0):
         # The same check runs once BEFORE install.sh (exit 5, and it removes
         # the payload); only the run after it is under test here.
-        ran = any("install.sh" in a for c in calls for a in c)
+        ran = any(runs_installer(c) for c in calls)
         return [(root, "owner", "owned by uid 1000")] if ran else []
 
     monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
@@ -1303,7 +1311,7 @@ def _exit_9_text(tmp_path, monkeypatch, capsys, offender):
     calls = []
 
     def unowned_after_install(root, uid=0):
-        ran = any("install.sh" in a for c in calls for a in c)
+        ran = any(runs_installer(c) for c in calls)
         return [(offender(root), "owner", "owned by uid 1000")] if ran else []
 
     monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
@@ -2206,6 +2214,56 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
     assert "differs: shim/guard.sh" in capsys.readouterr().err
 
 
+def test_a_staged_guard_that_lost_its_execute_bit_is_installed_executable(
+        tmp_path, monkeypatch):
+    """`cp -a` keeps the source's mode and `a+rX` adds execute only where
+    someone has it, so a payload copied without its modes (an `scp` without
+    `-p`) installed a 0644 guard.sh behind every shim on PATH, and the shell
+    ran the real tool instead. The copies and every chmod are real; chown and
+    systemctl are recorded, since a test cannot make a file root's."""
+    payload = _payload_copy(tmp_path)
+    for rel, _mode in deploy.PAYLOAD_MEMBER_MODES:
+        os.chmod(os.path.join(payload, *rel.split("/")), 0o644)
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(module, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp", "rm", "chmod"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    assert module.system_execute(args) == 0
+    for rel, mode in deploy.PAYLOAD_MEMBER_MODES:
+        installed = os.path.join(args.prefix, *rel.split("/"))
+        got = stat.S_IMODE(os.stat(installed).st_mode)
+        assert got == int(mode, 8), "%s installed %04o" % (rel, got)
+
+
+def test_the_directly_executed_members_are_the_ones_the_build_makes_0755():
+    """deploy.py restates the build's list because the node cannot import
+    the build; this keeps the two from drifting apart."""
+    dirs = [rel for rel, is_dir, _mode in deploy.PAYLOAD_SOURCES if is_dir]
+    built = sorted(rel for rel in build.EXECUTABLE
+                   if any(rel.startswith(d + "/") for d in dirs))
+    assert sorted(rel for rel, _ in deploy.PAYLOAD_MEMBER_MODES) == built
+    assert set(mode for _rel, mode in deploy.PAYLOAD_MEMBER_MODES) == \
+        {"%04o" % build.MODE_EXEC}
+
+
 # --------------------------------------------------------------------------
 # systemd state
 # --------------------------------------------------------------------------
@@ -2331,7 +2389,7 @@ def test_uninstall_refuses_when_the_enablement_query_itself_fails(tmp_path,
     calls = []
     monkeypatch.setattr(deploy, "run", _query_fails(calls))
     assert deploy.system_uninstall(args) == 7
-    assert not any("install.sh" in a for c in calls for a in c), \
+    assert not any(runs_installer(c) for c in calls), \
         "nothing may be torn down while enablement could not be determined"
 
 
@@ -2350,7 +2408,7 @@ def test_uninstall_stops_the_service_not_just_the_timer(tmp_path, monkeypatch):
     probe = next(i for i, c in enumerate(calls)
                  if c[:2] == ["systemctl", "is-active"])
     removal = next(i for i, c in enumerate(calls)
-                   if any("install.sh" in a for a in c))
+                   if runs_installer(c))
     assert probe < removal, "confirm it is stopped before removing the shims"
 
 
@@ -2365,7 +2423,7 @@ def test_uninstall_verifies_the_timer_not_only_the_service(tmp_path,
         deploy, "run",
         recording_run(calls, active_units=(deploy.TIMER_UNIT,)))
     assert deploy.system_uninstall(args) == 7
-    assert not any("install.sh" in a for c in calls for a in c), \
+    assert not any(runs_installer(c) for c in calls), \
         "nothing may be removed while the timer is live"
 
     calls.clear()
@@ -2378,7 +2436,7 @@ def test_uninstall_verifies_the_timer_not_only_the_service(tmp_path,
     calls.clear()
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_uninstall(args) == 0
-    assert any("install.sh" in a for c in calls for a in c)
+    assert any(runs_installer(c) for c in calls)
 
 
 # --------------------------------------------------------------------------
@@ -2501,7 +2559,7 @@ def test_uninstall_validates_every_hook_file_it_writes_not_only_the_prefix(
     regardless of its gate."""
     rc, calls, secret, link = _uninstall_with_a_planted_link(tmp_path, monkeypatch, attr)
     assert rc == 6
-    assert not any("install.sh" in a for c in calls for a in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
     assert secret.stat().st_mode & 0o777 == 0o600
     assert os.path.islink(str(link)), "the link must be untouched"
 
@@ -2581,7 +2639,7 @@ def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
     (shared / "bin").mkdir(parents=True)
     monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(shared))
     assert deploy.system_uninstall(_args(tmp_path)) == 6
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
 
 
 # The installed configuration must be this payload's (ADR-0027). Every case
@@ -2618,7 +2676,7 @@ def test_uninstall_proceeds_when_the_installed_config_is_this_payloads(
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_uninstall(args) == 0
-    assert any("install.sh" in a for c in calls for a in c)
+    assert any(runs_installer(c) for c in calls)
 
 
 def test_uninstall_refuses_an_install_of_another_configuration(
@@ -2727,7 +2785,7 @@ def test_uninstall_refuses_a_symlinked_prefix(tmp_path, monkeypatch):
     assert [why for _, why in chain if "symlink" in why], chain
 
     assert deploy.system_uninstall(_args(tmp_path, prefix=str(link))) == 6
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
 
 
 def test_uninstall_does_not_claim_removal_it_did_not_achieve(
@@ -2744,12 +2802,12 @@ def test_uninstall_does_not_claim_removal_it_did_not_achieve(
             return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
         if cmd[:2] == ["systemctl", "show"]:
             return subprocess.CompletedProcess(cmd, 0, "disabled\n", "")
-        rc = 1 if any("install.sh" in a for a in cmd) else 0
+        rc = 1 if runs_installer(cmd) else 0
         return subprocess.CompletedProcess(cmd, rc, "", "")
 
     monkeypatch.setattr(deploy, "run", failing_run)
     assert deploy.system_uninstall(args) == 8
-    assert any("install.sh" in a for c in calls for a in c), calls
+    assert any(runs_installer(c) for c in calls), calls
 
 
 def test_uninstall_refuses_a_prefix_that_would_delete_system_binaries(
@@ -3317,7 +3375,7 @@ def test_the_audit_directory_is_created_02750_with_its_group_before_the_installe
     assert not [c for c in calls if c[:2] == ["install", "-d"]
                 and c[-1] == args.spool_dir], calls
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert created[0] < installer, calls
 
     info = os.lstat(args.spool_dir)
