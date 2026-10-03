@@ -4077,6 +4077,25 @@ def test_the_preview_refuses_a_symlinked_hook_file(tmp_path, monkeypatch):
     assert calls == [], calls
 
 
+def test_a_path_refusal_goes_to_preflights_out_and_not_to_stderr(
+        tmp_path, monkeypatch, capsys):
+    """`preflight()` reports through `out` so a caller can capture the whole
+    preview. The root-write path refusals were the exception, written straight
+    to `sys.stderr`: a caller holding `out` saw every refusal but these."""
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    target = tmp_path / "real-bashrc"
+    target.write_text("# a hook file under a dotfile manager\n")
+    os.symlink(str(target), args.bashrc_file)
+
+    out = io.StringIO()
+    rc, _checks = deploy.preflight(args, privileged=True, out=out)
+    assert rc == 6
+    assert "refusing bashrc_file" in out.getvalue(), out.getvalue()
+    captured = capsys.readouterr()
+    assert captured.err == "" and captured.out == "", captured
+
+
 def test_the_preview_refuses_a_populated_prefix_that_is_not_its_own(
         tmp_path, monkeypatch):
     """The last of the install's pre-`systemctl` checks, reachable from the
@@ -5003,9 +5022,7 @@ def test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it(
     assert rc == 0
     monkeypatch.setattr(deploy, "TRUSTED_GROUPS", ())
     err = io.StringIO()
-    # validate_root_write_paths() writes to sys.stderr, not to `out`.
-    with contextlib.redirect_stderr(err):
-        rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
+    rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
     assert rc == 6 and shared in err.getvalue(), err.getvalue()
 
 
