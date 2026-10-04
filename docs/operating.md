@@ -415,8 +415,10 @@ tail -n 1 <spool_dir>/reaper-audit.jsonl
 
 Both must succeed, and the `stat` must show `root:<spool_group>` and `2750`.
 If the trail is unreadable to the group, the `--kill` decision is blocked on
-an access-control fact and nothing else in this runbook can be read. An
-account outside the group is refused the `tail` by design (ADR-0025).
+an access-control fact and nothing else in this runbook can be read. By its
+mode bits, an account outside the group is refused the `tail`, by design
+(ADR-0025); a named ACL entry can let one read it, and the deploy reports each
+entry that grants read beyond the group.
 
 ### Layer 1 reaches new sessions only
 
@@ -504,8 +506,8 @@ names the file. It rotates once, to `reaper-audit.jsonl.1`, past
 alone, `d_polls`, the consecutive polls the process has been seen in D
 (ADR-0020). Read it as a member of `[install].spool_group`; the trail is
 `0640`, readable by root and that group by its mode bits, by decision
-(ADR-0025); a named ACL entry can widen that, and the deploy lists the
-accounts it finds. (`[install].audit_filename`
+(ADR-0025); a named ACL entry can widen that, and the deploy reports each
+entry that grants read beyond the group. (`[install].audit_filename`
 names a second file in the same directory, Layer 1's optional file sink;
 the shim's records go to the journal, below, because a monitored account
 cannot append to a root-owned file.)
@@ -634,8 +636,9 @@ Three consequences, and none of them is visible from the trail alone:
 
 - **The person whose process was killed cannot confirm it.** The reaper runs
   as a system unit, so under `SplitMode=uid` its output goes to the system
-  journal, not to the user's file, and the trail is closed to them by
-  decision. All the user sees is `Terminated` or `Killed`, which also covers
+  journal, not to the user's file, and the trail's mode bits close it to them
+  by decision; a named ACL entry, which the deploy reports, can open it. All
+  the user sees is `Terminated` or `Killed`, which also covers
   the out-of-memory killer, a scheduler, and a person with `kill`. The users'
   page says so and tells them whom to ask. Nothing notifies them. Decide how
   a user reaches the spool group before promoting to `--kill` (§12).
@@ -754,10 +757,11 @@ have killed. Recalibrate the stall thresholds under known load first
 reviewer PSI did not corroborate it, and it is not a precondition.
 
 Decide one more thing before promoting: how a user whose process was killed
-finds out. The reaper does not tell them, and they cannot read the trail or
-the system journal (§10, "Who can see what"). Set `[site].contact`, so the
-users' page and every refusal name a person, and make sure whoever answers
-it can read the trail.
+finds out. The reaper does not tell them, and they cannot read the system
+journal or, by its mode bits, the trail; a named ACL entry on the spool can
+let them read the trail, and the deploy reports each one (§10, "Who can see
+what"). Set `[site].contact`, so the users' page and every refusal name a
+person, and make sure whoever answers it can read the trail.
 
 Two flags, both explicit:
 
