@@ -1,12 +1,14 @@
 """The runbook's lists of what the node does are the lists the code has.
 
-`docs/operating.md` describes three things an operator checks a node
+`docs/operating.md` describes four things an operator checks a node
 against: the `audit_dir` states the reconcile journals, when it writes
-`coverage_change`, and what `deploy.py --uninstall` undoes. Each was found
-short of the code (issue #89, issue #99), and a reader checking a node
-against a short list reads the missing item as a fault. Where the code's set
-can be read out of the source it is, so a state added to `install.sh`
-without a runbook entry fails here.
+`coverage_change`, what `deploy.py --uninstall` undoes, and which shells get
+a hook. Each was found short of or different from the code (issue #89,
+issue #98, issue #99), and a reader checking a node against a short list
+reads the missing item as a fault. Where the code's set can be read out of
+the source it is, so a state added to `install.sh` without a runbook entry
+fails here. The prose tests pin the true sentence; they do not forbid every
+sentence that could contradict it.
 """
 import os
 import re
