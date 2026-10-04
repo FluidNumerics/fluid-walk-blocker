@@ -250,7 +250,7 @@ def test_a_row_the_renderer_would_not_show_is_not_a_row():
         text = fh.read()
     ten = next(line for line in text.splitlines() if line.startswith("| 10 |"))
     for hidden in ("<!--\n%s\n-->" % ten, "```\n%s\n```" % ten,
-                   "\nA paragraph.\n\n%s" % ten):
+                   "\nA paragraph.\n\n%s" % ten, "\n%s" % ten):
         rows = table_rows(text.replace(ten, hidden))
         assert not any(r[0] == "10" for r in rows), hidden
 
@@ -270,3 +270,16 @@ def test_an_escaped_pipe_stays_inside_its_cell():
     escaped = one.replace("drift:", "`a\\|b` drift:")
     rows = table_rows(text.replace(one, escaped))
     assert [r[1] for r in rows if r[0] == "1"] == ["`--verify`"]
+
+
+def test_a_doc_without_the_heading_names_the_missing_heading():
+    with open(OPERATING, encoding="utf-8") as fh:
+        text = fh.read()
+    with pytest.raises(AssertionError, match="has no .* heading"):
+        table_rows(text.replace(HEADING, "### Something else"))
+
+
+def test_a_heading_with_no_table_under_it_names_the_missing_table():
+    text = "%s\n\nThe table went missing.\n\n## Next\n" % HEADING
+    with pytest.raises(AssertionError, match="no table under"):
+        table_rows(text)
