@@ -35,6 +35,11 @@ On the node you deploy to:
 - The Slurm client (`sbatch`) reachable at `[slurm].sbatch_glob`, for
   `walk-job`. The scheduler is what enforces the wall-clock bound the
   refusal text offers (ADR-0007).
+- A `logger` at `[trusted_binaries].logger` that accepts `--size`. Every
+  Layer 1 record is sent with it, and a logger that rejects the option
+  drops the record silently. util-linux `logger` has it: present in 2.32.1
+  and 2.37.4 as measured; the util-linux man pages put its arrival at 2.27,
+  not measured. BusyBox `logger` does not have it.
 - Root, held by the person running the install. Nothing here escalates;
   `deploy.py` checks `os.geteuid()` and refuses otherwise (ADR-0004).
 
@@ -440,7 +445,9 @@ allowed traversing call that judges every operand, which is the only path
   and the new one alternately, in the same minute, and gates on the median
   per-pair ratio. This is the gate that survives a change of machine — an
   absolute reading moves with the node's load; a ratio between two shims
-  measured together does not.
+  measured together does not. A pair whose readings cannot be trusted is
+  discarded, and a run that keeps fewer than three exits 3: it compared
+  nothing, which is neither a pass nor a regression.
 
 Keep both: a ratio gate alone cannot see cumulative drift, and an absolute
 gate alone cannot be run anywhere but the machine it was calibrated on.
@@ -574,6 +581,19 @@ It carries three kinds of record:
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
   readable by the spool's group.
 
+Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
+so `logger` does not cut it at its 1 KiB default. The fields a caller or the
+mount table can shape are bounded so the record always fits: in the shim's
+`refused` and escape-hatch records, a path field (`root`, `mount`,
+`resolved`, `shadow_resolved`, `pwd`) at 1024 bytes as escaped and every
+other string at 128; in an `uncovered_mount` record, `mount` at 1024 and
+`fstype` at 128. The remaining fields are literals or values the code has
+already checked, and the shim's no-awk fallback record carries no path. A
+field the bound cut is followed by `"<field>_truncated":true` —
+`"pwd_truncated":true` from a deep working directory, say. A field with no
+such key was not shortened, though a control character in it is still
+shown as `?`, as it always was.
+
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
 directory has the right mode, and no expensive mount is running uncovered.
@@ -668,6 +688,7 @@ python3 walk-blocker-payload/deploy.py --verify
 sha256sum <prefix>/site.lock.json      # against payload/site.lock.json there
 
 # 3. off the node: is that configuration on the reviewed branch?
+#    --ref is whatever branch this site reviews on; origin/main is only the default
 walk-blocker provenance --payload payload/ --repo . --ref origin/main
 ```
 

@@ -519,6 +519,38 @@ def test_the_budget_is_the_compiled_constant(procfs, mounts_path):
         "runaway_traversal"]
 
 
+@pytest.mark.parametrize("ppid, verdict", [
+    (500, "runaway_traversal"),
+    (1, "orphan_traversal"),
+])
+def test_a_walk_exactly_at_the_budget_is_not_yet_past_it(
+        procfs, mounts_path, ppid, verdict):
+    """`past_budget` is a strict `>`, and the runaway and orphan arms both read
+    it (ADR-0028); this test pins those two. A walk whose age IS the budget is
+    not a finding, one second more is. The nearest ages the other tests use
+    are a second either side for the runaway arm and a minute past for the
+    orphan arm, so they would pass a `>=` as well.
+
+    write_proc stores the start as whole clock ticks since boot, rounded
+    down, so an age that is not a whole number of ticks before the uptime
+    would read back up to a tick older than asked. A whole-second budget
+    below a whole-second uptime is exact at any tick rate; the first
+    assertion checks that it landed."""
+    budget = reaper.TRAVERSAL_BUDGET_S
+    write_proc(procfs, 500, "bash", ["-bash"], uid=UID_B, ppid=1, state="S")
+    write_proc(procfs, 502, "find", ["find", "/scratch", "-type", "f"],
+               uid=UID_B, ppid=ppid, state="D", cpu_s=5.0, age_s=budget)
+    procs = scan(procfs)
+    assert procs[502].age_s == budget, procs[502].age_s
+    assert reaper.classify(procs, read_mounts(mounts_path)) == []
+    write_proc(procfs, 502, "find", ["find", "/scratch", "-type", "f"],
+               uid=UID_B, ppid=ppid, state="D", cpu_s=5.0, age_s=budget + 1)
+    procs = scan(procfs)
+    assert procs[502].age_s == budget + 1, procs[502].age_s
+    assert [f.verdict for f in reaper.classify(procs, read_mounts(mounts_path))] == [
+        verdict]
+
+
 def test_orphan_idle_is_reported_never_killed(procfs, mounts_path):
     """PPID-1 readers of pipes whose writers are gone: a leak, not a load."""
     write_proc(procfs, 4103, "grep",

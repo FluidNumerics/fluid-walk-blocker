@@ -231,6 +231,14 @@ jobs:
         # side on the same disk is what a ratio between them assumes anyway.
         # The build writes the mode; chmod is belt-and-braces against a copy
         # that lost it, so the exec-bit diagnosis is never this job's output.
+        #
+        # Tolerating the failure is what hid it. A run whose every pair was
+        # discarded compared nothing, and it showed the same green as a run
+        # that compared two shims and found them equal. So the outcome is
+        # written where it is seen without opening the log: a warning
+        # annotation for anything but a comparison, and the usable-pair count
+        # in the step summary every time. Exit 3 is measure.sh's own code for
+        # "too few usable pairs"; anything else non-zero is about the PR.
         continue-on-error: true
         run: |
           set -u
@@ -238,5 +246,32 @@ jobs:
           cp "$RUNNER_TEMP/base/shim/guard.sh" "$work/guard-base.sh"
           cp "$RUNNER_TEMP/head/shim/guard.sh" "$work/guard-head.sh"
           chmod +x "$work/guard-base.sh" "$work/guard-head.sh"
+          rc=0
           sh node/shim/measure.sh --against \
-            "$work/guard-base.sh" "$work/guard-head.sh" 50 8
+            "$work/guard-base.sh" "$work/guard-head.sh" 50 8 \
+            > "$work/measure.log" 2>&1 || rc=$?
+          cat "$work/measure.log"
+          usable=$(sed -n 's/^=== \([0-9]*\/[0-9]*\) usable pairs ===$/\1/p' \
+            "$work/measure.log")
+          case $rc in
+            0) verdict="compared ${usable} usable pairs; no ceiling is set,"
+               verdict="$verdict so this is a record, not a verdict" ;;
+            3) verdict="COMPARED NOTHING: only ${usable} usable pairs, too few"
+               verdict="$verdict for a median; this is not a pass"
+               echo "::warning title=measure compared nothing::$verdict" ;;
+            *) verdict="measure.sh exited $rc before a comparison; see the log"
+               echo "::warning title=measure did not run::$verdict" ;;
+          esac
+          {
+            echo "### shim-vs-shim ratio against the merge base"
+            echo
+            echo "$verdict"
+            echo
+            echo '```'
+            # Anchored: the exit-3 explanation on stderr, captured in the same
+            # log, also says "DISCARDED" in a sentence about these lines.
+            grep -e '^pair [0-9]* DISCARDED: ' -e '^=== .* usable pairs ===$' \
+              -e 'ratio (' "$work/measure.log" || :
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
