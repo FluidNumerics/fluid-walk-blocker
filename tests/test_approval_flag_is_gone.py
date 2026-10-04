@@ -28,6 +28,7 @@ import re
 
 import pytest
 
+from _tracked import tracked_files
 from conftest import ROOT
 
 # Documents a human reads and acts on. `examples/payload/` is excluded for the
@@ -84,26 +85,14 @@ STEM = re.compile(r"approv", re.I)
 TOKEN = "--i-have-approval"
 
 
-def _documents():
-    for entry in SCANNED:
-        path = os.path.join(ROOT, entry)
-        if os.path.isfile(path):
-            yield entry
-            continue
-        for base, dirs, names in os.walk(path):
-            dirs[:] = [d for d in dirs if d != "__pycache__"]
-            for name in sorted(names):
-                if name.endswith(".md"):
-                    full = os.path.join(base, name)
-                    yield os.path.relpath(full, ROOT)
-
-
 def _lines(relative):
     with open(os.path.join(ROOT, relative), encoding="utf-8") as fh:
         return fh.read().splitlines()
 
 
-DOCUMENTS = sorted(_documents())
+# Tracked, not walked: `.claude` is scanned for its tracked instructions, and a
+# walk of it also reads every review checkout under `.claude/worktrees/`.
+DOCUMENTS = tracked_files(*SCANNED, suffixes=(".md",))
 
 
 def test_the_scan_actually_reaches_the_documents():

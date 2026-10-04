@@ -4160,21 +4160,37 @@ def test_the_preview_refuses_a_symlinked_hook_file(tmp_path, monkeypatch):
     assert calls == [], calls
 
 
+@pytest.mark.parametrize("arm", ["symlinked", "foreign-owned"])
 def test_a_path_refusal_goes_to_preflights_out_and_not_to_stderr(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, arm):
     """`preflight()` reports through `out` so a caller can capture the whole
     preview. The root-write path refusals were the exception, written straight
-    to `sys.stderr`: a caller holding `out` saw every refusal but these."""
+    to `sys.stderr`: a caller holding `out` saw every refusal but these.
+
+    One case per hook-file arm of `validate_root_write_paths()`: a link
+    (`irregular_target`) and a file this test's user owns (`unowned_by`,
+    left real for that case). The chain arm is pinned by
+    `test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it`."""
+    real_unowned_by = deploy.unowned_by
     pass_prefix_checks(monkeypatch)
     args = _args(tmp_path)
-    target = tmp_path / "real-bashrc"
-    target.write_text("# a hook file under a dotfile manager\n")
-    os.symlink(str(target), args.bashrc_file)
+    if arm == "symlinked":
+        target = tmp_path / "real-bashrc"
+        target.write_text("# a hook file under a dotfile manager\n")
+        os.symlink(str(target), args.bashrc_file)
+        expected = "is a symlink"
+    else:
+        # A regular file owned by the unprivileged test user, not by root.
+        with open(args.bashrc_file, "w") as handle:
+            handle.write("# somebody else's\n")
+        monkeypatch.setattr(deploy, "unowned_by", real_unowned_by)
+        expected = "It is sourced as root"
 
     out = io.StringIO()
     rc, _checks = deploy.preflight(args, privileged=True, out=out)
     assert rc == 6
     assert "refusing bashrc_file" in out.getvalue(), out.getvalue()
+    assert expected in out.getvalue(), out.getvalue()
     captured = capsys.readouterr()
     assert captured.err == "" and captured.out == "", captured
 
