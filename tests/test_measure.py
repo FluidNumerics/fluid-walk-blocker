@@ -7,12 +7,14 @@ executed by nobody. The standard the benchmark applies to the shim applies to
 the gate as much as to the number it guards: a performance claim nothing
 enforces is a comment, not a budget.
 
-**Nothing here asserts on a timing.** The readings are meaningless at the
-warmup and N these tests use, and that is deliberate: what is under test is the
-gate arithmetic, the pair bookkeeping, and the ways a run is refused. The
-oracle for "slower" is a copy of the rendered shim with a spin loop welded into
-it -- and, in ratio mode, a reference with less spin welded in -- so the
-direction of the comparison is known before the clock is read.
+**Nothing here asserts on a machine's timing.** The readings are meaningless
+at the warmup and N these tests use, and that is deliberate: what is under test
+is the gate arithmetic, the pair bookkeeping, and the ways a run is refused. In
+single-guard mode the oracle for "slower" is a copy of the rendered shim with a
+spin loop welded into it, so the sign of the overhead is known before the clock
+is read. Where a test needs exact values -- every ratio-mode test that reaches
+a reading, and the decimal budget test -- a scripted `date` stands in for the
+clock on `PATH`, and the numbers asserted are the ones it was given.
 
 The shim under test is RENDERED by the real renderer from the fixture policy
 and the fixture site (`rendered_shim` in conftest), not read from a checked-in
@@ -35,8 +37,8 @@ MEASURE_SH = os.path.join(ROOT, "node", "shim", "measure.sh")
 
 # Enough spin to dominate the measurement noise at any load. At a few
 # microseconds per iteration in dash this adds several ms to a fast path that
-# costs a low single-digit number of ms, so the candidate is unambiguously
-# slower without the test ever saying by how much.
+# costs a low single-digit number of ms, so the overhead is unambiguously
+# positive without the test ever saying by how much.
 SPIN = 5000
 
 # The real readings use the script's default warmup and N. These do not,
@@ -44,7 +46,7 @@ SPIN = 5000
 FAST_ENV = {"WALK_BLOCKER_MEASURE_WARMUP": "1"}
 
 # A drift ceiling chosen so the discard can never fire, for the tests whose
-# subject is the ratio rather than the discard -- which has its own test below.
+# subject is a verdict rather than the discard -- which has its own test below.
 #
 # A ceiling that looks generous -- 95 % -- is not one: at WARMUP=1 and N=1 two
 # single-call readings of the *same* stub binary are not stable to within
@@ -81,23 +83,19 @@ def guard(rendered_shim):
     return rendered_shim["guard"]
 
 
-def _spun(tmp_path_factory, rendered_shim, name, spin):
-    """A copy of the rendered guard.sh that does the same work, plus `spin`
-    iterations of an empty loop before any of it.
+def _weld(directory, rendered_shim, line):
+    """A copy of the rendered guard.sh, in `directory`, that runs `line` and
+    then does the same work.
 
-    The spin goes *inside* the copy rather than into a wrapper that execs it,
+    The line goes *inside* the copy rather than into a wrapper that execs it,
     because the shim reads its own `$0` to learn which tool it is standing in
     for -- a wrapper would hand it the wrapper's name and measure a different
     code path, or none."""
-    path = tmp_path_factory.mktemp(name) / "guard.sh"
+    directory.mkdir(exist_ok=True)
+    path = directory / "guard.sh"
     lines = rendered_shim["guard_text"].split("\n")
     assert lines[0].startswith("#!"), "guard.sh no longer starts with a shebang"
-    loop = (
-        "_measure_spin=0\n"
-        "while [ \"$_measure_spin\" -lt %d ]; do "
-        "_measure_spin=$((_measure_spin + 1)); done" % spin
-    )
-    path.write_text("\n".join([lines[0], loop, *lines[1:]]))
+    path.write_text("\n".join([lines[0], line, *lines[1:]]))
     path.chmod(0o755)
     return str(path)
 
@@ -125,105 +123,179 @@ def slow_guard(tmp_path_factory, rendered_shim):
     the shim side only, and contention dilates that work just as it dilates
     the noise.
     """
-    return _spun(tmp_path_factory, rendered_shim, "slow", SPIN)
+    loop = (
+        "_measure_spin=0\n"
+        "while [ \"$_measure_spin\" -lt %d ]; do "
+        "_measure_spin=$((_measure_spin + 1)); done" % SPIN
+    )
+    return _weld(tmp_path_factory.mktemp("slow"), rendered_shim, loop)
 
 
-@pytest.fixture(scope="module")
-def slower_guard(tmp_path_factory, rendered_shim):
-    """The candidate in every ratio test that needs every pair usable, with
-    `slow_guard` as its reference: the rendered guard with three times the
-    spin.
+# --------------------------------------------------------------------------
+# ratio mode, on a scripted clock
+# --------------------------------------------------------------------------
+#
+# The ratio tests below assert on arithmetic and reporting -- which pair is
+# charged to which guard, the median, the ceilings, the floor discard -- so
+# they read a clock scripted per guard rather than the machine's. Every
+# overhead, floor and ratio is then known before the run, the assertions are
+# exact, and contention on the runner has nothing left to move (issue #63).
+# Real guards with spin welded in were the earlier oracle; both readings were
+# still timings, and a plain reference's overhead could land at or below zero
+# and cost the run a pair.
 
-    A ratio run discards a pair when either half's overhead lands at or below
-    zero, and a plain-guard reference is exactly as exposed to that as the
-    single-guard tests were (#47) -- observed on CI as `3/4 usable pairs`,
-    failing the even-median test, which needs all four (issue #63). So the
-    reference is the spun copy those tests already use, and this candidate
-    carries more spin, so the direction of every comparison is still known
-    before the clock is read.
-
-    This is not spinning both sides by the same amount, which would compress
-    the ratio toward 1. The candidate's extra work is twice the reference's
-    whole spin, so the ratio stays well clear of the 1.05 and 1.01 ceilings
-    these tests expect to fire -- and under the 100 they expect to clear,
-    which a plain reference reading a hair above zero did not guarantee
-    either. measure.sh is untouched: what a ratio means is the same, only the
-    tests' subjects changed.
-
-    Measured on a developer workstation under synthetic CPU load, NOT at a
-    deployment -- 13 runs per arm of the even-median test's shape (4 pairs,
-    N=1): with the plain guard as reference, 4 runs lost at least one pair
-    and 2 of those lost two, with a minimum overhead of -25.11 ms; with this
-    pair, every run kept all 4, the minimum overhead was +58.17 ms, and every
-    per-pair fast ratio lay between 1.077 and 13.033. That low end is the
-    margin `test_every_pair_charges_the_slowdown_to_the_candidate` lives on:
-    re-run the comparison if the shim's fast path changes, or if SPIN or the
-    multiplier moves."""
-    return _spun(tmp_path_factory, rendered_shim, "slower", 3 * SPIN)
+# One bench's duration, in microseconds, for the readings no ratio is drawn
+# from. The two baselines differ so an overhead taken from the wrong one
+# changes the numbers; each half's two fast-path baselines agree, so drift is
+# 0.0 % and never the reason a pair goes.
+_BASE_US = 1000
+_G_BASE_US = 1500
 
 
-def test_the_ratio_gate_refuses_a_candidate_that_got_slower(slow_guard, slower_guard):
+def _half(fast_us, guarded_us, floor_us):
+    """One `measure_guard()` call's eight bench durations, in the order it
+    benches them: baseline, shim, `python3 -S` floor, `python3` floor,
+    baseline again, guarded baseline, guarded with one operand, with ten."""
+    return [_BASE_US, _BASE_US + fast_us, floor_us, 2 * floor_us, _BASE_US,
+            _G_BASE_US, _G_BASE_US + guarded_us, _G_BASE_US + guarded_us + 900]
+
+
+# The pairs most of the tests below run: per pair, (fast overhead, guarded
+# overhead, `python3 -S` floor) in microseconds. The reference reads the same
+# every pair; the candidate's ratios are 1.100, 1.500, 1.200 on the fast path
+# (median 1.200, out of order so a median that forgot to sort reads 1.500) and
+# 1.300, 1.250, 1.400 on the guarded one (median 1.300). The two medians
+# differ, so a gate reading the other's median decides differently, and the
+# candidate's floor is 0.0 %, 25.0 % and 10.0 % off the reference's.
+REF_PAIRS = [(1000, 1000, 10000)] * 3
+CAND_PAIRS = [(1100, 1300, 10000), (1500, 1250, 12500), (1200, 1400, 11000)]
+
+
+@pytest.fixture
+def ratio_clock(tmp_path, rendered_shim):
+    """Two guards and a `date` that times each of them as scripted.
+
+    Returns a function taking the reference's and the candidate's per-pair
+    `(fast, guarded, floor)` overheads in microseconds, and giving back the
+    reference path, the candidate path and the env to run under.
+
+    Each guard is the rendered `guard.sh` with one line welded in that writes
+    its own name to a tag file, so it does the same work and passes the same
+    reached-the-binary probes. `measure_guard()` probes before it benches, so
+    by the first clock read of a half the tag names the guard that half is
+    timing. The stub reads the tag on every end call and looks the duration up
+    by guard, pair and bench, so the clock follows the guard and not the
+    position: swapping the arguments, or the order a pair runs its halves in,
+    moves the readings with the guards, as a real clock would. A clock
+    scripted by position alone would hand the same numbers to whichever guard
+    ran first, and the direction test below would pass against a gate that
+    ignored its arguments.
+
+    `guard.sh` itself never reads this `date`: it resolves `SG_DATE` by
+    absolute path (see `degenerate_clock`).
+    """
+    def make(ref_pairs, cand_pairs):
+        tag = tmp_path / "tag"
+        paths = {}
+        for name in ("ref", "cand"):
+            paths[name] = _weld(tmp_path / name, rendered_shim,
+                                "echo %s > %s" % (name, tag))
+        binned = tmp_path / "clockbin"
+        binned.mkdir()
+        state = tmp_path / "calls"
+        table = []
+        for name, pairs in (("ref", ref_pairs), ("cand", cand_pairs)):
+            for p, half in enumerate(pairs):
+                for b, d in enumerate(_half(*half)):
+                    table.append("D_%s_%d_%d=%d" % (name, p, b, d))
+        # Calls alternate start, end; a start advances 1 ms and an end the
+        # scripted duration, so at N=1 each bench reads exactly that. Bench i
+        # of the run is call 2i+1's; eight benches make a half, two a pair.
+        stub = binned / "date"
+        stub.write_text(
+            "#!/bin/sh\n" + "\n".join(table) + "\n"
+            "read -r k t < %s 2>/dev/null || { k=0; t=0; }\n"
+            "if [ $((k %% 2)) -eq 1 ]; then\n"
+            "    read -r g < %s\n"
+            "    i=$((k / 2))\n"
+            '    eval "d=\\${D_${g}_$((i / 16))_$((i %% 8)):-1000}"\n'
+            "    t=$((t + d * 1000))\n"
+            "else\n"
+            "    t=$((t + 1000 * 1000))\n"
+            "fi\n"
+            'echo "$((k + 1)) $t" > %s\n'
+            'echo "$t"\n' % (state, tag, state)
+        )
+        stub.chmod(0o755)
+        env = {"PATH": str(binned) + os.pathsep + os.environ["PATH"]}
+        return paths["ref"], paths["cand"], env
+    return make
+
+
+def _lines(text, prefix):
+    return [ln for ln in text.splitlines() if ln.startswith(prefix)]
+
+
+def test_the_ratio_gate_refuses_a_candidate_that_got_slower(ratio_clock):
     """The gate that survives a change of machine: same machine, same minute,
     two shims."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "1.05"],
-                    env=NO_DISCARD)
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "1.15"], env=env)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "exceeds the" in r.stderr and "1.05x ceiling" in r.stderr
+    assert "measure.sh: fast-path ratio 1.200x exceeds the" in r.stderr.splitlines()
+    assert "1.15x ceiling" in r.stderr
 
 
-def test_a_ceiling_the_candidate_clears_passes(slow_guard, slower_guard):
+def test_a_ceiling_the_candidate_clears_passes(ratio_clock):
     """The inverse, on the same pair of shims -- otherwise the test above
     would pass just as well against a gate that always fails. Both ceilings,
     because the guarded gate needs the same inverse and this run is already
-    paid for."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100", "100"],
-                    env=NO_DISCARD)
+    paid for. The fast ceiling sits between the two medians, so a fast gate
+    that read the guarded median would refuse."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "1.25", "1.35"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "fast path within the 100x ceiling" in r.stdout
-    assert "guarded path within the 100x ceiling" in r.stdout
+    assert "fast path within the 1.25x ceiling" in r.stdout.splitlines()
+    assert "guarded path within the 1.35x ceiling" in r.stdout.splitlines()
 
 
-def test_every_pair_charges_the_slowdown_to_the_candidate(slow_guard, slower_guard):
+def test_every_pair_charges_the_slowdown_to_the_candidate(ratio_clock):
     """Pair 1 runs the reference first and pair 2 runs the candidate first, so
     a ratio computed from the *order* rather than from the identity would come
-    out above 1 on odd pairs and below 1 on even ones. With a candidate that is
-    slower by construction, every pair must read above 1."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100"],
-                    env=NO_DISCARD)
+    out inverted on pair 2. The clock follows the guards, so every pair must
+    read the candidate's scripted slowdown."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    line = [ln for ln in r.stdout.splitlines()
-            if ln.startswith("per-pair fast ratios:")]
-    assert line, r.stdout
-    ratios = [float(x) for x in line[0].split(":")[1].split()]
-    assert len(ratios) == 3, line
-    assert all(x > 1.0 for x in ratios), ratios
+    assert _lines(r.stdout, "per-pair fast ratios:") == \
+        ["per-pair fast ratios: 1.100 1.500 1.200"], r.stdout
 
 
-def test_the_comparison_runs_in_the_direction_the_arguments_name(slow_guard, slower_guard):
+def test_the_comparison_runs_in_the_direction_the_arguments_name(ratio_clock):
     """Reference and candidate swapped: the same two files must now read as a
     speed-up, which is the only way to tell the ratio from its reciprocal."""
-    r = run_measure(["--against", slower_guard, slow_guard, "1", "3", "100"],
-                    env=NO_DISCARD)
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", cand, ref, "1", "3", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    line = [ln for ln in r.stdout.splitlines()
-            if ln.startswith("per-pair fast ratios:")]
-    ratios = [float(x) for x in line[0].split(":")[1].split()]
-    assert all(x < 1.0 for x in ratios), ratios
+    assert _lines(r.stdout, "per-pair fast ratios:") == \
+        ["per-pair fast ratios: 0.909 0.667 0.833"], r.stdout
 
 
-def test_the_guarded_half_of_the_ratio_gate_refuses_on_its_own(slow_guard, slower_guard):
+def test_the_guarded_half_of_the_ratio_gate_refuses_on_its_own(ratio_clock):
     """The guarded path is the only one `find`, `du`, `rg`, `fd` and `tree`
     ever take, and until this test nothing exercised its ceiling: mutating the
     guarded comparison so it could never fire left every other test green.
 
     The fast ceiling is set where it cannot fire and the guarded one where it
     must, so a pass here is the two gates being independent and not a run that
-    failed for the other reason."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100", "1.01"],
-                    env=NO_DISCARD)
+    failed for the other reason. The guarded ceiling sits between the two
+    medians, so a guarded gate that read the fast median would pass."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "1.25"], env=env)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "guarded ratio" in r.stderr and "1.01x ceiling" in r.stderr
-    assert "fast path within the 100x ceiling" in r.stdout
+    assert "measure.sh: guarded ratio 1.300x exceeds the" in r.stderr.splitlines()
+    assert "1.25x ceiling" in r.stderr
+    assert "fast path within the 100x ceiling" in r.stdout.splitlines()
 
 
 def test_a_pairs_argument_that_is_not_a_number_says_which_argument(guard):
@@ -296,25 +368,21 @@ def test_a_clock_that_did_not_measure_is_refused_rather_than_passed(
     assert "within the" not in r.stdout, "it reported a pass"
 
 
-def test_an_even_number_of_pairs_takes_the_mean_of_the_middle_two(slow_guard, slower_guard):
+def test_an_even_number_of_pairs_takes_the_mean_of_the_middle_two(ratio_clock):
     """Every other `--against` test passes PAIRS=3, so `median()`'s even
     branch was exercised by nothing -- the harness could not emit the shape.
 
-    The assertion recomputes the median from the per-pair ratios the run
-    printed, rather than hardcoding one, because the ratios themselves are
-    timings and only their ordering is stable."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "4", "100", "100"],
-                    env=NO_DISCARD)
+    The candidate's fast ratios are 3.000, 1.200, 2.000 and 1.500, so the
+    median is 1.750. An odd-count median reads 1.500, one taken before
+    sorting reads 1.600, and a mean of all four 1.925."""
+    cand = [(3000, 1300, 10000), (1200, 1300, 10000),
+            (2000, 1300, 10000), (1500, 1300, 10000)]
+    ref, cand, env = ratio_clock(REF_PAIRS * 2, cand)
+    r = run_measure(["--against", ref, cand, "1", "4", "100", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    ratios = sorted(
-        float(x) for ln in r.stdout.splitlines()
-        if ln.startswith("per-pair fast ratios:")
-        for x in ln.split(":")[1].split())
-    assert len(ratios) == 4, r.stdout
-    reported = [ln for ln in r.stdout.splitlines()
-                if ln.startswith("fast-path ratio (median)")]
-    got = float(reported[0].split()[-2])
-    assert abs(got - (ratios[1] + ratios[2]) / 2) < 0.002, (got, ratios)
+    assert "=== 4/4 usable pairs ===" in r.stdout.splitlines()
+    assert re.search(r"^fast-path ratio \(median\) +1\.750 x$", r.stdout, re.M), \
+        r.stdout
 
 
 def test_a_run_with_too_few_usable_pairs_fails_as_unmeasurable(guard):
@@ -701,40 +769,57 @@ def test_single_guard_mode_refuses_a_clock_that_did_not_measure(
     assert "within the" not in r.stdout, "it reported a pass"
 
 
-def test_every_pair_reports_how_far_apart_the_halves_were(slow_guard, slower_guard):
+def test_every_pair_reports_how_far_apart_the_halves_were(ratio_clock):
     """Each half already measured a `python3 -S` floor and once threw it
     away. It measures no part of the shim -- it is that half's reading of how
     fast the machine was -- and at a reference deployment the per-pair ratio
     tracked it almost exactly, which means a pair whose halves disagree is
     comparing two machines."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100", "100"],
-                    env=NO_DISCARD)
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "apart on the machine" in r.stdout
-    assert "fast-path ratio (spread)" in r.stdout
+    assert _lines(r.stdout, "pair ") == [
+        "pair 1 ratio: fast 1.100x (1.00 -> 1.10 ms), guarded 1.300x"
+        " (1.00 -> 1.30 ms), halves 0.0% apart on the machine",
+        "pair 2 ratio: fast 1.500x (1.00 -> 1.50 ms), guarded 1.250x"
+        " (1.00 -> 1.25 ms), halves 25.0% apart on the machine",
+        "pair 3 ratio: fast 1.200x (1.00 -> 1.20 ms), guarded 1.400x"
+        " (1.00 -> 1.40 ms), halves 10.0% apart on the machine",
+    ], r.stdout
+    assert re.search(r"^fast-path ratio \(spread\) +1\.100-1\.500$",
+                     r.stdout, re.M), r.stdout
 
 
-def test_the_floor_discard_is_off_unless_asked_for(slow_guard, slower_guard):
+def test_the_floor_discard_is_off_unless_asked_for(ratio_clock):
     """Reporting is the default; discarding is opt-in. Any ceiling tight
     enough to catch the mismatch seen at a reference deployment would have
     thrown away half of that run's pairs and failed a deploy that should have
     passed, so the number is left to be chosen from a record rather than
-    guessed from one run."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100", "100"],
-                    env=NO_DISCARD)
+    guessed from one run. Pair 2's halves are a quarter apart here, and it
+    still counts."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "=== 3/3 usable pairs ===" in r.stdout.splitlines()
     assert "about how fast the machine is" not in r.stdout
 
 
-def test_the_floor_discard_fires_when_it_is_asked_for(slow_guard, slower_guard):
-    """-1 discards every pair, the same way the drift test drives its own
-    threshold, so the mechanism is pinned without depending on a real
-    mismatch appearing."""
-    r = run_measure(["--against", slow_guard, slower_guard, "1", "3", "100", "100"],
-                    env=dict(NO_DISCARD, WALK_BLOCKER_MEASURE_FLOOR_PCT="-1"))
+def test_the_floor_discard_fires_when_it_is_asked_for(ratio_clock):
+    """A 20 % ceiling discards pair 2, whose halves are 25.0 % apart, and
+    keeps pairs 1 and 3, at 0.0 % and 10.0 % -- so the discard is pinned to
+    the pair over the ceiling and not to every pair, which is all a negative
+    ceiling could show. Two survivors is below the three the gate needs."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
+                    env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="20"))
     assert r.returncode == 3, r.stdout + r.stderr
-    assert "about how fast the machine is" in r.stdout
-    assert "only 0 pairs survived" in r.stderr
+    assert _lines(r.stdout, "pair 2 DISCARDED") == [
+        "pair 2 DISCARDED: the two halves disagree by 25.0 % about how fast"
+        " the machine is (floors 10.00 vs 12.50 ms), over the 20 % allowed"
+        " -- a ratio between them would be measuring the machine"], r.stdout
+    assert len(_lines(r.stdout, "pair 1 ratio:")) == 1, r.stdout
+    assert len(_lines(r.stdout, "pair 3 ratio:")) == 1, r.stdout
+    assert "only 2 pairs survived" in r.stderr
 
 
 def test_against_without_a_reference_is_a_usage_error():
