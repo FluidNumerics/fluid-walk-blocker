@@ -143,8 +143,9 @@ Its Consequences opened:
 >   `/proc` on a node that mounts it without `hidepid`. The change publishes
 >   nothing that was not already visible.
 
-The trail is readable by the reader group alone, and a user outside it no
-longer reads the records of their own processes.
+By its mode bits, the trail is readable by the reader group alone, and a
+user outside it no longer reads the records of their own processes. A named
+ACL entry can widen that, and the deploy reports each one (ADR-0025).
 
 Its Re-measure section read:
 
@@ -157,5 +158,5 @@ Its Re-measure section read:
 > read command as an unprivileged account; both must succeed.
 
 The reader set now has its own record, so `hidepid` no longer bears on it;
-the read command succeeds for a member of the reader group, and an account
-outside it is refused by design.
+the read command succeeds for a member of the reader group, and, by its
+mode bits, an account outside it is refused by design.

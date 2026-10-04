@@ -23,6 +23,7 @@ import os
 # is about, reproduced inside the tests that enforce ADR-0022.
 import yaml
 
+from _tracked import tracked_files
 from conftest import ROOT
 
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "ci.yml")
@@ -160,36 +161,29 @@ def test_no_document_names_a_gate_job_that_does_not_exist():
     stale = []
     live = []
     scanned = 0
-    for base, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs
-                   if d not in {".git", "__pycache__", "node_modules"}
-                   and os.path.join(base, d) != os.path.join(ROOT, "examples", "payload")]
-        for name in sorted(files):
-            if not name.endswith((".md", ".py", ".yml", ".sh")):
-                continue
-            relative = os.path.relpath(os.path.join(base, name), ROOT)
-            if relative in exempt:
-                continue
-            scanned += 1
-            with open(os.path.join(base, name), encoding="utf-8", errors="replace") as fh:
-                for number, line in enumerate(fh, 1):
-                    for found in pattern.findall(line):
-                        (stale if found not in names else live).append(
-                            (relative, number, found))
+    for relative in tracked_files(suffixes=(".md", ".py", ".yml", ".sh")):
+        if relative in exempt:
+            continue
+        scanned += 1
+        with open(os.path.join(ROOT, relative), encoding="utf-8", errors="replace") as fh:
+            for number, line in enumerate(fh, 1):
+                for found in pattern.findall(line):
+                    (stale if found not in names else live).append(
+                        (relative, number, found))
     assert stale == [], (
         "a document names a gate job that is not in ci.yml (jobs are %s): %r"
         % (sorted(names & {STRUCTURAL, TERMS}), stale))
     # Anti-vacuity, and the reason this test needs it more than most: every
     # other assertion here fails closed on a bad parse, but this one asserts
-    # over a list built by a filesystem walk. A walk that reached nothing --
+    # over a list built from a file listing. A listing that reached nothing --
     # wrong root, an extension filter that stopped matching, an exemption that
     # grew -- leaves `stale` empty and passes while checking nothing.
     assert scanned > 10, (
-        "scanned only %d files; the walk is not reaching the tree, so the "
+        "scanned only %d files; the listing is not reaching the tree, so the "
         "assertion above passed over an empty list" % scanned)
     assert live, (
         "no reference to a gate job was found anywhere. The documentation does "
-        "name both halves, so finding none means the matcher or the walk has "
+        "name both halves, so finding none means the matcher or the listing has "
         "stopped working rather than that the tree is clean")
 
 
@@ -210,3 +204,66 @@ def test_the_report_only_job_is_not_a_required_gate_by_accident():
         "there is no merge base to compare against, so it has nothing to "
         "measure and would report a failure about the runner rather than the "
         "change")
+
+
+def _run_measure_step(tmp_path, stub_rc, stub_out):
+    """Run the measure job's ratio step for real, under bash -e as Actions
+    runs it, with `measure.sh` replaced by a stub that prints `stub_out` and
+    exits `stub_rc`. Returns (step exit, stdout, step summary)."""
+    import subprocess
+
+    steps = [s for s in _steps("measure") if "measure.sh" in str(s.get("run", ""))]
+    assert len(steps) == 1, "expected one step in measure that runs measure.sh"
+    shim = tmp_path / "node" / "shim"
+    shim.mkdir(parents=True)
+    (shim / "measure.sh").write_text(
+        "cat <<'OUT'\n%s\nOUT\nexit %d\n" % (stub_out, stub_rc))
+    runner = tmp_path / "runner"
+    for side in ("base", "head"):
+        (runner / side / "shim").mkdir(parents=True)
+        (runner / side / "shim" / "guard.sh").write_text("#!/bin/sh\n")
+    summary = tmp_path / "summary.md"
+    env = dict(os.environ, RUNNER_TEMP=str(runner),
+               GITHUB_STEP_SUMMARY=str(summary))
+    r = subprocess.run(["bash", "-e", "-c", steps[0]["run"]], cwd=str(tmp_path),
+                       capture_output=True, text=True, env=env, timeout=60)
+    return r.returncode, r.stdout, summary.read_text()
+
+
+def test_a_ratio_run_that_compared_nothing_is_not_reported_as_green(tmp_path):
+    """The step is continue-on-error, so its exit status alone reaches nobody:
+    a run whose every pair was discarded showed the same green as one that
+    compared two shims and found them equal. It has to say so where it is
+    seen -- an annotation, and the step summary."""
+    rc, out, summary = _run_measure_step(
+        tmp_path, 3,
+        "pair 1 DISCARDED: an overhead at or below zero\n"
+        "=== 0/8 usable pairs ===\n"
+        "measure.sh: only 0 pairs survived, below the\n"
+        "  3 this gate needs. Each DISCARDED line above says\n"
+        "  which check refused it.")
+    assert rc == 3, "the step swallowed measure.sh's exit status"
+    assert "::warning title=measure compared nothing::" in out, out
+    assert "COMPARED NOTHING" in summary and "0/8" in summary, summary
+    assert "pair 1 DISCARDED" in summary, \
+        "the summary hides which check discarded"
+    # The verdict line carries the count too, from its own sed, so this is
+    # the only assertion that sees the grep keep measure.sh's own line.
+    assert "=== 0/8 usable pairs ===" in summary, summary
+    # measure.sh's stderr is captured in the same log, and its explanation
+    # names DISCARDED in a sentence; the summary carries the lines, not prose.
+    assert "line above says" not in summary, summary
+
+
+def test_a_ratio_run_that_compared_carries_no_warning(tmp_path):
+    """The inverse, or the test above passes against a step that warns on
+    every run -- which is noise people learn to skip."""
+    rc, out, summary = _run_measure_step(
+        tmp_path, 0,
+        "=== 8/8 usable pairs ===\n"
+        "fast-path ratio (median)        1.004 x")
+    assert rc == 0
+    assert "::warning" not in out, out
+    assert "compared 8/8 usable pairs" in summary, summary
+    assert "=== 8/8 usable pairs ===" in summary, summary
+    assert "fast-path ratio (median)" in summary, summary

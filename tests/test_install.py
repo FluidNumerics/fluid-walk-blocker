@@ -520,6 +520,51 @@ def test_an_escaped_mount_point_is_skipped_and_an_odd_one_is_unrepresentable(tmp
         json.dumps(r)   # every record parsed already; none was malformed
 
 
+def test_a_long_mount_point_is_cut_and_marked_so_the_record_stays_whole(tmp_path):
+    """logger cuts a message at --size, so the record is bounded before it
+    gets there, and asks for a size the bounded record fits (issue #114)."""
+    layout = Layout(tmp_path)
+    long_mount = "/mnt" + "/" + "m" * 200 + ("/" + "n" * 200) * 14
+    layout.mount_table.write_text(
+        FIXTURE_MOUNTS + "nas:/c %s nfs4 rw 0 0\n" % long_mount)
+    result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert result.returncode == 0, result.stderr
+    cut = [r for r in records
+           if r["action"] == "uncovered_mount" and r["mount"].startswith("/mnt/m")]
+    assert len(cut) == 1, records
+    assert cut[0]["mount_truncated"] is True
+    assert cut[0]["mount"] == long_mount[:1024]
+    assert "fstype_truncated" not in cut[0]
+    archive = [r for r in records if r.get("mount") == "/archive"]
+    assert archive and "mount_truncated" not in archive[0], records
+    calls = (layout.tmp_path / "logger-calls.txt").read_text().splitlines()
+    assert calls and all(c.startswith("--size 8192 ") for c in calls), calls
+
+
+@pytest.mark.parametrize("over", [0, 1])
+def test_a_mount_and_type_are_cut_only_past_their_bounds(tmp_path, over):
+    """A mount of exactly 1024 bytes and a type of exactly 128 are whole and
+    unmarked; one byte more of either is cut back to the bound and marked."""
+    layout = Layout(tmp_path)
+    mount = "/mnt/q" + "q" * (1024 - len("/mnt/q") + over)
+    fstype = "fuse." + "t" * (128 - len("fuse.") + over)
+    layout.mount_table.write_text(
+        FIXTURE_MOUNTS + "srv:/q %s %s rw 0 0\n" % (mount, fstype))
+    result, records = relink_with_a_recording_logger(tmp_path, layout)
+    assert result.returncode == 0, result.stderr
+    got = [r for r in records
+           if r["action"] == "uncovered_mount" and r["mount"].startswith("/mnt/q")]
+    assert len(got) == 1, records
+    assert got[0]["mount"] == mount[:1024]
+    assert got[0]["fstype"] == fstype[:128]
+    if over:
+        assert got[0]["mount_truncated"] is True
+        assert got[0]["fstype_truncated"] is True
+    else:
+        assert "mount_truncated" not in got[0]
+        assert "fstype_truncated" not in got[0]
+
+
 def test_the_mount_report_never_fails_the_relink(tmp_path):
     """An unreadable table is a judgement the shim also cannot make; the
     reconcile says nothing and finishes."""

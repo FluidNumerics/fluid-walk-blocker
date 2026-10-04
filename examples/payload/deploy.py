@@ -311,6 +311,20 @@ PAYLOAD_SOURCES = (
     ("docs", True, None),
 )
 
+# The members of a directory entry that are executed directly, with the mode
+# each is installed at -- the same as the build gives them. `cp -a` keeps the
+# SOURCE's mode bits and `a+rX` adds execute only where someone already has
+# it, so without this a payload whose bits were lost in transit (an `scp`
+# without `-p`) installs a 0644 guard.sh: every shim on PATH then points at a
+# file no shell will run, and the shell quietly runs the real tool instead.
+# Set after the recursive chmods, on the copy under the prefix; the snapshot
+# it came from was already judged to hold regular files here (ADR-0029).
+PAYLOAD_MEMBER_MODES = (
+    ("shim/guard.sh", "0755"),
+    ("shim/install.sh", "0755"),
+    ("shim/measure.sh", "0755"),
+)
+
 # The hook files, with the shell each belongs to and the module constant
 # that says whether the site enabled it. Read through hook_table() rather
 # than captured here, so a test that moves a constant is reflected.
@@ -792,23 +806,28 @@ def system_preview(args, env=None):
     # it "could not check" is the refusal it is for the install.
     privileged = _is_root()
     rc, checks = preflight(args, privileged=privileged)
-    if rc != 0:
-        sys.stderr.write(
-            "deploy.py: the install would refuse too, so no command is "
-            "advertised here.\n")
-        return rc
 
     # The payload this would install, against its own record (ADR-0029). The
     # install makes the same check on its snapshot, which a dry run does not
     # take, so here it is made on the directory the snapshot would be copied
     # from: a truncated or partial copy refuses now rather than mid-install.
+    #
+    # Made even when preflight() refused (issue #113). It reads only the payload
+    # directory, so none of preflight()'s destination checks is a
+    # precondition for it, and stopping at the first refusal would leave a
+    # bad copy to be discovered on the run after the first cause is fixed.
+    # The install's order is unchanged -- it never snapshots past a preflight
+    # refusal -- so this reports more without accepting anything the install
+    # would refuse. Both refusals are exit 6, so the exit is the same either
+    # way.
     blocked, payload_unknown = payload_blockers(REPO, privileged=privileged)
     if blocked:
         write_payload_refusal(REPO, blocked)
+    if rc != 0 or blocked:
         sys.stderr.write(
             "deploy.py: the install would refuse too, so no command is "
             "advertised here.\n")
-        return 6
+        return rc or 6
 
     unknown = [check for check in checks if check.state == CHECK_UNKNOWN]
     write_not_checked(unknown + payload_unknown)
@@ -1185,7 +1204,9 @@ def write_trusted_groups_refusal(refusals, out=None):
 
 
 def ownership_commands(prefix):
-    """The recursive commands the install issues, in the order it issues them.
+    """The ownership and mode commands the install issues after the copy, in
+    the order it issues them: recursive per installed entry, then one exact
+    mode per directly-executed member of a directory entry.
 
     One source for both the preview and the execution. They drifted once in
     the predecessor: the preview printed `chown -R root:root $prefix` while
@@ -1207,9 +1228,12 @@ def ownership_commands(prefix):
         # not group/other writable), the hook verifies pass because they run
         # as root -- and then every user has a shim on PATH that none of
         # them can execute. `+X` adds execute only where it already exists
-        # or on directories, so guard.sh stays executable and
-        # search_rules.py does not become one.
+        # or on directories, so search_rules.py does not become one -- and
+        # guard.sh does not become one either when the source lost its bit,
+        # which is what PAYLOAD_MEMBER_MODES is for.
         commands.append(["chmod", "-R", "a+rX,go-w", target])
+    for relative, mode in PAYLOAD_MEMBER_MODES:
+        commands.append(["chmod", mode, os.path.join(prefix, relative)])
     return commands
 
 
@@ -1302,14 +1326,18 @@ SPOOL_FILE_MODE = 0o640
 # and a test pins that the three agree.
 SPOOL_MARKER = ".walk-blocker-spool"
 
+# The relink's report-on-change memory in the spool (ADR-0019). install.sh
+# carries the same literal as UNCOVERED_NAME, and a test pins that they agree.
+UNCOVERED_NAME = "uncovered-mounts.state"
+
 INSTALLER_OWNED_SPOOL_NAMES = (
     SPOOL_MARKER,                   # the spool's identity, above
     "reaper-state.json",            # Layer 2's latch
     "reaper-state.json.tmp",        # ...and the latch's write-and-rename
     "reaper-audit.jsonl",           # Layer 2's trail
     "reaper-audit.jsonl.1",         # ...and its one rotation
-    "uncovered-mounts.state",       # the relink's memory (ADR-0019)
-    "uncovered-mounts.state.new",   # ...and its write-and-rename
+    UNCOVERED_NAME,                 # the relink's memory (ADR-0019)
+    UNCOVERED_NAME + ".new",        # ...and its write-and-rename
 )
 
 
@@ -1772,7 +1800,8 @@ PATH_KINDS = (
 )
 
 
-def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
+def validate_root_write_paths(args, attrs=None, spool_trusted_gids=(),
+                              out=None):
     """Check the filesystem STATE of every root-write path in `args`.
 
     Shared by install and uninstall, which is the point: the predecessor's
@@ -1792,8 +1821,12 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
     new default -- a caller that passed it everywhere would accept a
     group-writable directory above the code root executes.
 
+    Refusals go to `out`, resolved at call time as `preflight()` resolves
+    its own, so a caller that captures preflight's channel captures these too.
+
     Returns 0, or 6 to be returned by the caller.
     """
+    out = sys.stderr if out is None else out
     for attr, kind in PATH_KINDS:
         if attrs is not None and attr not in attrs:
             continue
@@ -1805,10 +1838,10 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
             target, trusted_gids=(spool_trusted_gids if attr == "spool_dir"
                                   else ()))
         if chain:
-            sys.stderr.write("deploy.py: refusing %s (%s): the path is not "
-                             "trusted end to end.\n" % (attr, target))
+            out.write("deploy.py: refusing %s (%s): the path is not "
+                      "trusted end to end.\n" % (attr, target))
             for bad_path, reason in chain:
-                sys.stderr.write("  %s: %s\n" % (bad_path, reason))
+                out.write("  %s: %s\n" % (bad_path, reason))
             return 6
 
         # A trusted parent still leaves the final component free to be a
@@ -1821,7 +1854,7 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
         if kind == "file":
             bad = irregular_target(path)
             if bad is not None:
-                sys.stderr.write(
+                out.write(
                     "deploy.py: refusing %s %s: %s. This file is read and then "
                     "rewritten 0644;\n  through a link that publishes the "
                     "target's contents.\n" % (attr, path, bad))
@@ -1836,7 +1869,7 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
             if os.path.exists(path):
                 offenders = unowned_by(path)
                 if offenders:
-                    sys.stderr.write(
+                    out.write(
                         "deploy.py: refusing %s %s: %s. It is sourced as "
                         "root to verify\n  the hook fires, so its owner "
                         "would be choosing what runs during the deploy.\n"
@@ -2137,7 +2170,8 @@ def preflight(args, privileged, out=None):
     if privileged and unknown_so_far():
         return write_unknown_refusal(unknown_so_far(), out=out), checks
     if validate_root_write_paths(args, attrs=inspectable,
-                                 spool_trusted_gids=trusted_gids) != 0:
+                                 spool_trusted_gids=trusted_gids,
+                                 out=out) != 0:
         checks.append(Check("paths", None, CHECK_BLOCKED))
         return 6, checks
     checks.append(Check("paths", None, CHECK_OK))
@@ -2277,7 +2311,10 @@ def _irregular_kind(info):
         return "a symlink"
     if stat.S_ISDIR(info.st_mode):
         return "a directory"
-    return "not a regular file"
+    for predicate, name in _FILE_KINDS:
+        if predicate(info.st_mode):
+            return name
+    return "of mode %06o" % info.st_mode
 
 
 def payload_blockers(root, privileged):
@@ -2487,7 +2524,9 @@ def stage_payload(env=None, dry_run=False):
     `payload_blockers()` has judged the SNAPSHOT against its own record,
     which happens here, after the copies and before the caller's first
     `systemctl` (ADR-0029). Any difference, including a source the copy
-    could not find, is exit 6 with nothing touched. The snapshot is what is
+    could not find, is exit 6 with nothing touched. A file entry that is not
+    a regular file is refused before the snapshot is created, by lstat,
+    since `install` would block opening a FIFO there. The snapshot is what is
     hashed, never the payload directory: that would be a second, later read
     of user-owned bytes.
     """
@@ -2513,6 +2552,31 @@ def stage_payload(env=None, dry_run=False):
     chain = untrusted_prefix_chain(STAGING_PARENT)
     if chain:
         write_untrusted_staging_refusal(STAGING_PARENT, chain)
+        raise SystemExit(6)
+    # Each FILE entry's type, by lstat, before anything is created or copied
+    # (issue #108). `install` opens its source, so a FIFO there blocks the
+    # copy until something writes to it, and the snapshot check below never
+    # runs; a symlink there is followed and its target's bytes copied. Both
+    # are refused with the dry run's own line. A metadata read, not a second
+    # read of the bytes, so ADR-0006's "read once" is untouched. Directory
+    # entries need no such look: `cp -a` recreates a FIFO, a link or a
+    # device inside them as one, without opening it, and the snapshot check
+    # names it. An entry lstat cannot read -- missing, or behind a directory
+    # it cannot search -- is left to that check too: the copy fails on the
+    # same path.
+    irregular = []
+    for relative, is_dir, _mode in PAYLOAD_SOURCES:
+        if is_dir:
+            continue
+        try:
+            info = os.lstat(os.path.join(REPO, relative))
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            irregular.append("wrong type: %s is %s, not a regular file"
+                             % (relative, _irregular_kind(info)))
+    if irregular:
+        write_payload_refusal(REPO, irregular)
         raise SystemExit(6)
     staging = tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=STAGING_PARENT)
     os.chmod(staging, 0o700)
@@ -3688,6 +3752,64 @@ def system_uninstall(args, env=None):
                              "%s: %s" % (dropin, exc.strerror)))
         granted = set()
 
+    # The DEPLOYED helper, verified, and no fallback to this directory. The
+    # marker check above has already established that the prefix is one
+    # walk-blocker installed. An unprivileged dry run that may not look at
+    # the helper names it as not checked and prints the command it would
+    # run; with privilege, not being able to look is the refusal below.
+    #
+    # Checked here, before the first command, like every refusal above
+    # (issue #110), so a refusal leaves the timer and the service as they
+    # were. It is still EXECUTED late, after the units are down, so the unit
+    # teardown now sits between this check and install.sh opening the two
+    # files. uninstall_helper() has verified both root-owned, in a chain only
+    # root can write, so only root can change either of them in between.
+    helper_dir = os.path.join(args.prefix, "shim")
+    blind = None
+    if not privileged:
+        for name in ("install.sh", "wrapped_names.sh"):
+            blind = unstattable_as_me(os.path.join(helper_dir, name))
+            if blind is not None:
+                break
+    if blind is not None:
+        unknown.append(Check("teardown_helper",
+                             os.path.join(helper_dir, "install.sh"),
+                             CHECK_UNKNOWN, "%s: %s" % blind))
+        helper, why = os.path.join(helper_dir, "install.sh"), None
+    else:
+        helper, why = uninstall_helper(args.prefix)
+    if helper is None:
+        hooks = enabled_hook_files(args)
+        sys.stderr.write(
+            "deploy.py: refusing to run the teardown helper: %s\n" % why)
+        sys.stderr.write(
+            "  This would have to come from the payload directory instead, and\n"
+            "  a file read this late can be replaced by its owner after you\n"
+            "  started. Nothing has been touched: the timer and the service\n"
+            "  are as they were. Put a root-owned install.sh and\n"
+            "  wrapped_names.sh back under %s, in a chain only root\n"
+            "  can write, and run the uninstall again. Or, by hand, as root:\n"
+            "  `systemctl disable --now %s`, `systemctl stop %s`, remove\n"
+            "  both unit files from %s and `systemctl daemon-reload`, strip\n"
+            "  the block between the walk-blocker markers in each shared hook\n"
+            "  file, remove the fish drop-in outright (the whole file is\n"
+            "  walk-blocker's) -- the hook files are %s -- then remove %s\n"
+            "  and the relink's memory %s.\n"
+            % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
+               ", ".join(hooks) or "none on this site",
+               os.path.join(args.prefix, "bin"),
+               os.path.join(args.spool_dir, UNCOVERED_NAME)))
+        if granted:
+            sys.stderr.write(
+                "  Then remove %s and revoke the journal read it\n"
+                "  granted (ADR-0026), under each of these roots that exists\n"
+                "  and is not a symlink:\n" % dropin)
+            for root in JOURNAL_ROOTS:
+                sys.stderr.write("    `%s`\n" % " ".join(
+                    shlex.quote(c) for c in journal_revoke_command(granted,
+                                                                   root)))
+        return 5
+
     run(["systemctl", "disable", "--now", TIMER_UNIT],
         check=False, dry_run=args.dry_run, env=env)
     # Disabling the timer does not stop a service instance already running,
@@ -3727,40 +3849,6 @@ def system_uninstall(args, env=None):
                        dry_run=args.dry_run, env=env).returncode != 0:
                     failures.append("could not revoke the journal ACL under "
                                     "%s" % root)
-    # The DEPLOYED helper, verified, and no fallback to this directory. The
-    # marker check above has already established that the prefix is one
-    # walk-blocker installed. An unprivileged dry run that may not look at
-    # the helper names it as not checked and prints the command it would
-    # run; with privilege, not being able to look is the refusal below.
-    helper_dir = os.path.join(args.prefix, "shim")
-    blind = None
-    if not privileged:
-        for name in ("install.sh", "wrapped_names.sh"):
-            blind = unstattable_as_me(os.path.join(helper_dir, name))
-            if blind is not None:
-                break
-    if blind is not None:
-        unknown.append(Check("teardown_helper",
-                             os.path.join(helper_dir, "install.sh"),
-                             CHECK_UNKNOWN, "%s: %s" % blind))
-        helper, why = os.path.join(helper_dir, "install.sh"), None
-    else:
-        helper, why = uninstall_helper(args.prefix)
-    if helper is None:
-        hooks = enabled_hook_files(args)
-        sys.stderr.write(
-            "deploy.py: refusing to run the teardown helper: %s\n" % why)
-        sys.stderr.write(
-            "  This would have to come from the payload directory instead, and\n"
-            "  a file read this late can be replaced by its owner after you\n"
-            "  started. The units are already stopped and disabled. To finish\n"
-            "  by hand, as root: strip the block between the walk-blocker\n"
-            "  markers in each shared hook file, remove the fish drop-in\n"
-            "  outright (the whole file is walk-blocker's) -- the hook files\n"
-            "  are %s -- then remove %s.\n"
-            % (", ".join(hooks) or "none on this site",
-               os.path.join(args.prefix, "bin")))
-        return 5
     removal = run([TRUSTED_SH, helper, "--uninstall"],
                   capture=False, check=False, dry_run=args.dry_run, env=env)
 
