@@ -135,20 +135,25 @@ def table_rows(text=None):
     the heading, and it ends at the first line that does not: a blank line,
     a paragraph, an HTML comment or a code fence ends a rendered table, so a
     row past one of them is not a row an operator sees. Every row must have
-    exactly COLUMNS cells; a bare `|` inside a cell would split it.
+    exactly COLUMNS cells. A cell splits at a bare `|`, never at a `\\|`,
+    which GFM renders as a pipe inside the cell.
     """
     if text is None:
         with open(OPERATING, encoding="utf-8") as fh:
             text = fh.read()
+    assert HEADING in text, "docs/operating.md has no %r heading" % HEADING
     section = text[text.index(HEADING):]
     section = section[:section.index("\n## ")]
     lines = section.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("|"))
+    start = next((i for i, line in enumerate(lines) if line.startswith("|")),
+                 None)
+    assert start is not None, "no table under %r" % HEADING
     rows = []
     for line in lines[start:]:
         if not line.startswith("|"):
             break
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = [c.strip() for c in
+                 re.split(r"(?<!\\)\|", line.strip().strip("|"))]
         assert len(cells) == COLUMNS, (
             "exit-code table row has %d cells, not %d: %s"
             % (len(cells), COLUMNS, line))
@@ -252,3 +257,12 @@ def test_a_bare_pipe_inside_a_cell_is_refused():
     one = next(line for line in text.splitlines() if line.startswith("| 1 |"))
     with pytest.raises(AssertionError, match="cells"):
         table_rows(text.replace(one, one.replace("drift:", "`a | b` drift:")))
+
+
+def test_an_escaped_pipe_stays_inside_its_cell():
+    with open(OPERATING, encoding="utf-8") as fh:
+        text = fh.read()
+    one = next(line for line in text.splitlines() if line.startswith("| 1 |"))
+    escaped = one.replace("drift:", "`a\\|b` drift:")
+    rows = table_rows(text.replace(one, escaped))
+    assert [r[1] for r in rows if r[0] == "1"] == ["`--verify`"]
