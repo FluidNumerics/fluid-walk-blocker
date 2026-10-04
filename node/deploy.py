@@ -1326,14 +1326,18 @@ SPOOL_FILE_MODE = 0o640
 # and a test pins that the three agree.
 SPOOL_MARKER = ".walk-blocker-spool"
 
+# The relink's report-on-change memory in the spool (ADR-0019). install.sh
+# carries the same literal as UNCOVERED_NAME, and a test pins that they agree.
+UNCOVERED_NAME = "uncovered-mounts.state"
+
 INSTALLER_OWNED_SPOOL_NAMES = (
     SPOOL_MARKER,                   # the spool's identity, above
     "reaper-state.json",            # Layer 2's latch
     "reaper-state.json.tmp",        # ...and the latch's write-and-rename
     "reaper-audit.jsonl",           # Layer 2's trail
     "reaper-audit.jsonl.1",         # ...and its one rotation
-    "uncovered-mounts.state",       # the relink's memory (ADR-0019)
-    "uncovered-mounts.state.new",   # ...and its write-and-rename
+    UNCOVERED_NAME,                 # the relink's memory (ADR-0019)
+    UNCOVERED_NAME + ".new",        # ...and its write-and-rename
 )
 
 
@@ -3756,9 +3760,10 @@ def system_uninstall(args, env=None):
     #
     # Checked here, before the first command, like every refusal above
     # (issue #110), so a refusal leaves the timer and the service as they
-    # were. It is still EXECUTED after the units are down, so the gap between
-    # this check and that read is the one uninstall_helper() describes, and
-    # no wider in kind: the files are root's, in a chain only root can write.
+    # were. It is still EXECUTED late, after the units are down, so the unit
+    # teardown now sits between this check and install.sh opening the two
+    # files. uninstall_helper() has verified both root-owned, in a chain only
+    # root can write, so only root can change either of them in between.
     helper_dir = os.path.join(args.prefix, "shim")
     blind = None
     if not privileged:
@@ -3788,15 +3793,21 @@ def system_uninstall(args, env=None):
             "  both unit files from %s and `systemctl daemon-reload`, strip\n"
             "  the block between the walk-blocker markers in each shared hook\n"
             "  file, remove the fish drop-in outright (the whole file is\n"
-            "  walk-blocker's) -- the hook files are %s -- then remove %s.\n"
+            "  walk-blocker's) -- the hook files are %s -- then remove %s\n"
+            "  and the relink's memory %s.\n"
             % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
                ", ".join(hooks) or "none on this site",
-               os.path.join(args.prefix, "bin")))
+               os.path.join(args.prefix, "bin"),
+               os.path.join(args.spool_dir, UNCOVERED_NAME)))
         if granted:
             sys.stderr.write(
                 "  Then remove %s and revoke the journal read it\n"
-                "  granted to gid %s (ADR-0026).\n"
-                % (dropin, ", ".join(str(g) for g in sorted(granted))))
+                "  granted (ADR-0026), under each of these roots that exists\n"
+                "  and is not a symlink:\n" % dropin)
+            for root in JOURNAL_ROOTS:
+                sys.stderr.write("    `%s`\n" % " ".join(
+                    shlex.quote(c) for c in journal_revoke_command(granted,
+                                                                   root)))
         return 5
 
     run(["systemctl", "disable", "--now", TIMER_UNIT],

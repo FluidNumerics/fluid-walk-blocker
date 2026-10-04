@@ -2633,6 +2633,52 @@ def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
     assert "already stopped" not in err, err
 
 
+def test_a_refused_uninstall_helper_names_the_spool_memory(
+        tmp_path, monkeypatch, capsys):
+    """The hand route stands in for install.sh --uninstall, which also
+    removes the relink's memory from the spool; the route says so."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert os.path.join(args.spool_dir, deploy.UNCOVERED_NAME) in err, err
+
+
+def test_deploy_and_install_name_the_same_spool_memory():
+    """The hand route names the file install.sh --uninstall removes."""
+    with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
+        text = fh.read()
+    assert "\nUNCOVERED_NAME=%s\n" % deploy.UNCOVERED_NAME in text
+
+
+def test_a_refused_uninstall_helper_gives_the_journal_revoke_commands(
+        tmp_path, monkeypatch, capsys):
+    """An earlier deploy's drop-in records a journal grant. The refusal
+    names the drop-in and the setfacl that revokes the grant under every
+    journal root, the same command the teardown itself would run."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 5
+    assert calls == [], calls
+    err = capsys.readouterr().err
+    assert _dropin(args) in err, err
+    for root in deploy.JOURNAL_ROOTS:
+        command = " ".join(deploy.journal_revoke_command({31337}, root))
+        assert "`%s`" % command in err, (command, err)
+
+
 def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
                                                                    monkeypatch):
     """Both files, because install.sh SOURCES wrapped_names.sh into its own
