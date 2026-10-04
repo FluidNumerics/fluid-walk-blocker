@@ -90,6 +90,18 @@ def fixture_home(monkeypatch):
     monkeypatch.setenv("HOME", "/home/someone")
 
 
+@pytest.fixture(autouse=True)
+def no_forced_colour(monkeypatch):
+    """From 3.14 argparse colours `--help` when the environment forces it,
+    tty or not, so a child that inherits FORCE_COLOR prints an escape before
+    `usage: `. Global, and on os.environ rather than per subprocess call, so
+    a test added later that captures a tool's text inherits it without
+    knowing. PYTHON_COLORS goes too: it outranks NO_COLOR."""
+    for name in ("FORCE_COLOR", "PYTHON_COLORS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+
+
 def resolve_cwd(cwd, node_fs):
     """A sentinel becomes a real directory; anything else is passed through."""
     return node_fs.get(cwd, cwd)
