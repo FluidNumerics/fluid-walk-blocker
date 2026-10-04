@@ -100,15 +100,18 @@ def test_the_runbook_does_not_say_the_uninstall_removes_the_prefix():
     para = _uninstall_paragraph()
     assert "It does not remove the prefix: the payload stays under it." in para
     assert "removes `<prefix>/bin`" in para
-    # Nothing else in the paragraph may say the prefix or payload goes.
-    rest = para.replace("It does not remove the prefix", "")
-    assert not re.search(r"(remov|delet)\w*[^.;]*\b(the (whole )?prefix|the payload)\b",
-                         rest), rest
-    # Nor may the install.sh paragraph after it set the two apart on that
-    # point: neither removes the payload.
-    text = _joined(_section(_read(OPERATING), "14."))
-    helper = text[text.index("`install.sh --uninstall` exists too"):]
-    assert "without removing the payload" not in helper[:200]
+    # Nothing else in it, nor in the install.sh paragraph after it, may say
+    # the prefix or the payload goes, in either word order: neither teardown
+    # removes it, so neither may be set apart from the other on that point.
+    rest = para.replace("It does not remove the prefix: the payload stays under it.", "")
+    helper = next(p for p in _section(_read(OPERATING), "14.").split("\n\n")
+                  if p.startswith("`install.sh --uninstall` exists too"))
+    for text in (rest, _joined(helper)):
+        for sentence in re.split(r"[.;:]", text):
+            if (re.search(r"\b(the (whole )?prefix|the payload)\b", sentence, re.I)
+                    and re.search(r"\b(remov|delet)", sentence, re.I)):
+                raise AssertionError("says the prefix or payload goes: %r"
+                                     % sentence.strip())
 
 
 def test_the_runbook_says_a_best_effort_hook_is_written_only_when_its_shell_resolves():
