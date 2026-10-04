@@ -552,8 +552,8 @@ def scripted_clock(tmp_path):
     shim, two python floors, baseline again, guarded baseline, guarded with
     one operand, guarded with ten. The list gives the shim overhead as
     1.25 ms, the guarded overhead as 1.35 ms and the drift as 8.0 %, under
-    the default ceiling, so the budget gates are the only thing left to
-    decide the run.
+    the 12 % ceiling the test sets, so the budget gates are the only thing
+    left to decide the run.
 
     Every value that feeds a gate is distinct on purpose. With equal
     overheads, a gate reading the other gate's overhead would pass; with
@@ -599,7 +599,10 @@ def test_a_decimal_budget_is_compared_as_a_decimal(
     The budgets also sit between the two overheads, so a gate that read the
     other gate's overhead decides `both-clear` and `guarded-refuses` the
     other way."""
-    env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"]}
+    # The ceiling is set rather than inherited, so the 8.0 % scripted drift is
+    # under it by construction and not by whatever the default is today.
+    env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"],
+           "WALK_BLOCKER_MEASURE_DRIFT_PCT": "12"}
     r = run_measure([guard, "1", budget, guarded_budget], env=env)
     # The clock under test is the scripted one, not the machine's.
     for row, value in (("shim overhead", r"1\.25 ms/call"),
