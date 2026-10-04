@@ -684,6 +684,9 @@ def test_escape_hatch_falls_back_to_a_path_resolved_logger(shim_env, logger_stub
     assert b"RAN" in result.stdout
     logged = logger_stub["log"].read_text()
     assert "-t walk-blocker" in logged, "the fallback never ran"
+    # The fallback asks for the same size as the trusted path; without it
+    # logger's 1 KiB default cuts a long record mid-string (issue #114).
+    assert logged.startswith("--size 8192 -t walk-blocker "), logged[:80]
     assert '"action":"escape_hatch"' in logged
     assert '"mount":"/scratch"' in logged
 
