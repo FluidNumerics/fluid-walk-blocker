@@ -132,9 +132,13 @@ def table_rows(text=None):
     """The table's body rows, read the way a Markdown renderer reads them.
 
     The table is the first run of consecutive lines that start with `|` after
-    the heading, and it ends at the first line that does not: a blank line,
-    a paragraph, an HTML comment or a code fence ends a rendered table, so a
-    row past one of them is not a row an operator sees. Every row must have
+    the heading, and it ends at the first line that does not. A blank line,
+    an HTML comment or a code fence ends a rendered table there too, so a row
+    past one of them is not a row an operator sees. A plain text line right
+    after a row does not end it: GFM renders that line as one more row. The
+    reader stops there all the same, which can only drop rows, so the test
+    fails loudly on that shape rather than passing a status without a row.
+    Every row must have
     exactly COLUMNS cells. A cell splits at a bare `|`, never at a `\\|`,
     which GFM renders as a pipe inside the cell.
     """
