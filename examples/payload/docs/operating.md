@@ -289,7 +289,10 @@ The checks before the payload's stop at the first that refuses. The payload
 check is made even then, because it reads only the payload directory and
 none of the others is a precondition for it, so one dry run names both a
 refusing check and a bad copy. Either is exit 6. The install's order is
-unchanged: it never snapshots past an earlier refusal.
+unchanged: it never snapshots past an earlier refusal. One refusal still
+ends the dry run before any of these: `install.sh`'s own dry run, which
+`deploy.py` runs first. When that refuses, neither these checks nor the
+payload check is made; fix what it names and run the dry run again.
 
 Where the dry run is run by an account that may not make one of those
 stats — an ancestor with no `o+x`, a root-only file — it says
