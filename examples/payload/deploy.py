@@ -806,23 +806,28 @@ def system_preview(args, env=None):
     # it "could not check" is the refusal it is for the install.
     privileged = _is_root()
     rc, checks = preflight(args, privileged=privileged)
-    if rc != 0:
-        sys.stderr.write(
-            "deploy.py: the install would refuse too, so no command is "
-            "advertised here.\n")
-        return rc
 
     # The payload this would install, against its own record (ADR-0029). The
     # install makes the same check on its snapshot, which a dry run does not
     # take, so here it is made on the directory the snapshot would be copied
     # from: a truncated or partial copy refuses now rather than mid-install.
+    #
+    # Made even when preflight() refused (issue #113). It reads only the payload
+    # directory, so none of preflight()'s destination checks is a
+    # precondition for it, and stopping at the first refusal would leave a
+    # bad copy to be discovered on the run after the first cause is fixed.
+    # The install's order is unchanged -- it never snapshots past a preflight
+    # refusal -- so this reports more without accepting anything the install
+    # would refuse. Both refusals are exit 6, so the exit is the same either
+    # way.
     blocked, payload_unknown = payload_blockers(REPO, privileged=privileged)
     if blocked:
         write_payload_refusal(REPO, blocked)
+    if rc != 0 or blocked:
         sys.stderr.write(
             "deploy.py: the install would refuse too, so no command is "
             "advertised here.\n")
-        return 6
+        return rc or 6
 
     unknown = [check for check in checks if check.state == CHECK_UNKNOWN]
     write_not_checked(unknown + payload_unknown)
