@@ -525,9 +525,10 @@ def test_the_budget_is_the_compiled_constant(procfs, mounts_path):
 ])
 def test_a_walk_exactly_at_the_budget_is_not_yet_past_it(
         procfs, mounts_path, ppid, verdict):
-    """`past_budget` is a strict `>`, and both arms read it (ADR-0028): a walk
-    whose age IS the budget is not a finding, one second more is. The tests
-    either side stop a second short, so they would pass a `>=` as well.
+    """`past_budget` is a strict `>`, and the runaway and orphan arms both read
+    it (ADR-0028); this test pins those two. A walk whose age IS the budget is
+    not a finding, one second more is. The tests either side stop a second
+    short, so they would pass a `>=` as well.
 
     write_proc stores age as whole clock ticks since boot, so an age that is
     not a whole number of ticks before the uptime would land a tick either
