@@ -125,15 +125,34 @@ def codes_by_function(source=None):
     return codes, passthrough
 
 
-def table_rows():
-    with open(OPERATING, encoding="utf-8") as fh:
-        text = fh.read()
+COLUMNS = 4
+
+
+def table_rows(text=None):
+    """The table's body rows, read the way a Markdown renderer reads them.
+
+    The table is the first run of consecutive lines that start with `|` after
+    the heading, and it ends at the first line that does not: a blank line,
+    a paragraph, an HTML comment or a code fence ends a rendered table, so a
+    row past one of them is not a row an operator sees. Every row must have
+    exactly COLUMNS cells; a bare `|` inside a cell would split it.
+    """
+    if text is None:
+        with open(OPERATING, encoding="utf-8") as fh:
+            text = fh.read()
     section = text[text.index(HEADING):]
     section = section[:section.index("\n## ")]
+    lines = section.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("|"))
     rows = []
-    for line in section.splitlines():
+    for line in lines[start:]:
+        if not line.startswith("|"):
+            break
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if not line.startswith("|") or cells[0] in ("Exit", "---"):
+        assert len(cells) == COLUMNS, (
+            "exit-code table row has %d cells, not %d: %s"
+            % (len(cells), COLUMNS, line))
+        if cells[0] in ("Exit", "---"):
             continue
         rows.append(cells)
     return rows
@@ -215,3 +234,21 @@ def test_a_status_the_scan_cannot_name_is_a_passthrough():
     _, passthrough = codes_by_function(
         "import sys\ndef f(r):\n    sys.exit(r.returncode)\n")
     assert passthrough == {"f"}
+
+
+def test_a_row_the_renderer_would_not_show_is_not_a_row():
+    with open(OPERATING, encoding="utf-8") as fh:
+        text = fh.read()
+    ten = next(line for line in text.splitlines() if line.startswith("| 10 |"))
+    for hidden in ("<!--\n%s\n-->" % ten, "```\n%s\n```" % ten,
+                   "\nA paragraph.\n\n%s" % ten):
+        rows = table_rows(text.replace(ten, hidden))
+        assert not any(r[0] == "10" for r in rows), hidden
+
+
+def test_a_bare_pipe_inside_a_cell_is_refused():
+    with open(OPERATING, encoding="utf-8") as fh:
+        text = fh.read()
+    one = next(line for line in text.splitlines() if line.startswith("| 1 |"))
+    with pytest.raises(AssertionError, match="cells"):
+        table_rows(text.replace(one, one.replace("drift:", "`a | b` drift:")))
