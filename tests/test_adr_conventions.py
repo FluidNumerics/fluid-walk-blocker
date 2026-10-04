@@ -8,9 +8,10 @@ the conventions are pinned rather than re-derived each round.
 import glob
 import os
 import re
-import subprocess
 
 import pytest
+
+from _tracked import tracked_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADR_DIR = os.path.join(ROOT, "docs", "adr")
@@ -169,22 +170,9 @@ NARROWS_LOOSE = re.compile(r"^\*\*Narrows:\*\*", re.M)
 
 
 def _prose_files():
-    """Tracked markdown outside the generated payload.
-
-    `examples/payload/` is excluded for the reason `test_boundary_prose.py`
-    gives: it is a build product, `build --check` already proves it identical to
-    these sources, and scanning both reports every finding twice.
-
-    Tracked, from `git ls-files`, rather than walked: a walk also reads a
-    `.venv`'s installed copy of the README and every checkout under
-    `.claude/worktrees/`, each a record behind or ahead of this tree, so the
-    test failed on files that are not part of it.
-    """
-    listed = subprocess.run(["git", "ls-files", "-z", "--", "*.md"], cwd=ROOT,
-                            capture_output=True, check=True).stdout
-    payload = "examples/payload/"
-    return sorted(rel for rel in listed.decode("utf-8").split("\0")
-                  if rel and not rel.startswith(payload))
+    """Tracked markdown outside the generated payload (`_tracked.py` says why
+    tracked rather than walked, and why the payload is left out)."""
+    return tracked_files("*.md")
 
 
 def test_every_adr_range_in_prose_names_the_real_last_record():
