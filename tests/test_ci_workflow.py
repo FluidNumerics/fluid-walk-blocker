@@ -238,11 +238,18 @@ def test_a_ratio_run_that_compared_nothing_is_not_reported_as_green(tmp_path):
     rc, out, summary = _run_measure_step(
         tmp_path, 3,
         "pair 1 DISCARDED: an overhead at or below zero\n"
-        "=== 0/8 usable pairs ===")
+        "=== 0/8 usable pairs ===\n"
+        "measure.sh: only 0 pairs survived, below the\n"
+        "  3 this gate needs. Each DISCARDED line above says\n"
+        "  which check refused it.")
     assert rc == 3, "the step swallowed measure.sh's exit status"
     assert "::warning title=measure compared nothing::" in out, out
     assert "COMPARED NOTHING" in summary and "0/8" in summary, summary
-    assert "DISCARDED" in summary, "the summary hides which check discarded"
+    assert "pair 1 DISCARDED" in summary, \
+        "the summary hides which check discarded"
+    # measure.sh's stderr is captured in the same log, and its explanation
+    # names DISCARDED in a sentence; the summary carries the lines, not prose.
+    assert "line above says" not in summary, summary
 
 
 def test_a_ratio_run_that_compared_carries_no_warning(tmp_path):

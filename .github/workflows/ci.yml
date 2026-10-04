@@ -268,7 +268,10 @@ jobs:
             echo "$verdict"
             echo
             echo '```'
-            grep -e 'DISCARDED' -e 'usable pairs' -e 'ratio (' "$work/measure.log" || :
+            # Anchored: the exit-3 explanation on stderr, captured in the same
+            # log, also says "DISCARDED" in a sentence about these lines.
+            grep -e '^pair [0-9]* DISCARDED: ' -e '^=== .* usable pairs ===$' \
+              -e 'ratio (' "$work/measure.log" || :
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
