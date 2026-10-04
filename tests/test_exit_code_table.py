@@ -2,10 +2,15 @@
 
 A wrapper or an operator branching on `deploy.py`'s status reads one table in
 `docs/operating.md` (issue #106). The codes are read out of the source with
-`ast`, not listed here: every integer a function returns (alone, or first in
-a tuple), every integer `SystemExit` is raised with, and every module-level
-integer constant a function returns by name. A new code, as a literal or as a
-named constant, fails here until it has a row.
+`ast`, not listed here. A status counts when it is an integer that a function
+returns, alone or first in a tuple, or passes to `SystemExit`, `sys.exit`,
+`os._exit` or `exit`, written as a literal, as either branch of a conditional
+expression or an operand of `or`/`and`, as a module-level integer constant
+(plain or annotated), or as a name the same function assigns an integer
+literal. A new code in any of those shapes fails here until it has a row;
+`test_the_scanner_sees_each_shape_a_new_status_can_take` pins each shape.
+A status computed at run time from something else is beyond any static
+scan, and is the reason the table is also checked by reading.
 
 Two statuses are not integers in the source. argparse exits 2 on a usage
 error, and `run()` and the `install.sh` call pass a command's own status
@@ -14,6 +19,8 @@ through `SystemExit`; each has a row of its own, pinned below.
 import ast
 import os
 import re
+
+import pytest
 
 from conftest import ROOT
 
@@ -30,59 +37,91 @@ MODE_ENTRIES = {
     "system_verify": "`--verify`",
 }
 
-
-def _tree():
-    with open(DEPLOY_PY, encoding="utf-8") as fh:
-        return ast.parse(fh.read())
+# Calls that end the process with their first argument as the status.
+EXITS = {("SystemExit",), ("exit",), ("sys", "exit"), ("os", "_exit")}
 
 
-def _int_constants(tree):
+def _int_literal(node):
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    return None
+
+
+def _assigned_ints(statements):
+    """{name: {ints}} for every name assigned an integer literal, by plain,
+    tuple or annotated assignment, anywhere in `statements`' subtrees."""
     found = {}
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            names = target.elts if isinstance(target, ast.Tuple) else [target]
-            values = (node.value.elts if isinstance(node.value, ast.Tuple)
-                      else [node.value])
-            for name, value in zip(names, values):
-                if (isinstance(name, ast.Name) and isinstance(value, ast.Constant)
-                        and type(value.value) is int):
-                    found[name.id] = value.value
+
+    def note(target, value):
+        if isinstance(target, ast.Tuple) and isinstance(value, ast.Tuple):
+            for t, v in zip(target.elts, value.elts):
+                note(t, v)
+        elif isinstance(target, ast.Name) and _int_literal(value) is not None:
+            found.setdefault(target.id, set()).add(_int_literal(value))
+
+    for statement in statements:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    note(target, node.value)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                note(node.target, node.value)
     return found
 
 
-def codes_by_function():
-    """{function name: set of integer statuses it returns or raises}, and
-    the functions that pass a non-literal status to SystemExit."""
-    tree = _tree()
-    constants = _int_constants(tree)
+def _call_name(func):
+    parts = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if isinstance(func, ast.Name):
+        parts.append(func.id)
+        return tuple(reversed(parts))
+    return None
+
+
+def codes_by_function(source=None):
+    """{function name: set of integer statuses it returns or exits with},
+    and the functions that exit with a status no static read can name."""
+    if source is None:
+        with open(DEPLOY_PY, encoding="utf-8") as fh:
+            source = fh.read()
+    tree = ast.parse(source)
+    # Module level only: a function's own assignments are added per function.
+    module = _assigned_ints([n for n in tree.body
+                             if isinstance(n, (ast.Assign, ast.AnnAssign))])
     codes, passthrough = {}, set()
 
-    def as_code(node):
-        if isinstance(node, ast.Tuple) and node.elts:
-            node = node.elts[0]
-        if isinstance(node, ast.Constant) and type(node.value) is int:
-            return node.value
-        if isinstance(node, ast.Name) and node.id in constants:
-            return constants[node.id]
-        return None
-
     for func in ast.walk(tree):
-        if not isinstance(func, ast.FunctionDef):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
+        local = _assigned_ints(func.body)
+
+        def as_codes(node):
+            if isinstance(node, ast.Tuple) and node.elts:
+                node = node.elts[0]
+            if isinstance(node, ast.IfExp):
+                return as_codes(node.body) | as_codes(node.orelse)
+            if isinstance(node, ast.BoolOp):
+                return set().union(*(as_codes(v) for v in node.values))
+            if _int_literal(node) is not None:
+                return {_int_literal(node)}
+            if isinstance(node, ast.Name):
+                return local.get(node.id, set()) | module.get(node.id, set())
+            return set()
+
         for node in ast.walk(func):
             if isinstance(node, ast.Return) and node.value is not None:
-                code = as_code(node.value)
-            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                  and node.func.id == "SystemExit" and node.args):
-                code = as_code(node.args[0])
-                if code is None:
+                found = as_codes(node.value)
+            elif (isinstance(node, ast.Call) and node.args
+                  and _call_name(node.func) in EXITS):
+                found = as_codes(node.args[0])
+                if not found:
                     passthrough.add(func.name)
             else:
                 continue
-            if code is not None:
-                codes.setdefault(func.name, set()).add(code)
+            if found:
+                codes.setdefault(func.name, set()).update(found)
     return codes, passthrough
 
 
@@ -142,3 +181,37 @@ def test_argparse_and_a_command_s_own_status_have_their_rows():
     _, passthrough = codes_by_function()
     if passthrough:
         assert any(r[0] == PASSTHROUGH for r in table_rows())
+
+
+# Each shape a new status can take in deploy.py. The scanner must find 13 in
+# every one: a shape it cannot see is a new code that passes without a row.
+NEW_STATUS_SHAPES = {
+    "literal": "def f():\n    return 13\n",
+    "first of a tuple": "def f():\n    return 13, []\n",
+    "conditional": "def f(x):\n    return 6 if x else 13\n",
+    "or": "def f(rc):\n    return rc or 13\n",
+    "module constant": "NEW = 13\ndef f():\n    return NEW\n",
+    "annotated module constant": "NEW: int = 13\ndef f():\n    return NEW\n",
+    "tuple-assigned constant": "A, NEW = 0, 13\ndef f():\n    return NEW\n",
+    "local name": "def f():\n    code = 13\n    return code\n",
+    "local name in a tuple": "def f():\n    rc = 13\n    return rc, []\n",
+    "nested function": "def f():\n    def g():\n        return 13\n    return g()\n",
+    "SystemExit": "def f():\n    raise SystemExit(13)\n",
+    "SystemExit of a local name": "def f():\n    n = 13\n    raise SystemExit(n)\n",
+    "sys.exit": "import sys\ndef f():\n    sys.exit(13)\n",
+    "os._exit": "import os\ndef f():\n    os._exit(13)\n",
+    "exit": "def f():\n    exit(13)\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(NEW_STATUS_SHAPES))
+def test_the_scanner_sees_each_shape_a_new_status_can_take(shape):
+    codes, _ = codes_by_function(NEW_STATUS_SHAPES[shape])
+    assert 13 in set().union(*codes.values()), (
+        "a new status written as %r is invisible to the scan" % shape)
+
+
+def test_a_status_the_scan_cannot_name_is_a_passthrough():
+    _, passthrough = codes_by_function(
+        "import sys\ndef f(r):\n    sys.exit(r.returncode)\n")
+    assert passthrough == {"f"}
