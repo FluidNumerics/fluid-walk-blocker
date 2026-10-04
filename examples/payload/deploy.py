@@ -2307,7 +2307,10 @@ def _irregular_kind(info):
         return "a symlink"
     if stat.S_ISDIR(info.st_mode):
         return "a directory"
-    return "not a regular file"
+    for predicate, name in _FILE_KINDS:
+        if predicate(info.st_mode):
+            return name
+    return "of mode %06o" % info.st_mode
 
 
 def payload_blockers(root, privileged):
@@ -2554,7 +2557,9 @@ def stage_payload(env=None, dry_run=False):
     # read of the bytes, so ADR-0006's "read once" is untouched. Directory
     # entries need no such look: `cp -a` recreates a FIFO, a link or a
     # device inside them as one, without opening it, and the snapshot check
-    # names it. A missing entry is left to that check too.
+    # names it. An entry lstat cannot read -- missing, or behind a directory
+    # it cannot search -- is left to that check too: the copy fails on the
+    # same path.
     irregular = []
     for relative, is_dir, _mode in PAYLOAD_SOURCES:
         if is_dir:

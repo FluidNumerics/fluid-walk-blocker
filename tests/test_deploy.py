@@ -2007,6 +2007,22 @@ def test_the_example_payload_matches_its_own_record(tmp_path, monkeypatch):
     assert module.payload_blockers(module.REPO, privileged=True) == ([], [])
 
 
+def test_a_regular_file_where_a_directory_entry_should_be_is_named_as_one(
+        tmp_path, monkeypatch):
+    """The wrong-type line names what the entry IS. `_irregular_kind()` is
+    shared by the dry run's check and the install's lstat refusal, and once
+    answered "not a regular file" for anything but a link or a directory, so
+    this line read "is not a regular file, not a directory"."""
+    payload = _payload_copy(tmp_path)
+    shutil.rmtree(os.path.join(payload, "shim"))
+    with open(os.path.join(payload, "shim"), "w") as handle:
+        handle.write("not a directory\n")
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    blocked, _unknown = module.payload_blockers(module.REPO, privileged=False)
+    assert "wrong type: shim is a regular file, not a directory" in blocked, \
+        blocked
+
+
 def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
                                                  capsys):
     """Issue #84's oracle. A copy cut short, the way an interrupted scp or
@@ -2135,8 +2151,8 @@ def test_a_fifo_in_the_payload_is_refused_not_opened(tmp_path):
         [sys.executable, "-c", script, os.path.join(payload, "deploy.py")],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert "wrong type: reaper.py is not a regular file" in proc.stdout, \
-        proc.stdout
+    assert ("wrong type: reaper.py is a fifo, not a regular file"
+            in proc.stdout), proc.stdout
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads a mode-000 file")
@@ -2243,7 +2259,7 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
 def _fifo_for_reaper(payload):
     os.unlink(os.path.join(payload, "reaper.py"))
     os.mkfifo(os.path.join(payload, "reaper.py"))
-    return "wrong type: reaper.py is not a regular file"
+    return "wrong type: reaper.py is a fifo, not a regular file"
 
 
 def _symlink_for_reaper(payload):
