@@ -550,9 +550,14 @@ def scripted_clock(tmp_path):
     list, in microseconds, so at N=1 each bench's reading is that duration
     exactly. Single-guard mode benches eight times, in this order: baseline,
     shim, two python floors, baseline again, guarded baseline, guarded with
-    one operand, guarded with ten. The list gives both overheads as 1.25 ms
-    and the drift as 0.0 %, so the budget gates are the only thing left to
+    one operand, guarded with ten. The list gives the shim overhead as
+    1.25 ms, the guarded overhead as 1.35 ms and the drift as 8.0 %, under
+    the default ceiling, so the budget gates are the only thing left to
     decide the run.
+
+    Every value that feeds a gate is distinct on purpose. With equal
+    overheads, a gate reading the other gate's overhead would pass; with
+    equal baselines, an overhead taken from the wrong baseline would too.
     """
     binned = tmp_path / "clockbin"
     binned.mkdir()
@@ -560,7 +565,7 @@ def scripted_clock(tmp_path):
     stub = binned / "date"
     stub.write_text(
         "#!/bin/sh\n"
-        "set -- 1000 2250 1000 1000 1000 1000 2250 3000\n"
+        "set -- 1000 2250 1000 1000 1080 1500 2850 3750\n"
         'read -r k t < %s 2>/dev/null || { k=0; t=0; }\n'
         "if [ $((k %% 2)) -eq 1 ]; then\n"
         '    eval "d=\\${$((k / 2 + 1)):-1000}"\n'
@@ -576,25 +581,31 @@ def scripted_clock(tmp_path):
 
 
 @pytest.mark.parametrize("budget, guarded_budget, rc, says", [
-    ("1.4", "1.4", 0, ["within the 1.4 ms budget",
+    ("1.3", "1.4", 0, ["within the 1.3 ms budget",
                        "guarded path within the 1.4 ms budget"]),
-    ("1.1", "1000", 1, ["measure.sh: shim overhead 1.25 ms exceeds the"]),
-    ("1000", "1.1", 1, ["measure.sh: guarded overhead 1.25 ms exceeds the"]),
+    ("1.2", "1000", 1, ["measure.sh: shim overhead 1.25 ms exceeds the"]),
+    ("1000", "1.3", 1, ["measure.sh: guarded overhead 1.35 ms exceeds the"]),
 ], ids=["both-clear", "fast-refuses", "guarded-refuses"])
 def test_a_decimal_budget_is_compared_as_a_decimal(
         guard, scripted_clock, budget, guarded_budget, rc, says):
     """`test_a_decimal_ceiling_is_accepted` proves the validator lets a
     decimal through, and its pass line echoes the argument verbatim -- so a
     gate that truncated or rounded either side inside the `awk` comparison
-    would still pass it. Here the overheads are known: 1.25 clears 1.4 only if
-    the budget keeps its fraction (1 would refuse), and exceeds 1.1 only if
-    the overhead keeps its own (1 would pass). Each gate gets both
-    directions."""
+    would still pass it. Here the overheads are known, 1.25 fast and 1.35
+    guarded: each clears its 1.3 or 1.4 budget only if the budget keeps its
+    fraction (1 would refuse), and exceeds 1.2 or 1.3 only if the overhead
+    keeps its own (1 would pass). Each gate gets both directions.
+
+    The budgets also sit between the two overheads, so a gate that read the
+    other gate's overhead decides `both-clear` and `guarded-refuses` the
+    other way."""
     env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"]}
     r = run_measure([guard, "1", budget, guarded_budget], env=env)
     # The clock under test is the scripted one, not the machine's.
-    for row in ("shim overhead", "guarded overhead"):
-        assert re.search(r"^%s +1\.25 ms/call$" % row, r.stdout, re.M), r.stdout
+    for row, value in (("shim overhead", r"1\.25 ms/call"),
+                       ("guarded overhead", r"1\.35 ms/call"),
+                       ("baseline drift", r"8\.0 %")):
+        assert re.search(r"^%s +%s$" % (row, value), r.stdout, re.M), r.stdout
     assert r.returncode == rc, r.stdout + r.stderr
     lines = (r.stderr if rc else r.stdout).splitlines()
     for line in says:
