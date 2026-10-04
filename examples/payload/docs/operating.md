@@ -35,6 +35,11 @@ On the node you deploy to:
 - The Slurm client (`sbatch`) reachable at `[slurm].sbatch_glob`, for
   `walk-job`. The scheduler is what enforces the wall-clock bound the
   refusal text offers (ADR-0007).
+- A `logger` at `[trusted_binaries].logger` that accepts `--size`. Every
+  Layer 1 record is sent with it, and a logger that rejects the option
+  drops the record silently. util-linux `logger` has it: present in 2.32.1
+  and 2.37.4 as measured; the util-linux man pages put its arrival at 2.27,
+  not measured. BusyBox `logger` does not have it.
 - Root, held by the person running the install. Nothing here escalates;
   `deploy.py` checks `os.geteuid()` and refuses otherwise (ADR-0004).
 
@@ -204,6 +209,13 @@ is the exposure the operator already accepts by running the script at all.
 Automated review has proposed refusing a user-owned source three times; it
 is settled.
 
+The copy need not keep modes either. `scp` without `-p` drops execute bits,
+and the install sets the mode of every file it runs or links into
+`<prefix>/bin` itself rather than keeping the source's: the top-level scripts
+as each is copied, and `shim/guard.sh`, `shim/install.sh` and
+`shim/measure.sh` after the `shim` copy. Each is installed `0755` whatever
+mode it arrived with.
+
 Do not put the payload under a home directory that lives on the filesystem
 under investigation. The install reads it once, but the staging snapshot is
 what protects the install, not the payload's location, and reading a wedged
@@ -273,6 +285,15 @@ check refused and why, and **advertises no command** — because the install
 would refuse too, and it would do so after the timer had already
 been disabled and stopped.
 
+The checks before the payload's stop at the first that refuses. The payload
+check is made even then, because it reads only the payload directory and
+none of the others is a precondition for it, so one dry run names both a
+refusing check and a bad copy. Either is exit 6. The install's order is
+unchanged: it never snapshots past an earlier refusal. One refusal still
+ends the dry run before any of these: `install.sh`'s own dry run, which
+`deploy.py` runs first. When that refuses, neither these checks nor the
+payload check is made; fix what it names and run the dry run again.
+
 Where the dry run is run by an account that may not make one of those
 stats — an ancestor with no `o+x`, a root-only file — it says
 `could not be checked as this user` and names the path. That is neither
@@ -331,9 +352,10 @@ account (ADR-0004):
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
   and in each `best-effort` shell's only when its binary resolves and the
-  required hooks were proven first, with a dedicated `conf.d` drop-in for
-  fish in place of a block. The pre-install content of each hook file is
-  saved once to `<file>.walk-blocker.orig`, the first time this runs;
+  required hooks were proven first. fish, in either class, gets a dedicated
+  `conf.d` drop-in in place of a block. The pre-install content of each hook
+  file is saved once to `<file>.walk-blocker.orig`, the first time this
+  runs;
 - the reaper's service and timer under `[install].unit_dir`, enabled and
   started as `walk-blocker.timer`.
 
@@ -435,23 +457,28 @@ it.
 | 4 | `--system` | `install.sh --system`'s required-hook proof | Layer 1 is not proven. The units are written and the timer enabled, so Layer 2 is running; best-effort hooks were not written (§8, "What it verifies"). |
 | 4 | `--verify` | reading the record and the files | no answer: the prefix is not a directory, `site.lock.json` is missing or not a record it can read, or a file could not be read. Not a clean result. |
 | 5 | `--system` | after the payload is copied | a copied entry is a symlink, the prefix fails the ownership check before `install.sh` runs, or the spool could not be created. No unit is written and the timer stays disabled. |
-| 5 | `--uninstall`, `--uninstall --dry-run` | the teardown helper | the deployed `shim/install.sh` failed its checks. In the writing run the units and the journal drop-in are already removed by then; the message says what to finish by hand. |
-| 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (dry run only); or a check could not be made with privilege. |
-| 7 | `--system`, `--uninstall` | the units-down check | the timer or service could not be confirmed inactive, or the timer is still enabled, after both were told to stop. Nothing under the prefix was touched. |
+| 5 | `--uninstall`, `--uninstall --dry-run` | the teardown helper's check, before the first command | the deployed `shim/install.sh` or `wrapped_names.sh` failed its checks. Nothing has been touched: the timer and the service are as they were, and the message says how to finish by hand. |
+| 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; a payload file entry is not a regular file, which the install refuses by `lstat` before it copies anything (install only); the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (dry run only, and it ends the preview before the other checks); or a check could not be made with privilege. The install's dry run makes the payload check even when an earlier check refused, and reports both. |
+| 7 | `--system`, `--uninstall` | the units-down check | the timer or service could not be confirmed inactive, or the timer is still enabled, after both were told to stop. Nothing under the prefix was touched. The uninstall reaches this only once its teardown helper has passed its check; with a bad helper it exits 5 before stopping anything. |
 | 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero, or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
 | 9 | `--system` | the ownership check after `install.sh` | the hook blocks and the shim farm are in place, no unit was written and the timer stays disabled |
 | 10 | `--system` | the journal step, last | the journal grant did not land (ADR-0026). The timer is armed and Layer 2 is reporting. |
-| a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command such as `cp`, `install`, `chown`, `chmod`, `systemctl daemon-reload` or `enable`, `systemd-tmpfiles` or `setfacl` failed, and the run stopped there |
+| a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command failed and the run stopped there. Before `systemctl enable` — the staging `install -d`, `cp`, `install`, `chown`, a `chmod` of the ownership pass including the exact mode it sets on each directly-executed script, `systemctl daemon-reload` or `enable` — the timer stays disabled; in the journal step after it — `systemd-tmpfiles`, `rm` or `setfacl` — the timer is armed. |
 
 When more than one step fails, worst case wins, as §8 states under "What it
 verifies": the status is the most severe and the rest are reported on stderr
 only. Every refusal and almost every failure ends the run where it happens,
-so only one status is possible; the one pair that can both occur is the hook
-proof and the journal step, and 4 outranks 10 or a command's own status
-there. A status can mean different things in different modes (4 in
-`--system` and in `--verify`), and a command's own status can coincide with
-one of the codes above (`install.sh`'s 3), so read the status with the mode
-and with stderr. An uncaught Python exception exits 1, with a traceback.
+so only one status is possible; the one pair of different statuses that can
+both occur is the hook proof and the journal step, and 4 outranks 10 or a
+command's own status there. The install's dry run can report two refusals,
+from its checks and from the payload check, but both are 6. Order, not
+severity, decides between the uninstall's 5 and 7: the helper is checked
+first, so a bad helper exits 5 whether or not the units would have stopped.
+A status can mean different things in different modes (4 in `--system` and
+in `--verify`), and a command's own status can coincide with one of the
+codes above (`install.sh`'s 3, or the 1 most commands exit with on
+failure), so read the status with the mode and with stderr. An uncaught
+Python exception exits 1, with a traceback.
 
 ## 9. Measure the shim
 
@@ -469,7 +496,9 @@ allowed traversing call that judges every operand, which is the only path
   and the new one alternately, in the same minute, and gates on the median
   per-pair ratio. This is the gate that survives a change of machine — an
   absolute reading moves with the node's load; a ratio between two shims
-  measured together does not.
+  measured together does not. A pair whose readings cannot be trusted is
+  discarded, and a run that keeps fewer than three exits 3: it compared
+  nothing, which is neither a pass nor a regression.
 
 Keep both: a ratio gate alone cannot see cumulative drift, and an absolute
 gate alone cannot be run anywhere but the machine it was calibrated on.
@@ -608,6 +637,19 @@ It carries three kinds of record:
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
   readable by the spool's group.
 
+Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
+so `logger` does not cut it at its 1 KiB default. The fields a caller or the
+mount table can shape are bounded so the record always fits: in the shim's
+`refused` and escape-hatch records, a path field (`root`, `mount`,
+`resolved`, `shadow_resolved`, `pwd`) at 1024 bytes as escaped and every
+other string at 128; in an `uncovered_mount` record, `mount` at 1024 and
+`fstype` at 128. The remaining fields are literals or values the code has
+already checked, and the shim's no-awk fallback record carries no path. A
+field the bound cut is followed by `"<field>_truncated":true` —
+`"pwd_truncated":true` from a deep working directory, say. A field with no
+such key was not shortened, though a control character in it is still
+shown as `?`, as it always was.
+
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
 directory has the right mode, and no expensive mount is running uncovered.
@@ -703,6 +745,7 @@ python3 walk-blocker-payload/deploy.py --verify
 sha256sum <prefix>/site.lock.json      # against payload/site.lock.json there
 
 # 3. off the node: is that configuration on the reviewed branch?
+#    --ref is whatever branch this site reviews on; origin/main is only the default
 walk-blocker provenance --payload payload/ --repo . --ref origin/main
 ```
 
@@ -884,8 +927,9 @@ the spool. It does not remove the prefix: the payload stays under it. The
 copy the trail somewhere before removing it if the evidence is still
 wanted.
 
-`install.sh --uninstall` exists too, and takes Layer 1 off without removing
-the payload. Run it as root from the deployed copy,
+`install.sh --uninstall` exists too, and takes Layer 1 off but removes
+less: the unit files, and the journal drop-in with its grant, stay until
+`deploy.py --uninstall` removes them. Run it as root from the deployed copy,
 `sh <prefix>/shim/install.sh --uninstall`: as root it sources the
 `wrapped_names.sh` beside it, and refuses one that is not root-owned or
 whose directory chain an ordinary account could write, which a checkout's
