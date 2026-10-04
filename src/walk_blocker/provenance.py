@@ -111,10 +111,59 @@ def resolve_ref(repo, ref, timeout=DEFAULT_TIMEOUT):
         raise ProvenanceError("%s: not a git repository" % repo)
     done = _git(repo, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"], timeout)
     if done.returncode != 0:
-        raise ProvenanceError(
-            "%s: no such commit or ref in %s. If it is a remote-tracking "
-            "branch, it may need `git fetch`." % (ref, repo))
+        # Two remedies, because the likelier case is not the one `git fetch`
+        # cures: a repository whose reviewed branch is simply not called the
+        # default. Naming --ref, and what is here, turns a dead end into a step.
+        lines = [
+            "%s: no such commit or ref in %s" % (ref, repo),
+            "  If it is a remote-tracking branch that was never fetched, "
+            "run `git fetch`.",
+            "  If this repository reviews on a branch with another name, "
+            "name it with --ref.",
+        ]
+        shown, more = existing_branches(repo, timeout)
+        if shown:
+            lines.append("  Branches here: %s%s"
+                         % (", ".join(shown), ", ..." if more else ""))
+        raise ProvenanceError("\n".join(lines))
     return done.stdout.decode("ascii", "replace").strip()
+
+
+BRANCHES_SHOWN = 5
+
+
+def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
+    """([up to `count` branch names], whether there are more), for a hint.
+
+    Remote-tracking branches first, because a reviewed branch is usually one.
+    A remote's `HEAD` symref is skipped: it names a branch already listed.
+    It is told by being a symref, not by its name, so a real branch whose
+    name ends in `/HEAD` is still listed.
+    The listing is two `for-each-ref` calls, each under the per-call
+    `timeout`. Best effort: if either fails or times out, the hint is dropped
+    rather than replacing the error it decorates.
+    """
+    names = []
+    for prefix in ("refs/remotes", "refs/heads"):
+        # The whole listing, not a `--count` window: every remote may carry a
+        # `HEAD` symref, so no fixed window can say whether more branches
+        # exist, and `--count` bounds only git's output, not its work.
+        try:
+            # A refname cannot contain a space, so one separates the fields.
+            done = _git(repo, ["for-each-ref",
+                               "--format=%(refname) %(symref)", prefix],
+                        timeout)
+        except ProvenanceError:
+            return [], False
+        if done.returncode != 0:
+            return [], False
+        for line in done.stdout.decode("utf-8", "replace").splitlines():
+            full, _sep, symref = line.partition(" ")
+            if (prefix == "refs/remotes" and symref
+                    and full.endswith("/HEAD")):
+                continue
+            names.append(full[len(prefix) + 1:])
+    return names[:count], len(names) > count
 
 
 def reachable_commits(repo, ref, timeout=DEFAULT_TIMEOUT):

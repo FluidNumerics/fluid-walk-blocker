@@ -26,10 +26,12 @@ import os
 import py_compile
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import types
 
 import pytest
 
@@ -60,6 +62,12 @@ PATH_FLAGS = ("--prefix", "--unit-dir", "--spool-dir", "--audit",
               "--bashrc-file", "--zshenv-file", "--fish-conf-file")
 
 
+def runs_installer(cmd):
+    """A command that runs install.sh, as against one that only names it:
+    the install also sets install.sh's mode with a `chmod`."""
+    return cmd[0] != "chmod" and any("install.sh" in arg for arg in cmd)
+
+
 def recording_run(calls, active_units=(), enabled_units=(), installer_rc=0):
     """A `run` stub that records commands and models systemd honestly.
 
@@ -75,7 +83,7 @@ def recording_run(calls, active_units=(), enabled_units=(), installer_rc=0):
     def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
         calls.append(cmd)
         returncode, stdout = 0, ""
-        if cmd[-1] == "--system" and any("install.sh" in a for a in cmd):
+        if cmd[-1] == "--system" and runs_installer(cmd):
             returncode = installer_rc
         if cmd[:2] == ["systemctl", "is-active"]:
             if cmd[-1] in active_units:
@@ -792,8 +800,10 @@ def test_preview_prints_exactly_the_ownership_commands_execution_runs(
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_execute(args) == 0
 
-    executed = [c for c in calls
-                if c[:2] in (["chown", "-R"], ["chmod", "-R"])]
+    # Under the prefix only: the prefix itself is widened to 0755 once every
+    # check has passed, which is a step of its own and not one of these.
+    executed = [c for c in calls if c[0] in ("chown", "chmod")
+                and c[-1].startswith(args.prefix + "/")]
     assert executed == deploy.ownership_commands(args.prefix), executed
     for cmd in executed:
         assert " ".join(cmd) in previewed, "not in the preview: %s" % cmd
@@ -930,7 +940,7 @@ def test_the_payload_is_staged_root_only_and_widened_only_when_clean(
     widen = next(i for i, c in enumerate(calls)
                  if c[:2] == ["chmod", "0755"] and c[-1] == args.prefix)
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert widen < installer, "widened before the guard is wired up, not after"
 
     strips = [c for c in calls if c[:2] == ["chmod", "-R"] and "a-s" in c]
@@ -1003,7 +1013,7 @@ def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
     removed = [c[-1] for c in calls if c[:2] == ["rm", "-rf"]]
     for entry in deploy.INSTALLED_ENTRIES:
         assert os.path.join(args.prefix, entry) in removed, entry
-    assert not any(c[:2] == ["chmod", "0755"] for c in calls), \
+    assert not any(c == ["chmod", "0755", args.prefix] for c in calls), \
         "a rejected prefix must stay root-only"
 
 
@@ -1027,7 +1037,7 @@ def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 5
 
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
     assert not any(c[:2] == ["systemctl", "enable"] for c in calls), calls
     assert not any(c[:2] == ["systemctl", "daemon-reload"] for c in calls), calls
     assert [c for c in calls if c[:2] == ["systemctl", "stop"]], \
@@ -1053,7 +1063,7 @@ def test_deploy_reasserts_root_ownership_before_anything_runs_it(
 
     chown = index_of(lambda c: c[:2] == ["chown", "-R"] and "root:root" in c)
     chmod = index_of(lambda c: c[:2] == ["chmod", "-R"] and any("go-w" in a for a in c))
-    installer = index_of(lambda c: any("install.sh" in arg for arg in c))
+    installer = index_of(lambda c: runs_installer(c))
     # Copies INTO THE PREFIX: the spool's `install -d` deliberately lands
     # after the chown, and holds no payload.
     last_copy = max(i for i, c in enumerate(calls)
@@ -1104,7 +1114,7 @@ def test_the_ownership_check_runs_again_after_the_installer(tmp_path,
 
     assert deploy.system_execute(_args(tmp_path)) == 0
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert len(checked) >= 2, "the check runs once, before install.sh"
     assert any(at > installer for at in checked), \
         "no ownership check after install.sh created $prefix/bin"
@@ -1121,7 +1131,7 @@ def test_deploy_system_executes_when_root_and_approved(tmp_path, monkeypatch):
 
     assert any(c[0] == "install" and args.prefix in c for c in calls), calls
     assert any(
-        any("install.sh" in arg for arg in c)
+        runs_installer(c)
         and "--system" in c and "--dry-run" not in c
         for c in calls), calls
     assert any(c[:2] == ["systemctl", "daemon-reload"] for c in calls)
@@ -1158,7 +1168,7 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
 
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 0
-    installer = next(c for c in calls if any("install.sh" in a for a in c))
+    installer = next(c for c in calls if runs_installer(c))
     assert installer == [deploy.TRUSTED_SH,
                          os.path.join(args.prefix, "shim", "install.sh"),
                          "--system"], installer
@@ -1166,7 +1176,7 @@ def test_execute_runs_the_deployed_installer_without_path_flags(
     pass_uninstall_checks(monkeypatch, args.prefix)
     calls.clear()
     assert deploy.system_uninstall(args) == 0
-    teardown = next(c for c in calls if any("install.sh" in a for a in c))
+    teardown = next(c for c in calls if runs_installer(c))
     assert teardown == [deploy.TRUSTED_SH,
                         os.path.join(args.prefix, "shim", "install.sh"),
                         "--uninstall"], teardown
@@ -1284,7 +1294,7 @@ def test_a_hook_proof_failure_does_not_bypass_the_ownership_gate(
     def unowned_after_install(root, uid=0):
         # The same check runs once BEFORE install.sh (exit 5, and it removes
         # the payload); only the run after it is under test here.
-        ran = any("install.sh" in a for c in calls for a in c)
+        ran = any(runs_installer(c) for c in calls)
         return [(root, "owner", "owned by uid 1000")] if ran else []
 
     monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
@@ -1303,7 +1313,7 @@ def _exit_9_text(tmp_path, monkeypatch, capsys, offender):
     calls = []
 
     def unowned_after_install(root, uid=0):
-        ran = any("install.sh" in a for c in calls for a in c)
+        ran = any(runs_installer(c) for c in calls)
         return [(offender(root), "owner", "owned by uid 1000")] if ran else []
 
     monkeypatch.setattr(deploy, "unowned_by", unowned_after_install)
@@ -1976,13 +1986,13 @@ def _rewrite_lock(payload, **fields):
         json.dump(lock, fh)
 
 
-def _preview_payload(module, monkeypatch, capsys, root=False):
+def _preview_payload(module, monkeypatch, capsys, root=False,
+                     preflight=lambda args, privileged, out=None: (0, [])):
     """system_preview() over the module's own payload, with preflight passed
     and every command recorded rather than run: what is under test is the
     payload check alone."""
     monkeypatch.setattr(module, "_is_root", lambda: root)
-    monkeypatch.setattr(module, "preflight",
-                        lambda args, privileged, out=None: (0, []))
+    monkeypatch.setattr(module, "preflight", preflight)
     monkeypatch.setattr(module, "run", recording_run([]))
     args = argparse.Namespace(dry_run=True, **module.default_paths())
     rc = module.system_preview(args)
@@ -1996,6 +2006,43 @@ def test_the_example_payload_matches_its_own_record(tmp_path, monkeypatch):
     module = _payload_deploy(_payload_copy(tmp_path), tmp_path, monkeypatch)
     assert module.payload_blockers(module.REPO, privileged=False) == ([], [])
     assert module.payload_blockers(module.REPO, privileged=True) == ([], [])
+
+
+def test_a_regular_file_where_a_directory_entry_should_be_is_named_as_one(
+        tmp_path, monkeypatch):
+    """The wrong-type line names what the entry IS. `_irregular_kind()` is
+    shared by the dry run's check and the install's lstat refusal, and once
+    answered "not a regular file" for anything but a link or a directory, so
+    this line read "is not a regular file, not a directory"."""
+    payload = _payload_copy(tmp_path)
+    shutil.rmtree(os.path.join(payload, "shim"))
+    with open(os.path.join(payload, "shim"), "w") as handle:
+        handle.write("not a directory\n")
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    blocked, _unknown = module.payload_blockers(module.REPO, privileged=False)
+    assert "wrong type: shim is a regular file, not a directory" in blocked, \
+        blocked
+
+
+@pytest.mark.parametrize("mode, kind", [
+    (stat.S_IFLNK | 0o777, "a symlink"),
+    (stat.S_IFDIR | 0o755, "a directory"),
+    (stat.S_IFREG | 0o644, "a regular file"),
+    (stat.S_IFIFO | 0o644, "a fifo"),
+    (stat.S_IFSOCK | 0o755, "a socket"),
+    (stat.S_IFCHR | 0o666, "a character device"),
+    (stat.S_IFBLK | 0o660, "a block device"),
+    # A file-type field no predicate claims: the mode is all that is left
+    # to name it by.
+    (0o030644, "of mode 030644"),
+], ids=["link", "dir", "reg", "fifo", "sock", "chr", "blk", "unknown"])
+def test_the_wrong_type_line_names_every_kind(mode, kind):
+    """Every name `_irregular_kind()` can give, pinned one by one: the dry
+    run's check and the install's lstat refusal both print it, and only the
+    fifo, link and regular-file cases can be built on disk by an ordinary
+    user. Fed an lstat-shaped result, since a device node needs root."""
+    info = types.SimpleNamespace(st_mode=mode)
+    assert deploy._irregular_kind(info) == kind
 
 
 def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
@@ -2012,6 +2059,31 @@ def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
     assert rc == 6, (out, err)
     assert "shim/guard.sh" in err, err
     assert "differs: shim/guard.sh" in err, err
+    assert "Run as root" not in out, out
+
+
+def test_the_dry_run_names_a_truncated_payload_when_preflight_refuses_too(
+        tmp_path, monkeypatch, capsys):
+    """Issue #113. A preflight refusal used to end the dry run before the
+    payload check, so a truncated copy was reported only on the run after
+    the first cause was fixed. Both are named in one run now, still exit 6
+    and still with no command advertised. Before the fix the preflight line
+    is there and `differs: shim/guard.sh` is not."""
+    payload = _payload_copy(tmp_path)
+    _truncate(os.path.join(payload, "shim", "guard.sh"))
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+
+    def refusing_preflight(args, privileged, out=None):
+        sys.stderr.write("deploy.py: refusing: a preflight check refused\n")
+        return 6, [module.Check("arguments", None, module.CHECK_BLOCKED,
+                                "a preflight check refused")]
+
+    rc, out, err = _preview_payload(module, monkeypatch, capsys,
+                                    preflight=refusing_preflight)
+    assert rc == 6, (out, err)
+    assert "a preflight check refused" in err, err
+    assert "differs: shim/guard.sh" in err, err
+    assert err.count("so no command is advertised here") == 1, err
     assert "Run as root" not in out, out
 
 
@@ -2101,8 +2173,8 @@ def test_a_fifo_in_the_payload_is_refused_not_opened(tmp_path):
         [sys.executable, "-c", script, os.path.join(payload, "deploy.py")],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert "wrong type: reaper.py is not a regular file" in proc.stdout, \
-        proc.stdout
+    assert ("wrong type: reaper.py is a fifo, not a regular file"
+            in proc.stdout), proc.stdout
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads a mode-000 file")
@@ -2204,6 +2276,121 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
     assert calls and not [c for c in calls if c[0] == "systemctl"], calls
     assert not os.path.exists(args.prefix)
     assert "differs: shim/guard.sh" in capsys.readouterr().err
+
+
+def _fifo_for_reaper(payload):
+    os.unlink(os.path.join(payload, "reaper.py"))
+    os.mkfifo(os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is a fifo, not a regular file"
+
+
+def _symlink_for_reaper(payload):
+    os.rename(os.path.join(payload, "reaper.py"),
+              os.path.join(payload, "reaper.real"))
+    os.symlink("reaper.real", os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is a symlink, not a regular file"
+
+
+@pytest.mark.parametrize("damage", [_fifo_for_reaper, _symlink_for_reaper],
+                         ids=["fifo", "symlink"])
+def test_a_file_entry_that_is_not_a_regular_file_is_refused_before_any_copy(
+        damage, tmp_path, monkeypatch, capsys):
+    """Issue #108. `install` opens its source, so a FIFO where reaper.py
+    should be hung the install's copy before the snapshot check could name
+    it, and a symlink there was followed. Both are now refused by lstat with
+    the dry run's line, exit 6, before the snapshot is created, before any
+    copy and before any systemctl. Through system_execute(), with the copies
+    real; under an alarm, so a regression fails rather than hangs the suite.
+    Before the fix the FIFO case trips the alarm."""
+    found = []
+    module = _damage_and_stage(lambda p: found.append(damage(p)), tmp_path,
+                               monkeypatch)
+    expected = found[0]
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    def hung(_signum, _frame):
+        raise AssertionError("the install's copy blocked on the payload")
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            module.system_execute(args)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert exc.value.code == 6
+    assert calls == [], calls
+    assert os.listdir(module.STAGING_PARENT) == []
+    err = capsys.readouterr().err
+    assert expected in err, err
+    assert "does not match its own site.lock.json" in err, err
+
+
+def test_a_staged_guard_that_lost_its_execute_bit_is_installed_executable(
+        tmp_path, monkeypatch):
+    """`cp -a` keeps the source's mode and `a+rX` adds execute only where
+    someone has it, so a payload copied without its modes (an `scp` without
+    `-p`) installed a 0644 guard.sh behind every shim on PATH, and the shell
+    ran the real tool instead. The copies and every chmod are real; chown and
+    systemctl are recorded, since a test cannot make a file root's."""
+    payload = _payload_copy(tmp_path)
+    for rel, _mode in deploy.PAYLOAD_MEMBER_MODES:
+        os.chmod(os.path.join(payload, *rel.split("/")), 0o644)
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(module, "unowned_by", lambda root, uid=0: [])
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp", "rm", "chmod"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    assert module.system_execute(args) == 0
+    for rel, mode in deploy.PAYLOAD_MEMBER_MODES:
+        installed = os.path.join(args.prefix, *rel.split("/"))
+        got = stat.S_IMODE(os.stat(installed).st_mode)
+        assert got == int(mode, 8), "%s installed %04o" % (rel, got)
+
+
+def test_the_directly_executed_members_are_the_ones_the_build_makes_0755():
+    """deploy.py restates the build's list because the node cannot import
+    the build; this keeps the two from drifting apart."""
+    dirs = [rel for rel, is_dir, _mode in deploy.PAYLOAD_SOURCES if is_dir]
+    built = sorted(rel for rel in build.EXECUTABLE
+                   if any(rel.startswith(d + "/") for d in dirs))
+    assert sorted(rel for rel, _ in deploy.PAYLOAD_MEMBER_MODES) == built
+    assert set(mode for _rel, mode in deploy.PAYLOAD_MEMBER_MODES) == \
+        {"%04o" % build.MODE_EXEC}
 
 
 # --------------------------------------------------------------------------
@@ -2331,7 +2518,7 @@ def test_uninstall_refuses_when_the_enablement_query_itself_fails(tmp_path,
     calls = []
     monkeypatch.setattr(deploy, "run", _query_fails(calls))
     assert deploy.system_uninstall(args) == 7
-    assert not any("install.sh" in a for c in calls for a in c), \
+    assert not any(runs_installer(c) for c in calls), \
         "nothing may be torn down while enablement could not be determined"
 
 
@@ -2350,7 +2537,7 @@ def test_uninstall_stops_the_service_not_just_the_timer(tmp_path, monkeypatch):
     probe = next(i for i, c in enumerate(calls)
                  if c[:2] == ["systemctl", "is-active"])
     removal = next(i for i, c in enumerate(calls)
-                   if any("install.sh" in a for a in c))
+                   if runs_installer(c))
     assert probe < removal, "confirm it is stopped before removing the shims"
 
 
@@ -2365,7 +2552,7 @@ def test_uninstall_verifies_the_timer_not_only_the_service(tmp_path,
         deploy, "run",
         recording_run(calls, active_units=(deploy.TIMER_UNIT,)))
     assert deploy.system_uninstall(args) == 7
-    assert not any("install.sh" in a for c in calls for a in c), \
+    assert not any(runs_installer(c) for c in calls), \
         "nothing may be removed while the timer is live"
 
     calls.clear()
@@ -2378,7 +2565,7 @@ def test_uninstall_verifies_the_timer_not_only_the_service(tmp_path,
     calls.clear()
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_uninstall(args) == 0
-    assert any("install.sh" in a for c in calls for a in c)
+    assert any(runs_installer(c) for c in calls)
 
 
 # --------------------------------------------------------------------------
@@ -2421,6 +2608,98 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
     for path in deploy.enabled_hook_files(args):
         assert path in err, (path, err)
     assert os.path.join(args.prefix, "bin") in err
+
+
+def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
+        tmp_path, monkeypatch, capsys):
+    """Issue #110. The helper was checked after `systemctl disable --now`
+    and `systemctl stop`, so its refusal (exit 5) left Layer 2 down and
+    Layer 1 installed. It is now checked before the first command, like
+    every other uninstall refusal: exit 5, no command at all, and the text
+    no longer says the units are stopped. Before the fix both systemctl
+    calls are recorded."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "wrapped_names.sh"))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 5
+    assert calls == [], calls
+    err = capsys.readouterr().err
+    assert "refusing to run the teardown helper" in err, err
+    assert "Nothing has been touched" in err, err
+    assert "already stopped" not in err, err
+
+
+def test_a_refused_uninstall_helper_names_the_spool_memory(
+        tmp_path, monkeypatch, capsys):
+    """The hand route stands in for install.sh --uninstall, which also
+    removes the relink's memory from the spool; the route says so."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert os.path.join(args.spool_dir, deploy.UNCOVERED_NAME) in err, err
+
+
+def test_deploy_and_install_name_the_same_spool_memory():
+    """The hand route names the file install.sh --uninstall removes."""
+    with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
+        text = fh.read()
+    assert "\nUNCOVERED_NAME=%s\n" % deploy.UNCOVERED_NAME in text
+
+
+def test_a_refused_uninstall_helper_gives_the_journal_revoke_commands(
+        tmp_path, monkeypatch, capsys):
+    """An earlier deploy's drop-in records a journal grant. The refusal
+    names the drop-in and the setfacl that revokes the grant under every
+    journal root, the same command the teardown itself would run."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+
+    assert deploy.system_uninstall(args) == 5
+    assert calls == [], calls
+    err = capsys.readouterr().err
+    assert _dropin(args) in err, err
+    for root in deploy.JOURNAL_ROOTS:
+        # The command written out, not rebuilt from journal_revoke_command(),
+        # so a change to that function's flags is caught here too.
+        command = ("setfacl -R -P -x group:31337,default:group:31337 %s"
+                   % root)
+        assert "`%s`" % command in err, (command, err)
+
+
+def test_the_printed_journal_revoke_is_quoted_for_a_shell(
+        tmp_path, monkeypatch, capsys):
+    """The refusal's setfacl is for root to paste: a root with a space in it
+    must come out as one shell word."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "JOURNAL_ROOTS", ("/var/log/a journal",))
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert ("`setfacl -R -P -x group:31337,default:group:31337 "
+            "'/var/log/a journal'`") in err, err
 
 
 def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
@@ -2501,7 +2780,7 @@ def test_uninstall_validates_every_hook_file_it_writes_not_only_the_prefix(
     regardless of its gate."""
     rc, calls, secret, link = _uninstall_with_a_planted_link(tmp_path, monkeypatch, attr)
     assert rc == 6
-    assert not any("install.sh" in a for c in calls for a in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
     assert secret.stat().st_mode & 0o777 == 0o600
     assert os.path.islink(str(link)), "the link must be untouched"
 
@@ -2581,7 +2860,7 @@ def test_uninstall_refuses_an_unmarked_directory(tmp_path, monkeypatch):
     (shared / "bin").mkdir(parents=True)
     monkeypatch.setattr(deploy, "DEFAULT_PREFIX", str(shared))
     assert deploy.system_uninstall(_args(tmp_path)) == 6
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
 
 
 # The installed configuration must be this payload's (ADR-0027). Every case
@@ -2618,7 +2897,7 @@ def test_uninstall_proceeds_when_the_installed_config_is_this_payloads(
     calls = []
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_uninstall(args) == 0
-    assert any("install.sh" in a for c in calls for a in c)
+    assert any(runs_installer(c) for c in calls)
 
 
 def test_uninstall_refuses_an_install_of_another_configuration(
@@ -2727,7 +3006,7 @@ def test_uninstall_refuses_a_symlinked_prefix(tmp_path, monkeypatch):
     assert [why for _, why in chain if "symlink" in why], chain
 
     assert deploy.system_uninstall(_args(tmp_path, prefix=str(link))) == 6
-    assert not any("install.sh" in arg for c in calls for arg in c), calls
+    assert not any(runs_installer(c) for c in calls), calls
 
 
 def test_uninstall_does_not_claim_removal_it_did_not_achieve(
@@ -2744,12 +3023,12 @@ def test_uninstall_does_not_claim_removal_it_did_not_achieve(
             return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
         if cmd[:2] == ["systemctl", "show"]:
             return subprocess.CompletedProcess(cmd, 0, "disabled\n", "")
-        rc = 1 if any("install.sh" in a for a in cmd) else 0
+        rc = 1 if runs_installer(cmd) else 0
         return subprocess.CompletedProcess(cmd, rc, "", "")
 
     monkeypatch.setattr(deploy, "run", failing_run)
     assert deploy.system_uninstall(args) == 8
-    assert any("install.sh" in a for c in calls for a in c), calls
+    assert any(runs_installer(c) for c in calls), calls
 
 
 def test_uninstall_refuses_a_prefix_that_would_delete_system_binaries(
@@ -3317,7 +3596,7 @@ def test_the_audit_directory_is_created_02750_with_its_group_before_the_installe
     assert not [c for c in calls if c[:2] == ["install", "-d"]
                 and c[-1] == args.spool_dir], calls
     installer = next(i for i, c in enumerate(calls)
-                     if any("install.sh" in a for a in c))
+                     if runs_installer(c))
     assert created[0] < installer, calls
 
     info = os.lstat(args.spool_dir)
@@ -4075,6 +4354,41 @@ def test_the_preview_refuses_a_symlinked_hook_file(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "run", recording_run(calls))
     assert deploy.system_execute(args) == 6
     assert calls == [], calls
+
+
+@pytest.mark.parametrize("arm", ["symlinked", "foreign-owned"])
+def test_a_path_refusal_goes_to_preflights_out_and_not_to_stderr(
+        tmp_path, monkeypatch, capsys, arm):
+    """`preflight()` reports through `out` so a caller can capture the whole
+    preview. The root-write path refusals were the exception, written straight
+    to `sys.stderr`: a caller holding `out` saw every refusal but these.
+
+    One case per hook-file arm of `validate_root_write_paths()`: a link
+    (`irregular_target`) and a file this test's user owns (`unowned_by`,
+    left real for that case). The chain arm is pinned by
+    `test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it`."""
+    real_unowned_by = deploy.unowned_by
+    pass_prefix_checks(monkeypatch)
+    args = _args(tmp_path)
+    if arm == "symlinked":
+        target = tmp_path / "real-bashrc"
+        target.write_text("# a hook file under a dotfile manager\n")
+        os.symlink(str(target), args.bashrc_file)
+        expected = "is a symlink"
+    else:
+        # A regular file owned by the unprivileged test user, not by root.
+        with open(args.bashrc_file, "w") as handle:
+            handle.write("# somebody else's\n")
+        monkeypatch.setattr(deploy, "unowned_by", real_unowned_by)
+        expected = "It is sourced as root"
+
+    out = io.StringIO()
+    rc, _checks = deploy.preflight(args, privileged=True, out=out)
+    assert rc == 6
+    assert "refusing bashrc_file" in out.getvalue(), out.getvalue()
+    assert expected in out.getvalue(), out.getvalue()
+    captured = capsys.readouterr()
+    assert captured.err == "" and captured.out == "", captured
 
 
 def test_the_preview_refuses_a_populated_prefix_that_is_not_its_own(
@@ -5003,9 +5317,7 @@ def test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it(
     assert rc == 0
     monkeypatch.setattr(deploy, "TRUSTED_GROUPS", ())
     err = io.StringIO()
-    # validate_root_write_paths() writes to sys.stderr, not to `out`.
-    with contextlib.redirect_stderr(err):
-        rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
+    rc, _checks = deploy.preflight(_args(tmp_path), privileged=True, out=err)
     assert rc == 6 and shared in err.getvalue(), err.getvalue()
 
 

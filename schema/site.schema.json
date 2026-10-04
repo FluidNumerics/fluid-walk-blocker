@@ -374,7 +374,7 @@
         "logger": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/logger",
-          "description": "Writes the shim's escape-hatch and the reconcile's hook-state records to journald under the `walk-blocker` tag."
+          "description": "Writes the shim's escape-hatch and the reconcile's hook-state records to journald under the `walk-blocker` tag. Must accept `--size` (util-linux `logger` does; BusyBox `logger` does not): a logger that rejects it drops every record."
         },
         "awk": {
           "$ref": "#/$defs/sink_path",
