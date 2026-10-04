@@ -31,6 +31,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 
 import pytest
 
@@ -2021,6 +2022,27 @@ def test_a_regular_file_where_a_directory_entry_should_be_is_named_as_one(
     blocked, _unknown = module.payload_blockers(module.REPO, privileged=False)
     assert "wrong type: shim is a regular file, not a directory" in blocked, \
         blocked
+
+
+@pytest.mark.parametrize("mode, kind", [
+    (stat.S_IFLNK | 0o777, "a symlink"),
+    (stat.S_IFDIR | 0o755, "a directory"),
+    (stat.S_IFREG | 0o644, "a regular file"),
+    (stat.S_IFIFO | 0o644, "a fifo"),
+    (stat.S_IFSOCK | 0o755, "a socket"),
+    (stat.S_IFCHR | 0o666, "a character device"),
+    (stat.S_IFBLK | 0o660, "a block device"),
+    # A file-type field no predicate claims: the mode is all that is left
+    # to name it by.
+    (0o030644, "of mode 030644"),
+], ids=["link", "dir", "reg", "fifo", "sock", "chr", "blk", "unknown"])
+def test_the_wrong_type_line_names_every_kind(mode, kind):
+    """Every name `_irregular_kind()` can give, pinned one by one: the dry
+    run's check and the install's lstat refusal both print it, and only the
+    fifo, link and regular-file cases can be built on disk by an ordinary
+    user. Fed an lstat-shaped result, since a device node needs root."""
+    info = types.SimpleNamespace(st_mode=mode)
+    assert deploy._irregular_kind(info) == kind
 
 
 def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
