@@ -9,18 +9,13 @@ every `<prefix>/X`, `PREFIX/X` and `$PREFIX/X` in the tracked markdown and
 requires `X` to be something the install creates: an entry of the
 deployer's own `INSTALLED_ENTRIES`, or `bin`, the farm `install.sh` builds.
 
-Tracked files only, by `git ls-files`: walking the tree would read a stale
-README out of `.venv` or a second copy out of a worktree (#79).
-`examples/payload/` is excluded because `build --check` already proves it
-identical to these sources.
+Tracked files only, outside `examples/payload/`; `_tracked.py` says why.
 """
 import os
 import re
-import subprocess
-
-import pytest
 
 from _deploy_helpers import load_stamped_deploy, site_values
+from _tracked import tracked_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX_PATH = re.compile(r"(?:<prefix>|\$PREFIX|\bPREFIX)/([A-Za-z0-9_.-]+)")
@@ -28,16 +23,6 @@ PREFIX_PATH = re.compile(r"(?:<prefix>|\$PREFIX|\bPREFIX)/([A-Za-z0-9_.-]+)")
 CREATED_BY_INSTALL_SH = {"bin"}
 
 deploy = load_stamped_deploy(site_values())
-
-
-def _tracked_markdown():
-    try:
-        proc = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--", "*.md"],
-                              stdout=subprocess.PIPE, check=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        pytest.skip("not a git checkout, so tracked files are unknown: %s" % exc)
-    return sorted(p for p in proc.stdout.decode().split("\0")
-                  if p and not p.startswith("examples/payload/"))
 
 
 def prefix_paths(text):
@@ -55,10 +40,8 @@ def test_the_scan_sees_the_shape_it_hunts():
 
 def test_every_prefix_path_in_prose_is_installed():
     allowed = set(deploy.INSTALLED_ENTRIES) | CREATED_BY_INSTALL_SH
-    files = _tracked_markdown()
-    assert files, "git ls-files found no markdown"
     bad = []
-    for rel in files:
+    for rel in tracked_files("*.md"):
         with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
             text = fh.read()
         bad.extend("%s:%d: <prefix>/%s" % (rel, line, name)
