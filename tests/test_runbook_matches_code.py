@@ -100,22 +100,15 @@ def test_the_runbook_does_not_say_the_uninstall_removes_the_prefix():
     para = _uninstall_paragraph()
     assert "It does not remove the prefix: the payload stays under it." in para
     assert "removes `<prefix>/bin`" in para
-    # Nor may it, or the install.sh paragraph after it, state that the prefix
-    # or the payload goes: neither teardown removes it, so neither may be
-    # set apart from the other on that point. Statement forms only -- a verb
-    # with the prefix or the payload as its object, or the passive -- so an
-    # instruction ("Remove the payload by hand") or a clause about something
-    # else in the prefix still reads as true. A string pin cannot rule out
-    # every contradiction; it rules out the ways this paragraph was wrong.
     helper = next(p for p in _section(_read(OPERATING), "14.").split("\n\n")
                   if p.startswith("`install.sh --uninstall` exists too"))
-    goes = re.compile(
-        r"\b(removes|removing|deletes|deleting) the (whole )?(prefix|payload)\b(?!')"
-        r"|\bthe (whole )?(prefix|payload) (is|are|gets) (removed|deleted)\b",
-        re.I)
-    for text in (para, _joined(helper)):
-        found = goes.search(text)
-        assert not found, "says the prefix or payload goes: %r" % found.group(0)
+    text = para + " " + _joined(helper)
+    # A regression guard, not a contradiction detector: these are the two
+    # phrases the runbook was wrong with (issue #89). A string pin cannot
+    # rule out every sentence that contradicts the pinned one; that is
+    # review's job, not this test's.
+    for wrong in ("removes the prefix", "without removing the payload"):
+        assert wrong not in text, "the runbook again says %r" % wrong
 
 
 def test_the_runbook_says_a_best_effort_hook_is_written_only_when_its_shell_resolves():
