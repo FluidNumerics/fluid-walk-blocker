@@ -2307,7 +2307,10 @@ def _irregular_kind(info):
         return "a symlink"
     if stat.S_ISDIR(info.st_mode):
         return "a directory"
-    return "not a regular file"
+    for predicate, name in _FILE_KINDS:
+        if predicate(info.st_mode):
+            return name
+    return "of mode %06o" % info.st_mode
 
 
 def payload_blockers(root, privileged):
@@ -2517,7 +2520,9 @@ def stage_payload(env=None, dry_run=False):
     `payload_blockers()` has judged the SNAPSHOT against its own record,
     which happens here, after the copies and before the caller's first
     `systemctl` (ADR-0029). Any difference, including a source the copy
-    could not find, is exit 6 with nothing touched. The snapshot is what is
+    could not find, is exit 6 with nothing touched. A file entry that is not
+    a regular file is refused before the snapshot is created, by lstat,
+    since `install` would block opening a FIFO there. The snapshot is what is
     hashed, never the payload directory: that would be a second, later read
     of user-owned bytes.
     """
@@ -2543,6 +2548,31 @@ def stage_payload(env=None, dry_run=False):
     chain = untrusted_prefix_chain(STAGING_PARENT)
     if chain:
         write_untrusted_staging_refusal(STAGING_PARENT, chain)
+        raise SystemExit(6)
+    # Each FILE entry's type, by lstat, before anything is created or copied
+    # (issue #108). `install` opens its source, so a FIFO there blocks the
+    # copy until something writes to it, and the snapshot check below never
+    # runs; a symlink there is followed and its target's bytes copied. Both
+    # are refused with the dry run's own line. A metadata read, not a second
+    # read of the bytes, so ADR-0006's "read once" is untouched. Directory
+    # entries need no such look: `cp -a` recreates a FIFO, a link or a
+    # device inside them as one, without opening it, and the snapshot check
+    # names it. An entry lstat cannot read -- missing, or behind a directory
+    # it cannot search -- is left to that check too: the copy fails on the
+    # same path.
+    irregular = []
+    for relative, is_dir, _mode in PAYLOAD_SOURCES:
+        if is_dir:
+            continue
+        try:
+            info = os.lstat(os.path.join(REPO, relative))
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            irregular.append("wrong type: %s is %s, not a regular file"
+                             % (relative, _irregular_kind(info)))
+    if irregular:
+        write_payload_refusal(REPO, irregular)
         raise SystemExit(6)
     staging = tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=STAGING_PARENT)
     os.chmod(staging, 0o700)

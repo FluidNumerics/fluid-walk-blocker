@@ -26,10 +26,12 @@ import os
 import py_compile
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import types
 
 import pytest
 
@@ -2006,6 +2008,43 @@ def test_the_example_payload_matches_its_own_record(tmp_path, monkeypatch):
     assert module.payload_blockers(module.REPO, privileged=True) == ([], [])
 
 
+def test_a_regular_file_where_a_directory_entry_should_be_is_named_as_one(
+        tmp_path, monkeypatch):
+    """The wrong-type line names what the entry IS. `_irregular_kind()` is
+    shared by the dry run's check and the install's lstat refusal, and once
+    answered "not a regular file" for anything but a link or a directory, so
+    this line read "is not a regular file, not a directory"."""
+    payload = _payload_copy(tmp_path)
+    shutil.rmtree(os.path.join(payload, "shim"))
+    with open(os.path.join(payload, "shim"), "w") as handle:
+        handle.write("not a directory\n")
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    blocked, _unknown = module.payload_blockers(module.REPO, privileged=False)
+    assert "wrong type: shim is a regular file, not a directory" in blocked, \
+        blocked
+
+
+@pytest.mark.parametrize("mode, kind", [
+    (stat.S_IFLNK | 0o777, "a symlink"),
+    (stat.S_IFDIR | 0o755, "a directory"),
+    (stat.S_IFREG | 0o644, "a regular file"),
+    (stat.S_IFIFO | 0o644, "a fifo"),
+    (stat.S_IFSOCK | 0o755, "a socket"),
+    (stat.S_IFCHR | 0o666, "a character device"),
+    (stat.S_IFBLK | 0o660, "a block device"),
+    # A file-type field no predicate claims: the mode is all that is left
+    # to name it by.
+    (0o030644, "of mode 030644"),
+], ids=["link", "dir", "reg", "fifo", "sock", "chr", "blk", "unknown"])
+def test_the_wrong_type_line_names_every_kind(mode, kind):
+    """Every name `_irregular_kind()` can give, pinned one by one: the dry
+    run's check and the install's lstat refusal both print it, and only the
+    fifo, link and regular-file cases can be built on disk by an ordinary
+    user. Fed an lstat-shaped result, since a device node needs root."""
+    info = types.SimpleNamespace(st_mode=mode)
+    assert deploy._irregular_kind(info) == kind
+
+
 def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
                                                  capsys):
     """Issue #84's oracle. A copy cut short, the way an interrupted scp or
@@ -2134,8 +2173,8 @@ def test_a_fifo_in_the_payload_is_refused_not_opened(tmp_path):
         [sys.executable, "-c", script, os.path.join(payload, "deploy.py")],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert "wrong type: reaper.py is not a regular file" in proc.stdout, \
-        proc.stdout
+    assert ("wrong type: reaper.py is a fifo, not a regular file"
+            in proc.stdout), proc.stdout
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads a mode-000 file")
@@ -2237,6 +2276,71 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
     assert calls and not [c for c in calls if c[0] == "systemctl"], calls
     assert not os.path.exists(args.prefix)
     assert "differs: shim/guard.sh" in capsys.readouterr().err
+
+
+def _fifo_for_reaper(payload):
+    os.unlink(os.path.join(payload, "reaper.py"))
+    os.mkfifo(os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is a fifo, not a regular file"
+
+
+def _symlink_for_reaper(payload):
+    os.rename(os.path.join(payload, "reaper.py"),
+              os.path.join(payload, "reaper.real"))
+    os.symlink("reaper.real", os.path.join(payload, "reaper.py"))
+    return "wrong type: reaper.py is a symlink, not a regular file"
+
+
+@pytest.mark.parametrize("damage", [_fifo_for_reaper, _symlink_for_reaper],
+                         ids=["fifo", "symlink"])
+def test_a_file_entry_that_is_not_a_regular_file_is_refused_before_any_copy(
+        damage, tmp_path, monkeypatch, capsys):
+    """Issue #108. `install` opens its source, so a FIFO where reaper.py
+    should be hung the install's copy before the snapshot check could name
+    it, and a symlink there was followed. Both are now refused by lstat with
+    the dry run's line, exit 6, before the snapshot is created, before any
+    copy and before any systemctl. Through system_execute(), with the copies
+    real; under an alarm, so a regression fails rather than hangs the suite.
+    Before the fix the FIFO case trips the alarm."""
+    found = []
+    module = _damage_and_stage(lambda p: found.append(damage(p)), tmp_path,
+                               monkeypatch)
+    expected = found[0]
+    monkeypatch.setattr(module, "_is_root", lambda: True)
+    monkeypatch.setattr(module, "preflight",
+                        lambda args, privileged, out=None: (0, []))
+    real_run, calls = module.run, []
+    fake = recording_run(calls)
+
+    def copies_for_real(cmd, check=True, capture=True, dry_run=False,
+                        env=None):
+        if cmd[0] in ("install", "cp"):
+            calls.append(cmd)
+            return real_run(cmd, check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return fake(cmd, check=check, capture=capture, dry_run=dry_run,
+                    env=env)
+
+    def hung(_signum, _frame):
+        raise AssertionError("the install's copy blocked on the payload")
+
+    monkeypatch.setattr(module, "run", copies_for_real)
+    args = argparse.Namespace(dry_run=False, **module.default_paths())
+    args.spool_gid, args.spool_trusted_gids = os.getgid(), ()
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            module.system_execute(args)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert exc.value.code == 6
+    assert calls == [], calls
+    assert os.listdir(module.STAGING_PARENT) == []
+    err = capsys.readouterr().err
+    assert expected in err, err
+    assert "does not match its own site.lock.json" in err, err
 
 
 def test_a_staged_guard_that_lost_its_execute_bit_is_installed_executable(
