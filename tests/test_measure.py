@@ -596,9 +596,9 @@ def test_a_decimal_budget_is_compared_as_a_decimal(
     fraction (1 would refuse), and exceeds 1.2 or 1.3 only if the overhead
     keeps its own (1 would pass). Each gate gets both directions.
 
-    The budgets also sit between the two overheads, so a gate that read the
-    other gate's overhead decides `both-clear` and `guarded-refuses` the
-    other way."""
+    The two 1.3 budgets -- fast in `both-clear`, guarded in
+    `guarded-refuses` -- sit between the two overheads, so a gate that read
+    the other gate's overhead decides those two cases the other way."""
     # The ceiling is set rather than inherited, so the 8.0 % scripted drift is
     # under it by construction and not by whatever the default is today.
     env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"],
