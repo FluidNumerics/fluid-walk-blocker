@@ -247,6 +247,9 @@ def test_a_ratio_run_that_compared_nothing_is_not_reported_as_green(tmp_path):
     assert "COMPARED NOTHING" in summary and "0/8" in summary, summary
     assert "pair 1 DISCARDED" in summary, \
         "the summary hides which check discarded"
+    # The verdict line carries the count too, from its own sed, so this is
+    # the only assertion that sees the grep keep measure.sh's own line.
+    assert "=== 0/8 usable pairs ===" in summary, summary
     # measure.sh's stderr is captured in the same log, and its explanation
     # names DISCARDED in a sentence; the summary carries the lines, not prose.
     assert "line above says" not in summary, summary
@@ -262,4 +265,5 @@ def test_a_ratio_run_that_compared_carries_no_warning(tmp_path):
     assert rc == 0
     assert "::warning" not in out, out
     assert "compared 8/8 usable pairs" in summary, summary
+    assert "=== 8/8 usable pairs ===" in summary, summary
     assert "fast-path ratio (median)" in summary, summary
