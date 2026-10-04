@@ -23,6 +23,7 @@ machine and the allowed path is the one timed.
 """
 
 import os
+import re
 import shutil
 import subprocess
 
@@ -583,6 +584,80 @@ def test_a_decimal_ceiling_is_accepted(slow_guard):
     assert "within the 1000.5 ms budget" in r.stdout
 
 
+@pytest.fixture
+def scripted_clock(tmp_path):
+    """A `date` whose every bench reads a duration chosen in advance.
+
+    Calls alternate start, end, start, end, one pair per `bench()`. A start
+    call advances the clock by 1 ms and an end call by the next duration in the
+    list, in microseconds, so at N=1 each bench's reading is that duration
+    exactly. Single-guard mode benches eight times, in this order: baseline,
+    shim, two python floors, baseline again, guarded baseline, guarded with
+    one operand, guarded with ten. The list gives the shim overhead as
+    1.25 ms, the guarded overhead as 1.35 ms and the drift as 8.0 %, under
+    the 12 % ceiling the test sets, so the budget gates are the only thing
+    left to decide the run.
+
+    Every value that feeds a gate is distinct on purpose. With equal
+    overheads, a gate reading the other gate's overhead would pass; with
+    equal baselines, an overhead taken from the wrong baseline would too.
+    """
+    binned = tmp_path / "clockbin"
+    binned.mkdir()
+    counter = tmp_path / "calls"
+    stub = binned / "date"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "set -- 1000 2250 1000 1000 1080 1500 2850 3750\n"
+        'read -r k t < %s 2>/dev/null || { k=0; t=0; }\n'
+        "if [ $((k %% 2)) -eq 1 ]; then\n"
+        '    eval "d=\\${$((k / 2 + 1)):-1000}"\n'
+        "    t=$((t + d * 1000))\n"
+        "else\n"
+        "    t=$((t + 1000 * 1000))\n"
+        "fi\n"
+        'echo "$((k + 1)) $t" > %s\n'
+        'echo "$t"\n' % (counter, counter)
+    )
+    stub.chmod(0o755)
+    return str(binned)
+
+
+@pytest.mark.parametrize("budget, guarded_budget, rc, says", [
+    ("1.3", "1.4", 0, ["within the 1.3 ms budget",
+                       "guarded path within the 1.4 ms budget"]),
+    ("1.2", "1000", 1, ["measure.sh: shim overhead 1.25 ms exceeds the"]),
+    ("1000", "1.3", 1, ["measure.sh: guarded overhead 1.35 ms exceeds the"]),
+], ids=["both-clear", "fast-refuses", "guarded-refuses"])
+def test_a_decimal_budget_is_compared_as_a_decimal(
+        guard, scripted_clock, budget, guarded_budget, rc, says):
+    """`test_a_decimal_ceiling_is_accepted` proves the validator lets a
+    decimal through, and its pass line echoes the argument verbatim -- so a
+    gate that truncated or rounded either side inside the `awk` comparison
+    would still pass it. Here the overheads are known, 1.25 fast and 1.35
+    guarded: each clears its 1.3 or 1.4 budget only if the budget keeps its
+    fraction (1 would refuse), and exceeds 1.2 or 1.3 only if the overhead
+    keeps its own (1 would pass). Each gate gets both directions.
+
+    The two 1.3 budgets -- fast in `both-clear`, guarded in
+    `guarded-refuses` -- sit between the two overheads, so a gate that read
+    the other gate's overhead decides those two cases the other way."""
+    # The ceiling is set rather than inherited, so the 8.0 % scripted drift is
+    # under it by construction and not by whatever the default is today.
+    env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"],
+           "WALK_BLOCKER_MEASURE_DRIFT_PCT": "12"}
+    r = run_measure([guard, "1", budget, guarded_budget], env=env)
+    # The clock under test is the scripted one, not the machine's.
+    for row, value in (("shim overhead", r"1\.25 ms/call"),
+                       ("guarded overhead", r"1\.35 ms/call"),
+                       ("baseline drift", r"8\.0 %")):
+        assert re.search(r"^%s +%s$" % (row, value), r.stdout, re.M), r.stdout
+    assert r.returncode == rc, r.stdout + r.stderr
+    lines = (r.stderr if rc else r.stdout).splitlines()
+    for line in says:
+        assert line in lines, r.stdout + r.stderr
+
+
 def test_a_guard_that_does_not_exist_says_so_rather_than_blaming_the_mode(
         tmp_path):
     """`abspath()` built `/<basename>` out of a failed `cd`, so a mistyped
@@ -679,6 +754,11 @@ def test_the_absolute_budget_still_gates_in_single_guard_mode(slow_guard):
     r = run_measure([slow_guard, "1", "0", "0"], env=NO_DISCARD)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "exceeds the" in r.stderr and "0 ms budget" in r.stderr
+    # Both budgets are 0, and the guarded gate would refuse with the same exit
+    # and the same three fragments if the fast gate never fired. Only the fast
+    # gate puts "shim overhead" on STDERR; the table row of that name goes to
+    # stdout.
+    assert "shim overhead" in r.stderr, "the guarded gate gated, not the fast one"
 
 
 def test_a_budget_the_shim_clears_passes(slow_guard):

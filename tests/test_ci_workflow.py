@@ -23,6 +23,7 @@ import os
 # is about, reproduced inside the tests that enforce ADR-0022.
 import yaml
 
+from _tracked import tracked_files
 from conftest import ROOT
 
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "ci.yml")
@@ -160,36 +161,29 @@ def test_no_document_names_a_gate_job_that_does_not_exist():
     stale = []
     live = []
     scanned = 0
-    for base, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs
-                   if d not in {".git", "__pycache__", "node_modules"}
-                   and os.path.join(base, d) != os.path.join(ROOT, "examples", "payload")]
-        for name in sorted(files):
-            if not name.endswith((".md", ".py", ".yml", ".sh")):
-                continue
-            relative = os.path.relpath(os.path.join(base, name), ROOT)
-            if relative in exempt:
-                continue
-            scanned += 1
-            with open(os.path.join(base, name), encoding="utf-8", errors="replace") as fh:
-                for number, line in enumerate(fh, 1):
-                    for found in pattern.findall(line):
-                        (stale if found not in names else live).append(
-                            (relative, number, found))
+    for relative in tracked_files(suffixes=(".md", ".py", ".yml", ".sh")):
+        if relative in exempt:
+            continue
+        scanned += 1
+        with open(os.path.join(ROOT, relative), encoding="utf-8", errors="replace") as fh:
+            for number, line in enumerate(fh, 1):
+                for found in pattern.findall(line):
+                    (stale if found not in names else live).append(
+                        (relative, number, found))
     assert stale == [], (
         "a document names a gate job that is not in ci.yml (jobs are %s): %r"
         % (sorted(names & {STRUCTURAL, TERMS}), stale))
     # Anti-vacuity, and the reason this test needs it more than most: every
     # other assertion here fails closed on a bad parse, but this one asserts
-    # over a list built by a filesystem walk. A walk that reached nothing --
+    # over a list built from a file listing. A listing that reached nothing --
     # wrong root, an extension filter that stopped matching, an exemption that
     # grew -- leaves `stale` empty and passes while checking nothing.
     assert scanned > 10, (
-        "scanned only %d files; the walk is not reaching the tree, so the "
+        "scanned only %d files; the listing is not reaching the tree, so the "
         "assertion above passed over an empty list" % scanned)
     assert live, (
         "no reference to a gate job was found anywhere. The documentation does "
-        "name both halves, so finding none means the matcher or the walk has "
+        "name both halves, so finding none means the matcher or the listing has "
         "stopped working rather than that the tree is clean")
 
 
