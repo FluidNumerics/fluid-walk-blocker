@@ -209,6 +209,13 @@ is the exposure the operator already accepts by running the script at all.
 Automated review has proposed refusing a user-owned source three times; it
 is settled.
 
+The copy need not keep modes either. `scp` without `-p` drops execute bits,
+and the install sets the mode of every file it runs or links into
+`<prefix>/bin` itself rather than keeping the source's: the top-level scripts
+as each is copied, and `shim/guard.sh`, `shim/install.sh` and
+`shim/measure.sh` after the `shim` copy. Each is installed `0755` whatever
+mode it arrived with.
+
 Do not put the payload under a home directory that lives on the filesystem
 under investigation. The install reads it once, but the staging snapshot is
 what protects the install, not the payload's location, and reading a wedged
