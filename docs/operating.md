@@ -35,6 +35,11 @@ On the node you deploy to:
 - The Slurm client (`sbatch`) reachable at `[slurm].sbatch_glob`, for
   `walk-job`. The scheduler is what enforces the wall-clock bound the
   refusal text offers (ADR-0007).
+- A `logger` at `[trusted_binaries].logger` that accepts `--size`. Every
+  Layer 1 record is sent with it, and a logger that rejects the option
+  drops the record silently. util-linux `logger` has it: present in 2.32.1
+  and 2.37.4 as measured; the util-linux man pages put its arrival at 2.27,
+  not measured. BusyBox `logger` does not have it.
 - Root, held by the person running the install. Nothing here escalates;
   `deploy.py` checks `os.geteuid()` and refuses otherwise (ADR-0004).
 
@@ -569,6 +574,19 @@ It carries three kinds of record:
   volatile journal is not left without the line. What the relink currently
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
   readable by the spool's group.
+
+Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
+so `logger` does not cut it at its 1 KiB default. The fields a caller or the
+mount table can shape are bounded so the record always fits: in the shim's
+`refused` and escape-hatch records, a path field (`root`, `mount`,
+`resolved`, `shadow_resolved`, `pwd`) at 1024 bytes as escaped and every
+other string at 128; in an `uncovered_mount` record, `mount` at 1024 and
+`fstype` at 128. The remaining fields are literals or values the code has
+already checked, and the shim's no-awk fallback record carries no path. A
+field the bound cut is followed by `"<field>_truncated":true` —
+`"pwd_truncated":true` from a deep working directory, say. A field with no
+such key was not shortened, though a control character in it is still
+shown as `?`, as it always was.
 
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
