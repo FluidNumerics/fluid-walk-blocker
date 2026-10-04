@@ -352,9 +352,10 @@ account (ADR-0004):
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
   and in each `best-effort` shell's only when its binary resolves and the
-  required hooks were proven first, with a dedicated `conf.d` drop-in for
-  fish in place of a block. The pre-install content of each hook file is
-  saved once to `<file>.walk-blocker.orig`, the first time this runs;
+  required hooks were proven first. fish, in either class, gets a dedicated
+  `conf.d` drop-in in place of a block. The pre-install content of each hook
+  file is saved once to `<file>.walk-blocker.orig`, the first time this
+  runs;
 - the reaper's service and timer under `[install].unit_dir`, enabled and
   started as `walk-blocker.timer`.
 
@@ -889,8 +890,9 @@ the spool. It does not remove the prefix: the payload stays under it. The
 copy the trail somewhere before removing it if the evidence is still
 wanted.
 
-`install.sh --uninstall` exists too, and takes Layer 1 off without removing
-the payload. Run it as root from the deployed copy,
+`install.sh --uninstall` exists too, and takes Layer 1 off but removes
+less: the unit files, and the journal drop-in with its grant, stay until
+`deploy.py --uninstall` removes them. Run it as root from the deployed copy,
 `sh <prefix>/shim/install.sh --uninstall`: as root it sources the
 `wrapped_names.sh` beside it, and refuses one that is not root-owned or
 whose directory chain an ordinary account could write, which a checkout's

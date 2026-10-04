@@ -41,13 +41,15 @@ def _reconcile_bullet():
 
 def audit_dir_states():
     """Every STATE install.sh can journal under `audit_dir`: the literal
-    ones, and the words spool_fit() hands it through `$sg_spool_why`."""
+    ones, and every word assigned to `$sg_spool_why`, the one variable a
+    call may journal instead. A call through any other variable fails here,
+    rather than journalling a state this scan cannot see."""
     sh = _read(INSTALL_SH)
-    states = set(re.findall(r"sg_report audit_dir ([a-z-]+)", sh))
-    assert 'sg_report audit_dir "$sg_spool_why"' in sh
-    body = sh[sh.index("spool_fit() {"):]
-    body = body[:body.index("\n}\n")]
-    states |= set(re.findall(r"sg_spool_why=([a-z-]+)", body))
+    calls = re.findall(r"sg_report audit_dir (\S+)", sh)
+    states = {c for c in calls if re.fullmatch(r"[a-z-]+", c)}
+    indirect = sorted(set(calls) - states)
+    assert indirect == ['"$sg_spool_why"'], indirect
+    states |= set(re.findall(r"sg_spool_why=([a-z-]+)", sh))
     return states
 
 
@@ -68,8 +70,10 @@ def test_the_runbook_says_coverage_change_is_written_only_when_coverage_shrinks(
     calls = re.findall(r"^(.*)\n\s*sg_report coverage_change", sh, re.M)
     assert calls == ['    if [ "$((_dropped + SWEPT_N))" -gt 0 ]; then'], calls
     clause = _reconcile_bullet().split("`coverage_change`", 1)[1].split("`relink_refused`")[0]
-    assert "shrank" in clause
-    assert "no record" in clause
+    # The claims themselves, not words a contradicting sentence would share.
+    assert clause.startswith(" when coverage shrank "), clause
+    assert "a name that starts being wrapped writes no record" in clause
+    assert not re.search(r"added|addition also writes", clause), clause
 
 
 def _uninstall_paragraph():
@@ -82,7 +86,9 @@ def test_the_runbook_lists_the_journal_revocation_the_uninstall_performs():
     body = body[body.index("def system_uninstall("):]
     assert "journal_revoke_command(" in body and '"rm", "-f", dropin' in body
     para = _uninstall_paragraph()
-    assert "journal drop-in" in para and "revokes" in para and "ADR-0026" in para
+    assert ("removes the journal drop-in under `[install].tmpfiles_dir` and "
+            "revokes, under each journal directory that exists, the read it "
+            "granted to the gids it records (ADR-0026)") in para
 
 
 def test_the_runbook_does_not_say_the_uninstall_removes_the_prefix():
@@ -92,8 +98,17 @@ def test_the_runbook_does_not_say_the_uninstall_removes_the_prefix():
     # The arm removes $BIN and touches nothing else under the prefix.
     assert 'rmdir "$BIN"' in arm and "$PREFIX" not in arm
     para = _uninstall_paragraph()
-    assert "and removes the prefix" not in para
-    assert "`<prefix>/bin`" in para
+    assert "It does not remove the prefix: the payload stays under it." in para
+    assert "removes `<prefix>/bin`" in para
+    # Nothing else in the paragraph may say the prefix or payload goes.
+    rest = para.replace("It does not remove the prefix", "")
+    assert not re.search(r"(remov|delet)\w*[^.;]*\b(the (whole )?prefix|the payload)\b",
+                         rest), rest
+    # Nor may the install.sh paragraph after it set the two apart on that
+    # point: neither removes the payload.
+    text = _joined(_section(_read(OPERATING), "14."))
+    helper = text[text.index("`install.sh --uninstall` exists too"):]
+    assert "without removing the payload" not in helper[:200]
 
 
 def test_the_runbook_says_a_best_effort_hook_is_written_only_when_its_shell_resolves():
@@ -103,4 +118,10 @@ def test_the_runbook_says_a_best_effort_hook_is_written_only_when_its_shell_reso
     start = text.index("What it writes, all root-owned")
     writes = _joined(text[start:text.index("What it verifies", start)])
     hooks = next(item for item in writes.split(" - ") if "hook block" in item)
-    assert "best-effort" in hooks and "resolves" in hooks
+    assert ("in each `best-effort` shell's only when its binary resolves and "
+            "the required hooks were proven first") in hooks
+    assert "whether or not" not in hooks
+    # fish's kind is `dropin` whatever its gate (hook_select), so the
+    # drop-in clause must not read as belonging to one class.
+    assert "fish, in either class, gets a dedicated `conf.d` drop-in" in hooks
+    assert re.search(r"fish\)\n\s*HK_FILE=\$FISH_CONF_FILE; HK_PKG=''; HK_KIND=dropin", sh)
