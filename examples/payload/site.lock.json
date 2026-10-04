@@ -44,7 +44,7 @@
     "shim/guard.sh": "799c943b14d360565a706d97b1c71b837f8e31c00539b9f7a8a94fee3afe1129",
     "shim/install.sh": "7d848beaa1ec021fea607820295a83b868bd84f3cf4cca586f0e0b455cada42a",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
-    "shim/measure.sh": "0740b4463b9e21c10a61eb30dfc03dc94432c960d264eda4488f2306d3db06b9",
+    "shim/measure.sh": "cd23bc5e072bd8b4bc568a0c949aa693fc447c172212e3c6e8023eb6b6671f85",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "a1112c21b63c7199238a68326c44315b80b749ace4e02dc876f8a2c1c179337b",
     "survey.py": "5d0acef8a12f8ff88f7b59212fbc8146f52db1e0562ad08863fb5c67aaa05df9",

@@ -54,7 +54,8 @@
 # EXIT CODES
 #
 #   0   every gate that was asked for passed (none asked for: it compared)
-#   1   a gate failed, or a guard did not reach the binary behind it
+#   1   a gate failed, a guard did not reach the binary behind it, or
+#       the scratch directory could not be made
 #   2   usage: a bad argument, a missing guard, a guard on a slow
 #       filesystem; and, in single-guard mode, a reading that measured nothing
 #   3   ratio mode only: too few pairs survived the discards to take a
