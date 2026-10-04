@@ -50,6 +50,16 @@
 # everything, which is how a small fast-path figure came to describe a shim
 # that cost several times that for `du -sh onedir`. The per-operand slope is
 # measured too, since that cost used to be paid once per root.
+#
+# EXIT CODES
+#
+#   0   every gate that was asked for passed (none asked for: it compared)
+#   1   a gate failed, a guard did not reach the binary behind it, or
+#       the scratch directory could not be made
+#   2   usage: a bad argument, a missing guard, a guard on a slow
+#       filesystem; and, in single-guard mode, a reading that measured nothing
+#   3   ratio mode only: too few pairs survived the discards to take a
+#       median. It compared nothing, and that is neither a pass nor a fail.
 
 set -u
 
@@ -662,14 +672,22 @@ done
 
 echo
 echo "=== $USABLE/$PAIRS usable pairs ==="
+# Exit 3, its own code. This used to be 1, the gate-failure code, and a caller
+# that reads only the status -- CI's report-only job, which passes no ceiling
+# -- could not tell "every pair was discarded" from "the shim did not reach its
+# binary", and once the step's failure is tolerated, not from "compared, and
+# no regression" either. Not 2: that is a bad invocation, which a re-run never
+# fixes and which this is not -- the arguments were fine and the guards ran.
+# Single-guard mode's own measured-nothing refusals keep their exit 2.
 if [ "$USABLE" -lt "$MIN_USABLE_PAIRS" ]; then
     echo "measure.sh: only $USABLE pairs survived, below the" >&2
     echo "  $MIN_USABLE_PAIRS this gate needs. Each DISCARDED line above says" >&2
     echo "  which check refused it. Baseline drift over ${DRIFT_MAX_PCT} % is a" >&2
     echo "  statement about the machine -- re-run when it is quieter. An" >&2
     echo "  overhead at or below zero is a statement about the clock, and" >&2
-    echo "  re-running will not fix it." >&2
-    exit 1
+    echo "  re-running will not fix it. Nothing was compared: this is not a" >&2
+    echo "  pass." >&2
+    exit 3
 fi
 
 MED_FAST=$(median "$FAST_RATIOS")

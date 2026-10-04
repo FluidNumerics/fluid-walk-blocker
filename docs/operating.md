@@ -434,7 +434,9 @@ allowed traversing call that judges every operand, which is the only path
   and the new one alternately, in the same minute, and gates on the median
   per-pair ratio. This is the gate that survives a change of machine — an
   absolute reading moves with the node's load; a ratio between two shims
-  measured together does not.
+  measured together does not. A pair whose readings cannot be trusted is
+  discarded, and a run that keeps fewer than three exits 3: it compared
+  nothing, which is neither a pass nor a regression.
 
 Keep both: a ratio gate alone cannot see cumulative drift, and an absolute
 gate alone cannot be run anywhere but the machine it was calibrated on.
