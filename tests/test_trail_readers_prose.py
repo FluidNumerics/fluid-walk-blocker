@@ -31,7 +31,8 @@ PROSE_GLOBS = ("README.md", "CLAUDE.md", "docs/*.md", "docs/adr/*.md",
 # The ways this tree has said that an account cannot read the trail.
 EXCLUDES = re.compile(
     r"nobody\s+(?:else|outside)|no\s+one\s+else|outside\s+the\s+group"
-    r"|cannot\s+read\s+the\s+trail|refused\s+the\s+`tail`|closed\s+to\s+them"
+    r"|cannot\s+read\s+the\s+trail|refused\s+the\s+`tail`"
+    r"|clos(?:ed|es?)\s+(?:it\s+)?to\s+them"
     r"|group\s+alone|refused\s+by\s+design|cannot\s+read\s+it\s+yourself",
     re.IGNORECASE)
 QUALIFIED = re.compile(r"mode\s+bits|\bACLs?\b")

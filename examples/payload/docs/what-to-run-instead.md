@@ -57,12 +57,12 @@ one stuck in I/O), or an idle orphan. It only reports those.
    out-of-memory killer, a scheduler, and a person running `kill` all look
    the same from your shell, so a matching exit code is not proof.
 
-3. **Ask for the record.** You cannot read it yourself unless an ACL on the
-   reaper's audit trail names you. The trail is readable by root, the
-   `wbaudit` group, and any account the node's ACLs name on it, and the
-   reaper's output goes to the system journal, not to yours. Give the people
-   who run this node the time, the command, and the pid if you have it. The
-   trail records every kill, and every kill it attempted that did not land.
+3. **Ask for the record.** You cannot read it yourself unless the node's
+   ACLs let you. The reaper's audit trail is readable by root, the `wbaudit`
+   group, and any account the node's ACLs name on it, and the reaper's
+   output goes to the system journal, not to yours. Give the people who run
+   this node the time, the command, and the pid if you have it. The trail
+   records every kill, and every kill it attempted that did not land.
 
 A refusal is different: it is recorded in your own journal, which you can
 read for as long as the node's journal keeps it. On a busy node that may be
