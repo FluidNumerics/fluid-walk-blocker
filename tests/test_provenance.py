@@ -280,6 +280,77 @@ def test_the_branches_listed_for_an_unresolvable_ref_are_bounded(repo, capsys):
     assert len(listed[:-len(", ...")].split(", ")) == P.BRANCHES_SHOWN
 
 
+def _unresolvable(repo, capsys):
+    return _run(capsys, sha256=P.sha256_bytes(CONFIG_B), repo=str(repo),
+                ref="origin/no-such-branch")
+
+
+def test_every_remote_head_symref_is_skipped_without_hiding_that_more_exist(
+        repo, capsys):
+    """Each remote may carry a `HEAD` symref. A listing that budgets for one
+    of them shows fewer names than it could and drops the `...` while more
+    branches exist; this shape is what a fixed `--count` window gets wrong."""
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    for remote in ("alpha", "beta", "gamma"):
+        for branch in ("x1", "x2"):
+            _git(repo, "update-ref",
+                 "refs/remotes/%s/%s" % (remote, branch), head)
+        _git(repo, "symbolic-ref", "refs/remotes/%s/HEAD" % remote,
+             "refs/remotes/%s/x1" % remote)
+    _git(repo, "update-ref", "-d", "refs/heads/main")
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = err.split("Branches here: ", 1)[1].strip()
+    assert listed == ("alpha/x1, alpha/x2, beta/x1, beta/x2, gamma/x1, ..."
+                      ), listed
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_the_ellipsis_appears_exactly_when_one_branch_more_exists(
+        repo, capsys, extra):
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    # The fixture holds origin/main and main; these make exactly enough, or
+    # exactly one more than is shown.
+    for i in range(P.BRANCHES_SHOWN - 2 + extra):
+        _git(repo, "update-ref", "refs/remotes/upstream/b%d" % i, head)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = err.split("Branches here: ", 1)[1].strip()
+    assert listed.endswith(", ...") == bool(extra), listed
+    shown = listed[:-len(", ...")] if extra else listed
+    assert len(shown.split(", ")) == P.BRANCHES_SHOWN, listed
+
+
+def test_the_unresolvable_ref_line_has_no_doubled_period(repo, capsys):
+    _code, _out, err = _unresolvable(repo, capsys)
+    first = err.splitlines()[0]
+    assert first.endswith("no such commit or ref in %s" % repo), first
+
+
+@pytest.mark.parametrize("how", ["raises", "exits-non-zero"])
+def test_a_failed_branch_listing_drops_the_hint_and_keeps_the_error(
+        repo, capsys, monkeypatch, how):
+    """Best effort: the listing decorates an error and must never replace it.
+    Only the second listing (local branches) fails, so a half-built hint
+    from the first cannot pass for a dropped one."""
+    real = P._git
+
+    def failing(where, args, timeout, stdin=None):
+        if args[0] == "for-each-ref" and args[-1] == "refs/heads":
+            if how == "raises":
+                raise P.ProvenanceError("git for-each-ref did not finish")
+            return subprocess.CompletedProcess(args, 128, b"", b"")
+        return real(where, args, timeout, stdin)
+
+    monkeypatch.setattr(P, "_git", failing)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    assert "no such commit or ref in %s" % repo in err
+    assert "git fetch" in err and "--ref" in err
+    assert "Branches here" not in err, err
+    assert "Traceback" not in err
+
+
 # --------------------------------------------------------------------------
 # reading the hash from a payload, and the machine-readable form
 # --------------------------------------------------------------------------

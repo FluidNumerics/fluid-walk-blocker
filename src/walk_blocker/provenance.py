@@ -136,22 +136,23 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
     """([up to `count` branch names], whether there are more), for a hint.
 
     Remote-tracking branches first, because a reviewed branch is usually one.
-    Each `for-each-ref` is capped, so a repository with thousands of refs costs
-    no more than one with five. A remote's `HEAD` symref is skipped: it names a
-    branch already listed. Best effort: a failure here yields nothing rather
-    than replacing the error it decorates.
+    A remote's `HEAD` symref is skipped: it names a branch already listed.
+    The listing is two `for-each-ref` calls, each under the per-call
+    `timeout`. Best effort: if either fails or times out, the hint is dropped
+    rather than replacing the error it decorates.
     """
     names = []
     for prefix in ("refs/remotes", "refs/heads"):
-        # One extra, so a list cut at `count` can say so; and one more, for
-        # the `HEAD` symref a remote may carry.
+        # The whole listing, not a `--count` window: every remote may carry a
+        # `HEAD` symref, so no fixed window can say whether more branches
+        # exist, and `--count` bounds only git's output, not its work.
         try:
-            done = _git(repo, ["for-each-ref", "--count=%d" % (count + 2),
-                               "--format=%(refname)", prefix], timeout)
+            done = _git(repo, ["for-each-ref", "--format=%(refname)", prefix],
+                        timeout)
         except ProvenanceError:
-            break
+            return [], False
         if done.returncode != 0:
-            continue
+            return [], False
         for full in done.stdout.decode("utf-8", "replace").splitlines():
             if prefix == "refs/remotes" and full.endswith("/HEAD"):
                 continue
