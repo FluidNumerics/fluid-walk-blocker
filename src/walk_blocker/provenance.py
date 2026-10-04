@@ -137,6 +137,8 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
 
     Remote-tracking branches first, because a reviewed branch is usually one.
     A remote's `HEAD` symref is skipped: it names a branch already listed.
+    It is told by being a symref, not by its name, so a real branch whose
+    name ends in `/HEAD` is still listed.
     The listing is two `for-each-ref` calls, each under the per-call
     `timeout`. Best effort: if either fails or times out, the hint is dropped
     rather than replacing the error it decorates.
@@ -147,14 +149,18 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
         # `HEAD` symref, so no fixed window can say whether more branches
         # exist, and `--count` bounds only git's output, not its work.
         try:
-            done = _git(repo, ["for-each-ref", "--format=%(refname)", prefix],
+            # A refname cannot contain a space, so one separates the fields.
+            done = _git(repo, ["for-each-ref",
+                               "--format=%(refname) %(symref)", prefix],
                         timeout)
         except ProvenanceError:
             return [], False
         if done.returncode != 0:
             return [], False
-        for full in done.stdout.decode("utf-8", "replace").splitlines():
-            if prefix == "refs/remotes" and full.endswith("/HEAD"):
+        for line in done.stdout.decode("utf-8", "replace").splitlines():
+            full, _sep, symref = line.partition(" ")
+            if (prefix == "refs/remotes" and symref
+                    and full.endswith("/HEAD")):
                 continue
             names.append(full[len(prefix) + 1:])
     return names[:count], len(names) > count

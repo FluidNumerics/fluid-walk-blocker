@@ -305,6 +305,23 @@ def test_every_remote_head_symref_is_skipped_without_hiding_that_more_exist(
                       ), listed
 
 
+def test_a_real_branch_whose_name_ends_in_head_is_still_listed(repo, capsys):
+    """Only a `HEAD` symref is skipped. A plain ref is a branch someone can
+    name with --ref, whatever its last component is called; and a symref
+    under another name is not the remote's default, so it stays too."""
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-ref", "refs/remotes/origin/feature/HEAD", head)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/alias",
+         "refs/remotes/origin/main")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD",
+         "refs/remotes/origin/main")
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = err.split("Branches here: ", 1)[1].strip()
+    assert listed == "origin/alias, origin/feature/HEAD, origin/main, main", \
+        listed
+
+
 @pytest.mark.parametrize("extra", [0, 1])
 def test_the_ellipsis_appears_exactly_when_one_branch_more_exists(
         repo, capsys, extra):
