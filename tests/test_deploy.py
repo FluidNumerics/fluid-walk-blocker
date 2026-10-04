@@ -2675,8 +2675,31 @@ def test_a_refused_uninstall_helper_gives_the_journal_revoke_commands(
     err = capsys.readouterr().err
     assert _dropin(args) in err, err
     for root in deploy.JOURNAL_ROOTS:
-        command = " ".join(deploy.journal_revoke_command({31337}, root))
+        # The command written out, not rebuilt from journal_revoke_command(),
+        # so a change to that function's flags is caught here too.
+        command = ("setfacl -R -P -x group:31337,default:group:31337 %s"
+                   % root)
         assert "`%s`" % command in err, (command, err)
+
+
+def test_the_printed_journal_revoke_is_quoted_for_a_shell(
+        tmp_path, monkeypatch, capsys):
+    """The refusal's setfacl is for root to paste: a root with a space in it
+    must come out as one shell word."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "JOURNAL_ROOTS", ("/var/log/a journal",))
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    os.makedirs(args.tmpfiles_dir)
+    with open(_dropin(args), "w") as fh:
+        fh.write(deploy.render_journal_dropin(31337))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert ("`setfacl -R -P -x group:31337,default:group:31337 "
+            "'/var/log/a journal'`") in err, err
 
 
 def test_the_uninstall_helper_must_be_root_owned_and_not_a_symlink(tmp_path,
