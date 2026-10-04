@@ -1772,7 +1772,8 @@ PATH_KINDS = (
 )
 
 
-def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
+def validate_root_write_paths(args, attrs=None, spool_trusted_gids=(),
+                              out=None):
     """Check the filesystem STATE of every root-write path in `args`.
 
     Shared by install and uninstall, which is the point: the predecessor's
@@ -1792,8 +1793,12 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
     new default -- a caller that passed it everywhere would accept a
     group-writable directory above the code root executes.
 
+    Refusals go to `out`, resolved at call time as `preflight()` resolves
+    its own, so a caller that captures preflight's channel captures these too.
+
     Returns 0, or 6 to be returned by the caller.
     """
+    out = sys.stderr if out is None else out
     for attr, kind in PATH_KINDS:
         if attrs is not None and attr not in attrs:
             continue
@@ -1805,10 +1810,10 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
             target, trusted_gids=(spool_trusted_gids if attr == "spool_dir"
                                   else ()))
         if chain:
-            sys.stderr.write("deploy.py: refusing %s (%s): the path is not "
-                             "trusted end to end.\n" % (attr, target))
+            out.write("deploy.py: refusing %s (%s): the path is not "
+                      "trusted end to end.\n" % (attr, target))
             for bad_path, reason in chain:
-                sys.stderr.write("  %s: %s\n" % (bad_path, reason))
+                out.write("  %s: %s\n" % (bad_path, reason))
             return 6
 
         # A trusted parent still leaves the final component free to be a
@@ -1821,7 +1826,7 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
         if kind == "file":
             bad = irregular_target(path)
             if bad is not None:
-                sys.stderr.write(
+                out.write(
                     "deploy.py: refusing %s %s: %s. This file is read and then "
                     "rewritten 0644;\n  through a link that publishes the "
                     "target's contents.\n" % (attr, path, bad))
@@ -1836,7 +1841,7 @@ def validate_root_write_paths(args, attrs=None, spool_trusted_gids=()):
             if os.path.exists(path):
                 offenders = unowned_by(path)
                 if offenders:
-                    sys.stderr.write(
+                    out.write(
                         "deploy.py: refusing %s %s: %s. It is sourced as "
                         "root to verify\n  the hook fires, so its owner "
                         "would be choosing what runs during the deploy.\n"
@@ -2137,7 +2142,8 @@ def preflight(args, privileged, out=None):
     if privileged and unknown_so_far():
         return write_unknown_refusal(unknown_so_far(), out=out), checks
     if validate_root_write_paths(args, attrs=inspectable,
-                                 spool_trusted_gids=trusted_gids) != 0:
+                                 spool_trusted_gids=trusted_gids,
+                                 out=out) != 0:
         checks.append(Check("paths", None, CHECK_BLOCKED))
         return 6, checks
     checks.append(Check("paths", None, CHECK_OK))
