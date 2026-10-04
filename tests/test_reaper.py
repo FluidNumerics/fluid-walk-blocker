@@ -527,13 +527,15 @@ def test_a_walk_exactly_at_the_budget_is_not_yet_past_it(
         procfs, mounts_path, ppid, verdict):
     """`past_budget` is a strict `>`, and the runaway and orphan arms both read
     it (ADR-0028); this test pins those two. A walk whose age IS the budget is
-    not a finding, one second more is. The tests either side stop a second
-    short, so they would pass a `>=` as well.
+    not a finding, one second more is. The nearest ages the other tests use
+    are a second either side for the runaway arm and a minute past for the
+    orphan arm, so they would pass a `>=` as well.
 
-    write_proc stores age as whole clock ticks since boot, so an age that is
-    not a whole number of ticks before the uptime would land a tick either
-    side of the boundary. A whole-second budget below a whole-second uptime
-    is exact at any tick rate; the first assertion checks that it landed."""
+    write_proc stores the start as whole clock ticks since boot, rounded
+    down, so an age that is not a whole number of ticks before the uptime
+    would read back up to a tick older than asked. A whole-second budget
+    below a whole-second uptime is exact at any tick rate; the first
+    assertion checks that it landed."""
     budget = reaper.TRAVERSAL_BUDGET_S
     write_proc(procfs, 500, "bash", ["-bash"], uid=UID_B, ppid=1, state="S")
     write_proc(procfs, 502, "find", ["find", "/scratch", "-type", "f"],
