@@ -348,12 +348,14 @@ account (ADR-0004):
   reaper require before they write into it as root. The relink
   keeps `uncovered-mounts.state` there too, its memory of which mounts it has
   reported (ADR-0019);
-- a hook block in each enabled shell's startup file named by
+- a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
-  and a dedicated `conf.d` drop-in for fish. The pre-install content of each
-  hook file is saved once to `<file>.walk-blocker.orig`, the first time
-  this runs;
+  and in each `best-effort` shell's only when its binary resolves and the
+  required hooks were proven first. fish, in either class, gets a dedicated
+  `conf.d` drop-in in place of a block. The pre-install content of each hook
+  file is saved once to `<file>.walk-blocker.orig`, the first time this
+  runs;
 - the reaper's service and timer under `[install].unit_dir`, enabled and
   started as `walk-blocker.timer`.
 
@@ -559,14 +561,19 @@ It carries three kinds of record:
 - the **reconcile's reports**: `hook_check` when a hook block is missing or
   no longer fires, naming `[hooks.<shell>].package` as the likely conffile
   actor; `audit_dir` when the spool's mode or group had to be corrected
-  (`mode-corrected`, `group-corrected`), or when it was left alone because
-  it is `absent`, a `symlink`, `not-a-directory`, `owner-not-root`, or
-  `unmarked` — it lacks the `.walk-blocker-spool` marker `deploy.py` writes,
-  so it is not the spool `deploy.py` made (ADR-0025). Nothing is written into
-  such a spool, the reaper exits 4 until a deploy puts it right, and the
-  relink never creates the spool or its marker;
-  `coverage_change` when the set of wrapped names changed; `relink_refused`
-  when the relink stopped at one of its own checks;
+  (`mode-corrected`, `group-corrected`) or the correction failed
+  (`mode-failed`, `group-failed`), or when it was left alone because it is
+  `absent`, a `symlink`, `not-a-directory`, `owner-not-root`, `unreadable`
+  (its `lstat` failed), `moved` (it could not be entered, or the directory
+  entered is no longer the one just checked), or `unmarked` — it lacks the `.walk-blocker-spool` marker
+  `deploy.py` writes, so it is not the spool `deploy.py` made (ADR-0025).
+  Nothing is written into such a spool, the reaper exits 4 until a deploy
+  puts it right, and the relink never creates the spool or its marker;
+  `coverage_change` when coverage shrank — a name was unwrapped, or a shim
+  the name list no longer claims was swept — with the count, never the
+  names; a name that starts being wrapped writes no record, so this is the
+  only signal of a removal and its absence after an addition is normal;
+  `relink_refused` when the relink stopped at one of its own checks;
 - one **`refused`** record per refusal, from the shim itself, carrying the
   tool, the root it was asked to walk, the mount and type that judged it,
   the reason class and the caller's uid. This is the count that answers
@@ -871,15 +878,21 @@ alone — reversing a control is the safer direction and does not need the
 same ceremony as installing one (ADR-0004). `--uninstall --dry-run` is not:
 like the install's dry run it writes nothing, needs no privilege, and names
 any check it could not make as an ordinary user rather than reporting it
-clean (ADR-0021). It disables and removes the timer and service, strips every
-hook block and removes the fish drop-in whether or not that shell still
-resolves (ADR-0008), and removes the prefix. The `<file>.walk-blocker.orig`
-backups and the audit trail under `[install].spool_dir` are records; read
-its output for what it left, and copy the trail somewhere before removing
-it if the evidence is still wanted.
+clean (ADR-0021). It stops and disables the timer and service and removes
+their unit files; removes the journal drop-in under
+`[install].tmpfiles_dir` and revokes, under each journal directory that
+exists, the read it granted to the gids it records (ADR-0026); strips every hook block
+and removes the fish drop-in whether or not that shell still resolves
+(ADR-0008); and removes `<prefix>/bin` and the uncovered-mounts memory in
+the spool. It does not remove the prefix: the payload stays under it. The
+`<file>.walk-blocker.orig` backups and the audit trail under
+`[install].spool_dir` are records; read its output for what it left, and
+copy the trail somewhere before removing it if the evidence is still
+wanted.
 
-`install.sh --uninstall` exists too, and takes Layer 1 off without removing
-the payload. Run it as root from the deployed copy,
+`install.sh --uninstall` exists too, and takes Layer 1 off but removes
+less: the unit files, and the journal drop-in with its grant, stay until
+`deploy.py --uninstall` removes them. Run it as root from the deployed copy,
 `sh <prefix>/shim/install.sh --uninstall`: as root it sources the
 `wrapped_names.sh` beside it, and refuses one that is not root-owned or
 whose directory chain an ordinary account could write, which a checkout's
