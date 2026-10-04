@@ -248,6 +248,13 @@ SG_MOUNT_OVERRIDES='/home=expensive=4 /opt/site-tools=cheap'  # GENERATED from s
 # would also honour. A real record carries valid JSON and journald's own
 # _UID, so a test-emitted one is indistinguishable from a genuine one.
 SG_LOGGER='/usr/bin/logger'  # GENERATED from site.toml:trusted_binaries.logger
+# logger's cap on one message, and the bound on a mount or type sg_report
+# puts in a record. logger's default, 1 KiB, would cut a record carrying a
+# long mount point mid-string; the same 8 KiB guard.sh passes. A field over
+# its bound is cut and the record says so, so it always stays whole JSON.
+SG_LOG_SIZE=8192
+SG_REPORT_MOUNT_MAX=1024
+SG_REPORT_FSTYPE_MAX=128
 
 is_root() {
     [ "$(id -u)" -eq 0 ]
@@ -1276,7 +1283,27 @@ sg_report() {
         case $_rep_fs in
             ''|*[!A-Za-z0-9._-]*) _rep_fs=unrepresentable ;;
         esac
-        _rep_extra=',"mount":"'$_rep_mount'","fstype":"'$_rep_fs'"'
+        # Cut one character at a time: POSIX sh has no substring, and a
+        # pipeline to cut(1) would be a fork per record for a case that is
+        # rare. Both values are ASCII by the checks above, so ${#} is bytes.
+        _rep_extra=',"mount":"'
+        if [ "${#_rep_mount}" -gt "$SG_REPORT_MOUNT_MAX" ]; then
+            while [ "${#_rep_mount}" -gt "$SG_REPORT_MOUNT_MAX" ]; do
+                _rep_mount=${_rep_mount%?}
+            done
+            _rep_extra=$_rep_extra$_rep_mount'","mount_truncated":true'
+        else
+            _rep_extra=$_rep_extra$_rep_mount'"'
+        fi
+        _rep_extra=$_rep_extra',"fstype":"'
+        if [ "${#_rep_fs}" -gt "$SG_REPORT_FSTYPE_MAX" ]; then
+            while [ "${#_rep_fs}" -gt "$SG_REPORT_FSTYPE_MAX" ]; do
+                _rep_fs=${_rep_fs%?}
+            done
+            _rep_extra=$_rep_extra$_rep_fs'","fstype_truncated":true'
+        else
+            _rep_extra=$_rep_extra$_rep_fs'"'
+        fi
         # A mount on its default is a fact to act on out of band, not a
         # fault: notice, where a hook gone missing is a warning. Reported
         # on change, not on state (ADR-0019), so notice is not a place
@@ -1305,8 +1332,8 @@ sg_report() {
         _rep_logger=$(command -v logger 2>/dev/null) || _rep_logger=''
     fi
     if [ -n "$_rep_logger" ]; then
-        "$_rep_logger" -t walk-blocker -p "$_rep_prio" -- "$_rep_json" \
-            2>/dev/null || true
+        "$_rep_logger" --size "$SG_LOG_SIZE" -t walk-blocker -p "$_rep_prio" \
+            -- "$_rep_json" 2>/dev/null || true
     fi
     return 0
 }

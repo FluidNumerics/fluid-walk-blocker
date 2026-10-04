@@ -216,6 +216,13 @@ SG_LOGGER='@@LOGGER@@'
 SG_AWK='@@AWK@@'
 SG_ID='@@ID@@'
 SG_DATE='@@DATE@@'
+# logger's own cap on one message. Its default, 1 KiB, cut a record from a
+# deep enough working directory mid-string, and a JSON prefix does not parse.
+# The record is bounded in the awk below to well under this, so the number
+# only has to clear that bound: 8 KiB is also rsyslog's default
+# MaxMessageSize, the smallest receiver /dev/log is likely to have. journald's
+# syslog socket reads a whole datagram; its LineMax is for stream clients.
+SG_LOG_SIZE=8192
 
 sg_always=0
 sg_diract=''
@@ -345,6 +352,15 @@ sg_audit_emit() {
     # process is in it. A split record also breaks the one-JSON-object-per-line
     # contract the reaper's own audit file keeps.
     #
+    # Every string field is also bounded, and a cut one says so with
+    # `"<field>_truncated":true` after it: the five that are paths at 1024
+    # bytes once escaped, the rest at 128. Eleven strings at those caps plus
+    # the keys and markers come to under 6.5 KiB, so the whole record fits
+    # SG_LOG_SIZE with the syslog header beside it. The cut is made on the
+    # escaped string, in bytes (LC_ALL=C), and then backs off a lone
+    # backslash, which would escape the closing quote, and a trailing UTF-8
+    # lead byte whose continuation bytes were cut away.
+    #
     # awk, because POSIX sh has no substring replacement and this needs three
     # substitutions per field. Passed through the environment rather than argv
     # so nothing has to survive a second round of quoting. awk is a trusted
@@ -371,8 +387,8 @@ sg_audit_emit() {
         SG_J_TOOL=$sg_tool SG_J_ROOT=$sg_ae_root \
         SG_J_MOUNT=$sg_ae_mount SG_J_FS=$sg_ae_fs SG_J_REASON=$sg_ae_reason \
         SG_J_RESOLVED=$sg_ae_resolved SG_J_SHADOW=$sg_ae_shadow \
-        SG_J_UID=$sg_uid SG_J_PWD=$PWD \
-        "$sg_awk" 'function q(s) {
+        SG_J_UID=$sg_uid SG_J_PWD=$PWD LC_ALL=C \
+        "$sg_awk" 'function q(k, s, cap) {
                  gsub(/\\/, "\\\\", s)
                  gsub(/"/, "\\\"", s)
                  gsub(/\n/, "\\n", s)
@@ -381,22 +397,29 @@ sg_audit_emit() {
                  # Any other control character would still be a raw byte in a
                  # JSON string, which is invalid. Nothing is lost by naming it.
                  gsub(/[\001-\037]/, "?", s)
-                 return "\"" s "\""
+                 if (length(s) <= cap)
+                     return "\"" k "\":\"" s "\""
+                 s = substr(s, 1, cap)
+                 sub(/[\300-\377][\200-\277]*$/, "", s)
+                 if (match(s, /\\+$/) && RLENGTH % 2)
+                     s = substr(s, 1, length(s) - 1)
+                 return "\"" k "\":\"" s "\",\"" k "_truncated\":true"
              }
              BEGIN {
-                 printf "{\"ts\":%s,\"layer\":\"shim\"", q(ENVIRON["SG_J_TS"])
-                 printf ",\"action\":%s", q(ENVIRON["SG_J_ACTION"])
-                 printf ",\"seam\":%s,\"tool\":%s", q(ENVIRON["SG_J_SEAM"]), q(ENVIRON["SG_J_TOOL"])
-                 printf ",\"root\":%s", q(ENVIRON["SG_J_ROOT"])
-                 printf ",\"mount\":%s", q(ENVIRON["SG_J_MOUNT"])
-                 printf ",\"fs\":%s", q(ENVIRON["SG_J_FS"])
-                 printf ",\"reason\":%s", q(ENVIRON["SG_J_REASON"])
-                 printf ",\"resolved\":%s", q(ENVIRON["SG_J_RESOLVED"])
-                 printf ",\"shadow_resolved\":%s", q(ENVIRON["SG_J_SHADOW"])
+                 P = 1024; S = 128
+                 printf "{%s,\"layer\":\"shim\"", q("ts", ENVIRON["SG_J_TS"], S)
+                 printf ",%s", q("action", ENVIRON["SG_J_ACTION"], S)
+                 printf ",%s,%s", q("seam", ENVIRON["SG_J_SEAM"], S), q("tool", ENVIRON["SG_J_TOOL"], S)
+                 printf ",%s", q("root", ENVIRON["SG_J_ROOT"], P)
+                 printf ",%s", q("mount", ENVIRON["SG_J_MOUNT"], P)
+                 printf ",%s", q("fs", ENVIRON["SG_J_FS"], S)
+                 printf ",%s", q("reason", ENVIRON["SG_J_REASON"], S)
+                 printf ",%s", q("resolved", ENVIRON["SG_J_RESOLVED"], P)
+                 printf ",%s", q("shadow_resolved", ENVIRON["SG_J_SHADOW"], P)
                  # A bare number, not a string: sanitized to an
                  # integer above, so it needs no quoting.
                  printf ",\"uid\":%s", ENVIRON["SG_J_UID"]
-                 printf ",\"pwd\":%s}", q(ENVIRON["SG_J_PWD"])
+                 printf ",%s}", q("pwd", ENVIRON["SG_J_PWD"], P)
              }'
     )
 
@@ -421,9 +444,11 @@ sg_audit_emit() {
     # that puts logger somewhere else, and is reached solely when the trusted
     # path is absent.
     if [ -x "$SG_LOGGER" ]; then
-        "$SG_LOGGER" -t walk-blocker -p user.notice -- "$sg_line" 2>/dev/null
+        "$SG_LOGGER" --size "$SG_LOG_SIZE" -t walk-blocker -p user.notice \
+            -- "$sg_line" 2>/dev/null
     elif command -v logger >/dev/null 2>&1; then
-        logger -t walk-blocker -p user.notice -- "$sg_line" 2>/dev/null
+        logger --size "$SG_LOG_SIZE" -t walk-blocker -p user.notice \
+            -- "$sg_line" 2>/dev/null
     fi
 
     # The file sink stays for a root caller and as the seam the tests drive

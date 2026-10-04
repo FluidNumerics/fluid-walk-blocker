@@ -31,6 +31,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 
 import pytest
 
@@ -2007,6 +2008,43 @@ def test_the_example_payload_matches_its_own_record(tmp_path, monkeypatch):
     assert module.payload_blockers(module.REPO, privileged=True) == ([], [])
 
 
+def test_a_regular_file_where_a_directory_entry_should_be_is_named_as_one(
+        tmp_path, monkeypatch):
+    """The wrong-type line names what the entry IS. `_irregular_kind()` is
+    shared by the dry run's check and the install's lstat refusal, and once
+    answered "not a regular file" for anything but a link or a directory, so
+    this line read "is not a regular file, not a directory"."""
+    payload = _payload_copy(tmp_path)
+    shutil.rmtree(os.path.join(payload, "shim"))
+    with open(os.path.join(payload, "shim"), "w") as handle:
+        handle.write("not a directory\n")
+    module = _payload_deploy(payload, tmp_path, monkeypatch)
+    blocked, _unknown = module.payload_blockers(module.REPO, privileged=False)
+    assert "wrong type: shim is a regular file, not a directory" in blocked, \
+        blocked
+
+
+@pytest.mark.parametrize("mode, kind", [
+    (stat.S_IFLNK | 0o777, "a symlink"),
+    (stat.S_IFDIR | 0o755, "a directory"),
+    (stat.S_IFREG | 0o644, "a regular file"),
+    (stat.S_IFIFO | 0o644, "a fifo"),
+    (stat.S_IFSOCK | 0o755, "a socket"),
+    (stat.S_IFCHR | 0o666, "a character device"),
+    (stat.S_IFBLK | 0o660, "a block device"),
+    # A file-type field no predicate claims: the mode is all that is left
+    # to name it by.
+    (0o030644, "of mode 030644"),
+], ids=["link", "dir", "reg", "fifo", "sock", "chr", "blk", "unknown"])
+def test_the_wrong_type_line_names_every_kind(mode, kind):
+    """Every name `_irregular_kind()` can give, pinned one by one: the dry
+    run's check and the install's lstat refusal both print it, and only the
+    fifo, link and regular-file cases can be built on disk by an ordinary
+    user. Fed an lstat-shaped result, since a device node needs root."""
+    info = types.SimpleNamespace(st_mode=mode)
+    assert deploy._irregular_kind(info) == kind
+
+
 def test_the_dry_run_refuses_a_truncated_payload(tmp_path, monkeypatch,
                                                  capsys):
     """Issue #84's oracle. A copy cut short, the way an interrupted scp or
@@ -2135,8 +2173,8 @@ def test_a_fifo_in_the_payload_is_refused_not_opened(tmp_path):
         [sys.executable, "-c", script, os.path.join(payload, "deploy.py")],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
-    assert "wrong type: reaper.py is not a regular file" in proc.stdout, \
-        proc.stdout
+    assert ("wrong type: reaper.py is a fifo, not a regular file"
+            in proc.stdout), proc.stdout
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads a mode-000 file")
@@ -2243,7 +2281,7 @@ def test_a_refused_snapshot_is_refused_before_the_first_systemctl(
 def _fifo_for_reaper(payload):
     os.unlink(os.path.join(payload, "reaper.py"))
     os.mkfifo(os.path.join(payload, "reaper.py"))
-    return "wrong type: reaper.py is not a regular file"
+    return "wrong type: reaper.py is a fifo, not a regular file"
 
 
 def _symlink_for_reaper(payload):
@@ -4249,21 +4287,37 @@ def test_the_preview_refuses_a_symlinked_hook_file(tmp_path, monkeypatch):
     assert calls == [], calls
 
 
+@pytest.mark.parametrize("arm", ["symlinked", "foreign-owned"])
 def test_a_path_refusal_goes_to_preflights_out_and_not_to_stderr(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, arm):
     """`preflight()` reports through `out` so a caller can capture the whole
     preview. The root-write path refusals were the exception, written straight
-    to `sys.stderr`: a caller holding `out` saw every refusal but these."""
+    to `sys.stderr`: a caller holding `out` saw every refusal but these.
+
+    One case per hook-file arm of `validate_root_write_paths()`: a link
+    (`irregular_target`) and a file this test's user owns (`unowned_by`,
+    left real for that case). The chain arm is pinned by
+    `test_an_accepted_trusted_gid_reaches_the_spool_chain_and_only_it`."""
+    real_unowned_by = deploy.unowned_by
     pass_prefix_checks(monkeypatch)
     args = _args(tmp_path)
-    target = tmp_path / "real-bashrc"
-    target.write_text("# a hook file under a dotfile manager\n")
-    os.symlink(str(target), args.bashrc_file)
+    if arm == "symlinked":
+        target = tmp_path / "real-bashrc"
+        target.write_text("# a hook file under a dotfile manager\n")
+        os.symlink(str(target), args.bashrc_file)
+        expected = "is a symlink"
+    else:
+        # A regular file owned by the unprivileged test user, not by root.
+        with open(args.bashrc_file, "w") as handle:
+            handle.write("# somebody else's\n")
+        monkeypatch.setattr(deploy, "unowned_by", real_unowned_by)
+        expected = "It is sourced as root"
 
     out = io.StringIO()
     rc, _checks = deploy.preflight(args, privileged=True, out=out)
     assert rc == 6
     assert "refusing bashrc_file" in out.getvalue(), out.getvalue()
+    assert expected in out.getvalue(), out.getvalue()
     captured = capsys.readouterr()
     assert captured.err == "" and captured.out == "", captured
 

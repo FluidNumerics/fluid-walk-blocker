@@ -120,13 +120,9 @@ privilege. Mode bits are not compared, because the install sets them.
   The copy's own stderr is still relayed.
 - **A top-level file entry that is not a regular file is refused before the
   install's copy.** `install` opens its source to copy it, so a FIFO there
-  would block that copy before the check runs, and a symlink there would be
-  followed. `stage_payload()` lstats each file entry of the payload
-  directory first and refuses a non-regular one with the dry run's line,
-  exit 6, before the snapshot is created. That is a metadata read, not a
-  second read of the bytes, so ADR-0006's "read once" holds. Directory
-  entries need no such look: `cp -a` recreates a FIFO, link or device inside
-  them as one, without opening it, and the check on the snapshot names it.
+  would block that copy before the check runs. `stage_payload()` lstats each
+  file entry first and refuses a non-regular one with the dry run's line,
+  exit 6, before the snapshot is created.
 - **What the check establishes, and what it does not.** It proves the copy
   matches the record built with it. It does not prove the record is the
   reviewed one. That is `walk-blocker provenance`'s question, asked of the
