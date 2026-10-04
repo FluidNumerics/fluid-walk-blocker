@@ -160,3 +160,29 @@ def test_a_cut_never_splits_an_escape_or_a_character(rendered_shim, tail, shift)
     assert record["root_truncated"] is True
     assert value.startswith(record["root"])
     assert len(json.dumps(record["root"], ensure_ascii=False)[1:-1].encode()) <= 1024
+
+
+def test_the_runbook_states_the_size_and_bounds_the_code_uses():
+    """docs/operating.md tells an operator what a record can hold and what the
+    node's logger must accept; the numbers there are the ones the shim and the
+    reconcile use, and the logger requirement is a prerequisite."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(repo, "docs", "operating.md")) as f:
+        doc = " ".join(f.read().split())
+    with open(os.path.join(repo, "node", "shim", "guard.sh.in")) as f:
+        guard = f.read()
+    with open(os.path.join(repo, "node", "shim", "install.sh")) as f:
+        install = f.read()
+    size = re.search(r"\nSG_LOG_SIZE=(\d+)\n", guard).group(1)
+    assert re.search(r"\nSG_LOG_SIZE=%s\n" % size, install)
+    assert "`logger --size %s`" % size in doc
+    p, s = re.search(r"P = (\d+); S = (\d+)", guard).groups()
+    mount = re.search(r"\nSG_REPORT_MOUNT_MAX=(\d+)\n", install).group(1)
+    fstype = re.search(r"\nSG_REPORT_FSTYPE_MAX=(\d+)\n", install).group(1)
+    assert "`pwd`) at %s bytes as escaped and every other string at %s" % (p, s) in doc
+    assert "`mount` at %s and `fstype` at %s" % (mount, fstype) in doc
+    # The marker means the bound cut the field, not that it is byte-for-byte
+    # what the caller had: control characters were rewritten before the bound.
+    assert "holds every field whole" not in doc
+    prereq = doc[doc.index("## 1. Prerequisites"):doc.index("## 2.")]
+    assert "accepts `--size`" in prereq
