@@ -2983,11 +2983,27 @@ def _corrupt(layout, kind, sentinel):
     elif kind == "symlink":
         os.symlink(str(sentinel), str(path))
         return
+    elif kind == "symlink-to-memory":
+        # A link to a WELL-FORMED memory: only the `[ -L ]` check can refuse
+        # it. The sentinel above fails line 1 on its own, so it proves the
+        # link is not followed for writing but not that it is not read.
+        sentinel.write_text("\n".join(lines) + "\n")
+        os.symlink(str(sentinel), str(path))
+        return
+    elif kind == "bad-boot-charset":
+        lines[0] = "boot ../" + _boot_id()
+    elif kind == "short":
+        lines = lines[:2]
+    elif kind == "unreadable":
+        path.write_text("\n".join(lines) + "\n")
+        path.chmod(0)
+        return
     path.write_text("\n".join(lines) + "\n")
 
 
 CORRUPTIONS = ["bad-line-1", "bad-line-3", "non-table-name", "walk-job",
-               "directory", "symlink"]
+               "directory", "symlink", "symlink-to-memory",
+               "bad-boot-charset", "short", "unreadable"]
 
 
 @pytest.mark.parametrize("shell", SHELLS)
@@ -2999,11 +3015,17 @@ def test_a_damaged_memory_is_unknown_and_never_followed(tmp_path, shell, kind):
     keeps its bytes and mode. A directory at the name cannot be replaced by
     a rename, so it is unknown on every poll -- repetition, never silence.
     Mutations: read garbage as an empty memory, or open the name through a
-    link, and this fails."""
+    link, and this fails. Each kind reaches a different check: a link to a
+    well-formed memory only `[ -L ]`, an unreadable file only `[ ! -r ]` (or
+    the read's own failure), a file cut short only the three-line minimum,
+    and a boot id outside its character set only that set."""
+    if kind == "unreadable" and os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 file; CI runs unprivileged")
     layout = _drift_install(tmp_path, shell)
     sentinel = _sentinel(tmp_path)
-    before = _sentinel_state(sentinel)
     _corrupt(layout, kind, sentinel)
+    # After the corruption, before any relink: what the relink must not move.
+    before = _sentinel_state(sentinel)
     _out, drift = _drift_relink(tmp_path, layout, shell)
     assert drift == [("unknown", None)], drift
     assert _sentinel_state(sentinel) == before
