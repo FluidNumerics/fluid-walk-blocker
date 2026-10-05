@@ -178,3 +178,24 @@ def test_the_runbook_names_the_drift_reassertion_and_unknown():
     assert "on a marked one it counts the remembered names still unlinked" in clause
     assert "A swept name is never re-asserted" in clause, clause
     assert "`<spool_dir>/linked-names.state`" in clause, clause
+
+
+def test_the_standing_definition_excludes_a_name_unlinked_on_this_poll():
+    """ADR-0031: a name unlinked on this poll gets link_farm()'s change
+    record and is not counted as standing, so the marked N leaves it out.
+    The definition once read "this poll did not link it", which counts it,
+    while the code skips it (review round 1 on the #152 PR). The code's
+    exclusion and both definitions are pinned together."""
+    sh = _read(INSTALL_SH)
+    assert '|| linked_in_list "$_ln_name" "$SG_DROPPED_NAMES"; then' in sh
+    adr = _joined(_read(os.path.join(
+        ROOT, "docs", "adr",
+        "0031-coverage-drift-is-a-standing-condition.md")))
+    assert ("the table still wraps it, and this poll neither linked it nor "
+            "unlinked it.") in adr, adr
+    assert "this poll did not link it" not in adr
+    clause = _joined(
+        _reconcile_bullet().split("`coverage_change`", 1)[1]
+        .split("`relink_refused`")[0])
+    assert ("the remembered names still unlinked, other than any that poll "
+            "unlinked, which get the change record only") in clause, clause

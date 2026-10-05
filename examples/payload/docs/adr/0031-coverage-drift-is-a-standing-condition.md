@@ -63,7 +63,7 @@ its clock starting then; `--uninstall` removes it. A new boot never resets
 it, and makes the re-assertion due.
 
 A name is **standing** when the memory lists it, the table still wraps
-it, and this poll did not link it. On a poll where ADR-0030's clock is due
+it, and this poll neither linked it nor unlinked it. On a poll where ADR-0030's clock is due
 — by its own `asserted` line, under the same rule and the same
 `[timer].reassert_interval_s` — a non-empty standing set is reported as one
 `coverage_change`, `unwrapped-N`, N the standing count, marked
@@ -81,7 +81,8 @@ is read, written or reported.
 
 - **Two meanings of N, one action.** On an unmarked `coverage_change`, N
   counts the links that went on that poll, swept ones included, as before.
-  On a marked one, N counts the remembered names still unlinked. A query
+  On a marked one, N counts the remembered names still unlinked, other
+  than any this poll unlinked. A query
   for `coverage_change` matches both, and the marker says which.
 - **`unknown` is a state of the reader, not of the farm.** It says the
   relink cannot say what drifted before the poll it reseeded on. Names it

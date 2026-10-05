@@ -623,7 +623,8 @@ It carries three kinds of record:
   still not linked, the relink writes one `coverage_change` `unwrapped-N`
   with `"reasserted": true` and prints the names. N means two things: on an
   unmarked record it counts the links that went on that poll, swept ones
-  included; on a marked one it counts the remembered names still unlinked.
+  included; on a marked one it counts the remembered names still unlinked,
+  other than any that poll unlinked, which get the change record only.
   A swept name is never re-asserted, and a tool absent at the install is
   never drift. When the relink cannot read its memory,
   `<spool_dir>/linked-names.state` — absent, damaged, or a link — it

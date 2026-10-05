@@ -2083,7 +2083,7 @@ uncovered_report() {
 # remembered here and re-asserted on ADR-0030's cadence. The memory is a
 # HIGH-WATER mark: the wrapped names the last --system linked, plus every
 # name a relink has linked since. A name it lists that the table still wraps
-# and this poll did not link is STANDING. Neither "the table minus what is
+# and this poll neither linked nor unlinked is STANDING. Neither "the table minus what is
 # linked" (a constant, mostly tools this node never had) nor "what the last
 # relink linked" (which forgets a missing tool one poll after it goes) can
 # say that.
