@@ -2255,7 +2255,9 @@ def _drive_sg_report(tmp_path, *args):
     assert len(consts) == 4, consts
     body = re.search(r"^sg_report\(\) \{\n.*?^\}\n", text, re.S | re.M).group(0)
     driver = tmp_path / "drive.sh"
-    driver.write_text("\n".join(consts) + "\n" + body + 'sg_report "$@"\n')
+    # `set -eu` as install.sh has it (its line near the top), so a path that
+    # reads an unset variable aborts here as it would on the node.
+    driver.write_text("set -eu\n" + "\n".join(consts) + "\n" + body + 'sg_report "$@"\n')
     bin_dir = tmp_path / "sg-report-bin"
     bin_dir.mkdir()
     log = tmp_path / "sg-report-calls.txt"

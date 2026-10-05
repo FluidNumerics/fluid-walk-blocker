@@ -1292,6 +1292,9 @@ sg_report() {
     _rep_extra=''
     _rep_prio=user.warning
     _rep_bug=0
+    # Set on every call: install.sh runs under `set -u`, so a marker left
+    # unset by a bad fifth argument would abort the relink, not report it.
+    _rep_marker=''
     if [ $# -eq 5 ]; then
         if [ "$5" = reasserted ]; then
             _rep_marker=',"reasserted":true'
