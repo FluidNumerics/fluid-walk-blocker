@@ -141,7 +141,7 @@ __version__ = '0.3.1'  # GENERATED from VERSION
 # reads the payload's, the install reads its root-only snapshot's, and both
 # refuse unless the lock names this digest and every payload file hashes to
 # its entry (ADR-0029). It catches a bad copy, not the payload's owner.
-SITE_SHA256 = 'a1112c21b63c7199238a68326c44315b80b749ace4e02dc876f8a2c1c179337b'  # GENERATED from SITE_SHA256
+SITE_SHA256 = '6207768970a539dd62fa998900668fa33da02b4ce98f72a06574c3e339e95f2a'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
 REPO = os.path.dirname(os.path.abspath(__file__))

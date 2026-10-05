@@ -163,3 +163,9 @@ persistent = false
 timeout_start_sec = 240         # >= relink + kill budgets; validate computes the floor
 relink_timeout_s = 30
 relink_kill_after_s = 10
+# Seconds between re-assertions of Layer 1's standing conditions (ADR-0030):
+# an uncovered expensive mount is reported again on this cadence, so a
+# journal that rotated the first line still holds one. Measure the shortest
+# retained window on the node (docs/site-config.md) and set at most half of
+# it; never below 3600.
+reassert_interval_s = 21600

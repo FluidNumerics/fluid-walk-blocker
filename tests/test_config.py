@@ -188,6 +188,9 @@ def test_defaults_fill_a_minimal_site():
         "ssh_seated", "ssh_seatless", "container", "systemd_service", "init"]
     assert "bfs" not in site.data["trusted_binaries"]
     assert site.derived()["timer_floor_s"] == 160
+    # ADR-0030: the re-assertion cadence has a default; a site that omits
+    # it still re-asserts.
+    assert site.lookup("timer.reassert_interval_s") == 21600
 
 
 def test_a_partial_hook_table_is_filled_but_needs_its_file():
@@ -269,6 +272,11 @@ BAD_SITES = [
     ("install.tool_search_path", ["/usr/bin", "bin"], "pattern"),
     ("timer.on_calendar", "every ten minutes", "calendar"),
     ("timer.timeout_start_sec", 100, "floor"),
+    # ADR-0030: the re-assertion cadence is bounded both ways.
+    ("timer.reassert_interval_s", 3599, "minimum"),
+    ("timer.reassert_interval_s", 604801, "maximum"),
+    ("timer.reassert_interval_s", "21600", "integer"),
+    ("timer.reassert_interval_s", 21600.5, "integer"),
     ("reaper.origins[0].pattern", "(", "compile"),
     ("hooks.bash.file", REMOVE, "required (even when"),
     ("hooks.fish.package", "fish", "Additional properties"),

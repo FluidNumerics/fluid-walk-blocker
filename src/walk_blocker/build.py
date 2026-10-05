@@ -19,7 +19,8 @@ Payload layout:
     survey.py               node/survey.py, verbatim
     walk-job                node/walk-job, stamped from [slurm] and the bfs pin
     reaper.py               node/reaper.py, stamped from [reaper] and [filesystems]
-    shim/install.sh         node/shim/install.sh, stamped from [install], [hooks] and the mount policy
+    shim/install.sh         node/shim/install.sh, stamped from [install], [hooks], the mount policy
+                            and [timer].reassert_interval_s
     site.toml               the input, byte for byte, as a record
     site.lock.json          schema/tool/payload versions and a hash per file
     shim/guard.sh           rendered from the rule table and site.toml (0755)

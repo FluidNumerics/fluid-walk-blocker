@@ -73,6 +73,7 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | Prompt the admin interactively at install time for the mount list | ADR-0016, ADR-0005 — config is reviewed data, not an answer typed at a prompt |
 | Ship a default timer slot, add `RandomizedDelaySec`, or leave `AccuracySec` at its default | ADR-0017 — the slot is chosen against the live schedule; jitter and coalescing undo the choice |
 | Report `uncovered_mount` on every poll again, or drop the `covered`/`unmounted` answers, or move its memory out of the spool | ADR-0019 — on change, three states, memory beside the trail it is not part of; a new boot reports once more |
+| Re-assert per-poll kinds, drop the `reasserted` marker, emit a heartbeat on an empty set, or move the clock out of `uncovered-mounts.state` | ADR-0030 — only standing conditions are re-asserted, on `[timer].reassert_interval_s`, as the same record marked `reasserted`; healthy stays silent (ADR-0008); the clock is line 2 of the memory |
 | Report the guarded path's `awk` as a fork-rule violation, or add a second program beside it | ADR-0018 — the fork-free rule is the fast path's; the guarded path's one documented program is the `awk` over `/proc/mounts`, and a second is a design change |
 | Copy a figure from a predecessor record into this tree | ADR-0014 — state the class and the re-measure condition |
 | Refuse a non-root-owned source tree | ADR-0006 — rejected three times |
@@ -115,13 +116,14 @@ Automated review keeps rediscovering these. Refute them by citation, not by re-l
 | 0016 | Mount class: remoteness default, per-mount overrides, out-of-band survey (narrows 0007) |
 | 0017 | Timer slot is site config chosen against the live schedule; no default, no jitter, no coalescing |
 | 0018 | The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table (narrows 0015) |
-| 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016) |
+| 0019 | An uncovered mount is reported when its standing changes, never on every poll; the memory is a spool file, a new boot reports once more (narrows 0016; narrowed by 0025 and 0030) |
 | 0020 | `opaque_traversal` needs D at two consecutive polls; the streak is state, not a site key; known-tool arms do not wait (narrows 0010) |
 | 0025 | The spool is `root:<spool_group> 02750`; a listed, human-free service group may hold write on a spool ancestor only; root's spool writes never follow a link, and go only into a spool carrying deploy.py's marker (narrows 0012 and 0019, clarifies 0004) |
 | 0026 | `[install].journal_readable` (off by default) grants the spool group read on the WHOLE journal via a tmpfiles.d drop-in naming the gid; the deploy proves it on each root, `%m` and its files, and exits 10 if it did not land; turning it off or uninstalling revokes the gids the drop-in records |
 | 0027 | `--uninstall` refuses (exit 6, before any command) unless the installed `<prefix>/site.toml` hashes to the build's compiled `SITE_SHA256`; hashed, never parsed; no override; VERSION not compared; the install never refuses; one install per node (narrows 0013; narrowed by 0029) |
 | 0028 | `orphan_traversal` requires the same `[reaper].traversal_budget_s` as `runaway_traversal`; reparented to init is not proof the output is unwanted; the budget does not gate fan-out membership |
 | 0029 | `--system --dry-run` checks the payload directory, and `--system` its root-only snapshot, against the payload's own `site.lock.json` (every entry's type, nothing extra in `shim/` or `docs/`, every hash, the build's `SITE_SHA256` and version); exit 6 before the first `systemctl`; integrity, never identity; modes not compared; catches a bad copy, not the payload's owner (narrows 0027) |
+| 0030 | A standing uncovered mount is re-asserted once per `[timer].reassert_interval_s` (3600–604800, default 21600), as the same `uncovered_mount` record marked `"reasserted": true`; the clock is `asserted N` (uptime) on line 2 of `uncovered-mounts.state`; an unreadable clock is due; fresh state and no memory stay unmarked; per-poll kinds and events are not re-asserted; `coverage_change` deferred to issue #152 (narrows 0019) |
 
 ## Non-negotiables a prompt must restate
 

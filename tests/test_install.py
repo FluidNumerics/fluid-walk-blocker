@@ -11,6 +11,7 @@ audit sink is neutralized in both of its forms.
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1984,6 +1985,310 @@ def test_the_memory_is_readable_like_the_spool_whatever_the_umask(tmp_path):
     assert result.returncode == 0, result.stderr
     mode = stat.S_IMODE((layout.spool / STATE_NAME).stat().st_mode)
     assert mode == 0o640, oct(mode)
+
+
+# --------------------------------------------------------------------------
+# a standing condition is re-asserted on a slow cadence (ADR-0030)
+# --------------------------------------------------------------------------
+
+REASSERT = H.REASSERT_INTERVAL_S
+SHELLS = ["dash", "bash"]
+
+# A table with a second uncovered remote mount beside `/archive`.
+TWO_UNCOVERED = FIXTURE_MOUNTS + "nas:/new /mnt/new nfs4 rw 0 0\n"
+# A table with nothing uncovered at all: only the covered and cheap rows.
+NOTHING_UNCOVERED = "".join(line + "\n" for line in FIXTURE_MOUNTS.splitlines()
+                            if " /archive " not in line)
+
+
+def _uptime():
+    """The integer part of /proc/uptime, as install.sh reads it."""
+    with open("/proc/uptime") as fh:
+        return int(fh.read().split()[0].split(".")[0])
+
+
+def _boot_id():
+    with open("/proc/sys/kernel/random/boot_id") as fh:
+        return fh.read().strip()
+
+
+def _marked(records):
+    """Every uncovered_mount record as (mount, fstype, state, reasserted),
+    sorted, with `reasserted` None where the key is absent -- so a change
+    record that grew a `"reasserted": false` would not pass for unmarked."""
+    return sorted((r["mount"], r["fstype"], r["state"], r.get("reasserted"))
+                  for r in records if r["action"] == "uncovered_mount")
+
+
+def _state_lines(layout):
+    return (layout.spool / STATE_NAME).read_text().splitlines()
+
+
+def _set_asserted_line(layout, line):
+    """Replace the memory's second line, or drop it when `line` is None
+    (the v0.3.1 format, which had no clock)."""
+    lines = _state_lines(layout)
+    assert lines[1].startswith("asserted "), lines
+    if line is None:
+        del lines[1]
+    else:
+        lines[1] = line
+    (layout.spool / STATE_NAME).write_text("\n".join(lines) + "\n")
+
+
+def _asserted(layout):
+    lines = _state_lines(layout)
+    assert lines[0].startswith("boot "), lines
+    word, _sep, value = lines[1].partition(" ")
+    assert word == "asserted", lines
+    return int(value)
+
+
+def _relink(tmp_path, layout, shell=None):
+    result, records = relink_with_a_recording_logger(
+        tmp_path, layout, shell=shutil.which(shell) if shell else None)
+    assert result.returncode == 0, result.stderr
+    return records
+
+
+def _need(shell):
+    if not shutil.which(shell):
+        pytest.skip("%s is not installed" % shell)
+
+
+def test_the_memory_carries_the_clock_on_its_second_line(tmp_path):
+    """`asserted N` is line 2, not a third field on the boot line, and it is
+    stamped on the first poll with a value no earlier than the uptime read
+    before that poll."""
+    layout = _stateful_layout(tmp_path)
+    before = _uptime()
+    _relink(tmp_path, layout)
+    lines = _state_lines(layout)
+    assert lines[0].split() == ["boot", _boot_id()], lines
+    assert _asserted(layout) >= before
+    assert lines[2:] == ["/archive nfs4"], lines
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_standing_mount_is_not_reasserted_before_the_cadence(tmp_path, shell):
+    """THE ORACLE, not yet due: two minutes short of the interval, the
+    steady state is still silent. Mutation: re-assert on every poll, and
+    this fails."""
+    _need(shell)
+    layout = _stateful_layout(tmp_path)
+    _relink(tmp_path, layout, shell)
+    stamp = _uptime() - (REASSERT - 120)
+    _set_asserted_line(layout, "asserted %d" % stamp)
+    records = _relink(tmp_path, layout, shell)
+    assert _marked(records) == [], records
+    assert _asserted(layout) == stamp, "a poll that is not due carries the clock"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_standing_mount_is_reasserted_once_the_cadence_passes(tmp_path, shell):
+    """THE ORACLE, due: one second past the interval, every standing mount
+    is reported once more -- the same action and state, notice priority,
+    marked `reasserted` -- and the next poll is silent again because the
+    clock moved. Mutation: never re-assert, and this fails."""
+    _need(shell)
+    layout = _stateful_layout(tmp_path)
+    layout.mount_table.write_text(TWO_UNCOVERED)
+    _relink(tmp_path, layout, shell)
+    standing = sorted(tuple(line.split()) for line in _state_lines(layout)[2:])
+    assert standing == [("/archive", "nfs4"), ("/mnt/new", "nfs4")], standing
+    _set_asserted_line(layout, "asserted %d" % (_uptime() - (REASSERT + 1)))
+    before = _uptime()
+    log = layout.tmp_path / "logger-calls.txt"
+    calls = len(log.read_text().splitlines())
+    records = _relink(tmp_path, layout, shell)
+    assert _marked(records) == [(m, f, "expensive", True) for m, f in standing], records
+    new_calls = log.read_text().splitlines()[calls:]
+    marked_calls = [c for c in new_calls if '"reasserted":true' in c]
+    assert len(marked_calls) == len(standing), new_calls
+    assert all(" -p user.notice " in c for c in marked_calls), marked_calls
+    assert _asserted(layout) >= before
+    records = _relink(tmp_path, layout, shell)
+    assert _marked(records) == [], "the clock did not move: %s" % records
+
+
+def test_a_new_mount_on_a_due_poll_is_a_change_not_a_reassertion(tmp_path):
+    """The poll the cadence falls due on is also the poll a new mount
+    appears: the new one gets the change record only, the standing one the
+    re-assertion only, and neither is said twice."""
+    layout = _stateful_layout(tmp_path)
+    _relink(tmp_path, layout)
+    _set_asserted_line(layout, "asserted %d" % (_uptime() - (REASSERT + 1)))
+    layout.mount_table.write_text(TWO_UNCOVERED)
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [("/archive", "nfs4", "expensive", True),
+                                ("/mnt/new", "nfs4", "expensive", None)], records
+
+
+def test_covered_and_unmounted_are_never_reasserted(tmp_path):
+    """`covered` and `unmounted` answer an earlier line once; they are
+    events, not standing conditions, and a due poll does not mark them."""
+    layout = _stateful_layout(tmp_path)
+    layout.mount_table.write_text(TWO_UNCOVERED)
+    _relink(tmp_path, layout)
+    _set_asserted_line(layout, "asserted %d" % (_uptime() - (REASSERT + 1)))
+    layout.mount_table.write_text(FIXTURE_MOUNTS)       # /mnt/new is gone
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [("/archive", "nfs4", "expensive", True),
+                                ("/mnt/new", "nfs4", "unmounted", None)], records
+
+    _set_asserted_line(layout, "asserted %d" % (_uptime() - (REASSERT + 1)))
+    covered = H.make_policy(mounts=dict(FIXTURE_POLICY.mounts, **{"/archive": ("expensive", 3)}))
+    layout2 = Layout(tmp_path / "covered", spool=layout.spool, mount_table=layout.mount_table)
+    stamped_install(tmp_path, dest=layout2.tmp_path / "copy", layout=layout2, policy=covered,
+                    **{"derived.mount_overrides": H.render_shim_module.mount_overrides(covered)})
+    result, records = relink_with_a_recording_logger(tmp_path, layout2, script=layout2.script)
+    assert result.returncode == 0, result.stderr
+    assert _marked(records) == [("/archive", "nfs4", "covered", None)], records
+
+
+def test_an_empty_set_on_a_due_poll_says_nothing_and_moves_the_clock(tmp_path):
+    """Nothing is standing, so nothing is re-asserted: no heartbeat record
+    (ADR-0008, healthy is silent). The clock still advances."""
+    layout = _stateful_layout(tmp_path, )
+    layout.mount_table.write_text(NOTHING_UNCOVERED)
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [], records
+    _set_asserted_line(layout, "asserted %d" % (_uptime() - (REASSERT + 1)))
+    before = _uptime()
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [], records
+    assert [r for r in records if r.get("reasserted")] == [], records
+    assert _asserted(layout) >= before
+    assert _state_lines(layout)[2:] == []
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("line", [
+    None,                       # a v0.3.1 memory: no clock line at all
+    "asserted notanumber",
+    "asserted ",
+    "asserted",
+    "asserted 0089",            # a leading zero: octal to $(( )), fatal in dash
+    "asserted " + "9" * 23,     # past what the shell's arithmetic holds
+    "FUTURE",
+], ids=["v0.3.1", "not-a-number", "empty", "no-value", "leading-zero",
+        "overflow", "future"])
+def test_an_unreadable_clock_reasserts_and_never_suppresses(tmp_path, shell, line):
+    """A clock the relink cannot read is due, never "recently said". A parse
+    failure that suppressed the line would be silence passing for health.
+    Mutation: treat a parse failure as not due, and this fails."""
+    _need(shell)
+    layout = _stateful_layout(tmp_path)
+    _relink(tmp_path, layout, shell)
+    if line == "FUTURE":
+        line = "asserted %d" % (_uptime() + 10 * REASSERT)
+    _set_asserted_line(layout, line)
+    before = _uptime()
+    records = _relink(tmp_path, layout, shell)
+    assert _marked(records) == [("/archive", "nfs4", "expensive", True)], records
+    assert _asserted(layout) >= before
+    assert _marked(_relink(tmp_path, layout, shell)) == []
+
+
+def test_no_state_is_fresh_unmarked_then_silent(tmp_path):
+    layout = _stateful_layout(tmp_path)
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [("/archive", "nfs4", "expensive", None)], records
+    assert _marked(_relink(tmp_path, layout)) == []
+
+
+@pytest.mark.parametrize("age", [REASSERT + 1, 60], ids=["overdue", "recent"])
+def test_an_earlier_boot_is_fresh_unmarked_then_silent(tmp_path, age):
+    """A clock under another boot's line is no clock, overdue or not: the
+    set is asserted afresh, unmarked, and the clock restarts at this boot's
+    uptime rather than carrying the other boot's value forward."""
+    layout = _stateful_layout(tmp_path)
+    _relink(tmp_path, layout)
+    _set_asserted_line(layout, "asserted %d" % max(0, _uptime() - age))
+    lines = _state_lines(layout)
+    lines[0] = "boot an-earlier-boot"
+    (layout.spool / STATE_NAME).write_text("\n".join(lines) + "\n")
+    before = _uptime()
+    records = _relink(tmp_path, layout)
+    assert _marked(records) == [("/archive", "nfs4", "expensive", None)], records
+    assert _asserted(layout) >= before
+    assert _marked(_relink(tmp_path, layout)) == []
+
+
+def test_after_an_install_the_first_poll_is_fresh_unmarked_then_silent(tmp_path):
+    """The install removes the memory, overdue clock and all; the first root
+    relink after it is a fresh assertion, not a re-assertion."""
+    layout = _stateful_layout(tmp_path)
+    (layout.spool / STATE_NAME).write_text(
+        "boot %s\nasserted 1\n/archive nfs4\n" % _boot_id())
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert not (layout.spool / STATE_NAME).exists()
+    for want in ([("/archive", "nfs4", "expensive", None)], []):
+        result, records = relink_with_a_recording_logger(
+            tmp_path, layout, fake_uid=0, script=layout.script)
+        assert result.returncode == 0, result.stderr
+        assert _marked(records) == want, records
+
+
+def test_without_a_writable_spool_every_poll_is_unmarked(tmp_path):
+    """No memory means no clock: the whole set on every poll, as ADR-0019
+    has it, and never a `reasserted` line, which would claim a memory the
+    relink does not have."""
+    layout = Layout(tmp_path)
+    assert not layout.spool.exists()
+    for _ in range(3):
+        records = _relink(tmp_path, layout)
+        assert _marked(records) == [("/archive", "nfs4", "expensive", None)], records
+    assert not layout.spool.exists()
+
+
+def _drive_sg_report(tmp_path, *args):
+    """Run install.sh's sg_report alone, with the constants it reads, and
+    return the one record it logged as (priority, json)."""
+    layout = stamped_install(tmp_path, dest=tmp_path / "sg-report-copy")
+    text = layout.script.read_text()
+    consts = [line for line in text.splitlines()
+              if line.split("=", 1)[0] in ("SG_LOGGER", "SG_LOG_SIZE",
+                                            "SG_REPORT_MOUNT_MAX",
+                                            "SG_REPORT_FSTYPE_MAX")]
+    assert len(consts) == 4, consts
+    body = re.search(r"^sg_report\(\) \{\n.*?^\}\n", text, re.S | re.M).group(0)
+    driver = tmp_path / "drive.sh"
+    driver.write_text("\n".join(consts) + "\n" + body + 'sg_report "$@"\n')
+    bin_dir = tmp_path / "sg-report-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "sg-report-calls.txt"
+    write_stub(bin_dir / TEST_LOGGER, H.recording_logger_stub(log))
+    driver.write_text(driver.read_text().replace("command -v logger",
+                                                 "command -v %s" % TEST_LOGGER))
+    result = subprocess.run([SH, str(driver)] + list(args), capture_output=True,
+                            text=True, timeout=30, env={"PATH": str(bin_dir)})
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text().splitlines()
+    assert len(calls) == 1, calls
+    prio = calls[0].split(" -p ", 1)[1].split()[0]
+    return prio, json.loads(calls[0].split("-- ", 1)[1])
+
+
+def test_sg_report_marks_a_reassertion_and_nothing_else(tmp_path):
+    prio, record = _drive_sg_report(tmp_path, "uncovered_mount", "/archive",
+                                    "nfs4", "expensive", "reasserted")
+    assert prio == "user.notice"
+    assert record == {"layer": "shim", "action": "uncovered_mount",
+                      "state": "expensive", "mount": "/archive",
+                      "fstype": "nfs4", "reasserted": True}
+    _prio, record = _drive_sg_report(tmp_path / "plain", "uncovered_mount",
+                                     "/archive", "nfs4", "expensive")
+    assert "reasserted" not in record, record
+
+
+@pytest.mark.parametrize("fifth", ["true", "Reasserted", "", "reasserted "])
+def test_sg_report_refuses_any_other_fifth_argument(tmp_path, fifth):
+    _prio, record = _drive_sg_report(tmp_path, "uncovered_mount", "/archive",
+                                     "nfs4", "expensive", fifth)
+    assert record == {"layer": "shim", "action": "caller-bug",
+                      "state": "caller-bug"}, record
 
 
 # --------------------------------------------------------------------------

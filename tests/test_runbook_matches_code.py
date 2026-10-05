@@ -127,3 +127,24 @@ def test_the_runbook_says_a_best_effort_hook_is_written_only_when_its_shell_reso
     # drop-in clause must not read as belonging to one class.
     assert "fish, in either class, gets a dedicated `conf.d` drop-in" in hooks
     assert re.search(r"fish\)\n\s*HK_FILE=\$FISH_CONF_FILE; HK_PKG=''; HK_KIND=dropin", sh)
+
+
+def _uncovered_mount_bullet():
+    text = _read(OPERATING)
+    start = text.index("- an **`uncovered_mount`** record")
+    return _joined(text[start:text.index("\n\n", start)])
+
+
+def test_the_runbook_names_the_reassertion_marker_and_its_key():
+    """ADR-0030: a standing uncovered mount is re-asserted, marked, on the
+    cadence `[timer].reassert_interval_s` sets. A reader who sees the
+    marker in the journal and not in the runbook reads a repeat as a
+    change."""
+    sh = _read(INSTALL_SH)
+    calls = re.findall(r"sg_report uncovered_mount \S+ \S+ (\S+)(?: (\S+))?\n", sh)
+    assert ("expensive", "reasserted") in calls, calls
+    assert "@@timer.reassert_interval_s@@" in sh
+    bullet = _uncovered_mount_bullet()
+    assert '`"reasserted": true`' in bullet, bullet
+    assert "`[timer].reassert_interval_s`" in bullet, bullet
+    assert "`covered` and `unmounted` are never re-asserted" in bullet, bullet

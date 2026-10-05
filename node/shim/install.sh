@@ -239,6 +239,18 @@ SG_REMOTE_PROXY='@@filesystems.remote_proxy@@'  # GENERATED from site.toml:files
 # by the same function at build. Safe to word-split: the schema refuses a
 # path carrying whitespace or `=`.
 SG_MOUNT_OVERRIDES='@@derived.mount_overrides@@'  # GENERATED from site.toml:derived.mount_overrides
+# Seconds between re-assertions of a standing condition (ADR-0030): an
+# uncovered expensive mount already reported is reported again, marked
+# `reasserted`, once this long has passed since the last assertion, so a
+# journal that has rotated the first line still holds one. Compared against
+# the integer part of /proc/uptime, so the effective cadence is this value
+# rounded up to the next poll. A value that is not all digits (only a
+# hand-edited copy) reads as 0, which re-asserts on every poll: repetition is
+# the safe direction, silence is not.
+SG_REASSERT_INTERVAL_S='@@timer.reassert_interval_s@@'  # GENERATED from site.toml:timer.reassert_interval_s
+case $SG_REASSERT_INTERVAL_S in
+    ''|*[!0-9]*) SG_REASSERT_INTERVAL_S=0 ;;
+esac
 
 # The audit sink for sg_report(). Absolute, and deliberately NOT taken from
 # the environment: a sink that resolves through PATH can be shadowed by
@@ -1249,6 +1261,12 @@ assert_audit_dir() {
 sg_report() {
     # sg_report ACTION STATE
     # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive|covered|unmounted
+    # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive reasserted
+    #
+    # The optional fifth argument marks a re-assertion of a standing
+    # condition (ADR-0030): the same record as the change record, plus
+    # `"reasserted":true`. It must be the literal `reasserted`; anything else
+    # is a caller bug and the record says so.
     #
     # One line into `journalctl -t walk-blocker`, the tag the shim's
     # escape-hatch records already use. So one query answers what overrode
@@ -1273,7 +1291,15 @@ sg_report() {
     _rep_state=$2
     _rep_extra=''
     _rep_prio=user.warning
-    if [ $# -eq 4 ]; then
+    _rep_bug=0
+    if [ $# -eq 5 ]; then
+        if [ "$5" = reasserted ]; then
+            _rep_marker=',"reasserted":true'
+        else
+            _rep_bug=1
+        fi
+    fi
+    if [ $# -eq 4 ] || [ $# -eq 5 ]; then
         _rep_mount=$2
         _rep_fs=$3
         _rep_state=$4
@@ -1306,20 +1332,25 @@ sg_report() {
         fi
         # A mount on its default is a fact to act on out of band, not a
         # fault: notice, where a hook gone missing is a warning. Reported
-        # on change, not on state (ADR-0019), so notice is not a place
-        # where a repeating line goes to be ignored.
+        # on change (ADR-0019) and re-asserted only on a slow cadence while
+        # it stands (ADR-0030), never on every poll, so notice is not a
+        # place where a repeating line goes to be ignored.
         _rep_prio=user.notice
+        [ "$#" -eq 4 ] || _rep_extra=$_rep_extra$_rep_marker
     fi
     for _rep_arg in "$_rep_action" "$_rep_state"; do
         case $_rep_arg in
             ''|*[!A-Za-z0-9._-]*)
-                _rep_action=caller-bug
-                _rep_state=caller-bug
-                _rep_extra=''
+                _rep_bug=1
                 break
                 ;;
         esac
     done
+    if [ "$_rep_bug" -eq 1 ]; then
+        _rep_action=caller-bug
+        _rep_state=caller-bug
+        _rep_extra=''
+    fi
     _rep_json='{"layer":"shim","action":"'$_rep_action'","state":"'$_rep_state'"'$_rep_extra'}'
     # The absolute path first, and the PATH lookup only as a fallback for a
     # host that keeps logger elsewhere -- the same shape, and the same reason,
@@ -1742,10 +1773,14 @@ sg_default_class() {
 
 # Report-on-change memory for report_uncovered_mounts() (ADR-0019). One
 # line per mount the last relink found uncovered, after a first line naming
-# the boot it was written under. It lives in the spool because the spool is
-# asserted on every root relink and survives a reboot; the boot line is what
-# makes a reboot report every uncovered mount once more, since a journal on
-# volatile storage has forgotten the earlier line.
+# the boot it was written under and a second, `asserted N`, carrying the
+# uptime second the standing set was last asserted in full (ADR-0030). It
+# lives in the spool because the spool is asserted on every root relink and
+# survives a reboot; the boot line is what makes a reboot report every
+# uncovered mount once more, since a journal on volatile storage has
+# forgotten the earlier line. The clock is a line of its own, not a third
+# field on the boot line, because an unreadable boot id leaves that line's
+# second field empty and `read` would shift the clock into its place.
 # Its NAME, relative, and deliberately not a path: every read and write of
 # it happens in a working directory in_spool() pinned, so no absolute
 # spelling exists for a write to go through.
@@ -1763,8 +1798,8 @@ uncovered_boot_id() {
 
 uncovered_listed_in() {
     # uncovered_listed_in FILE MOUNTPOINT FSTYPE -- does FILE, in the state
-    # format, list this mount? The boot line cannot match: a mount point is
-    # absolute and "boot" is not.
+    # format, list this mount? Neither the boot line nor the asserted line
+    # can match: a mount point is absolute and "boot" and "asserted" are not.
     [ -r "$1" ] || return 1
     while read -r _ul_mnt _ul_fs _ul_rest; do
         if [ "$_ul_mnt" = "$2" ] && [ "$_ul_fs" = "$3" ]; then
@@ -1795,9 +1830,14 @@ report_uncovered_mounts() {
     # default guards (ADR-0016, ADR-0019): `expensive` when a mount is first
     # seen running on its default, `covered` when an override or a narrower
     # default has since taken it over, `unmounted` when it has left the
-    # table. A steady state is silent. A line that repeated identically on
-    # every poll trained readers to filter the tag, which is the failure
-    # ADR-0001 describes for Layer 1, arriving in the journal instead.
+    # table. A line that repeated identically on every poll trained readers
+    # to filter the tag, which is the failure ADR-0001 describes for Layer
+    # 1, arriving in the journal instead. A steady state is silent between
+    # re-assertions: every $SG_REASSERT_INTERVAL_S seconds, rounded up to
+    # the next poll, each mount still standing is reported once more,
+    # marked `reasserted` (ADR-0030), so a journal that has rotated the
+    # change record away still says the condition holds. An empty set
+    # re-asserts nothing.
     #
     # A cheap-by-default local mount (tmpfs, proc, an overlay) cannot
     # produce a false refusal and is never reported: one line per
@@ -1854,14 +1894,60 @@ uncovered_report() {
     # memory that is a link is no memory: it was not written by this code.
     _um_fresh=1
     _um_prev=''
+    _um_asserted=''
     if [ -n "$_um_new" ] && [ ! -L "./$_um_state" ] && [ -f "./$_um_state" ] \
             && [ -r "./$_um_state" ]; then
         _um_prev=./$_um_state
-        read -r _um_word _um_prev_boot _um_rest < "$_um_prev" || _um_word=''
+        _um_aword=''
+        {
+            read -r _um_word _um_prev_boot _um_rest || _um_word=''
+            read -r _um_aword _um_asserted _um_rest || :
+        } < "$_um_prev"
+        [ "$_um_aword" = asserted ] || _um_asserted=''
         if [ "$_um_word" = boot ] && [ "$_um_prev_boot" = "$sg_boot" ]; then
             _um_fresh=0
         fi
     fi
+    # The re-assertion clock (ADR-0030). `now` is the integer part of
+    # /proc/uptime, read with the builtin: no fork. A standing mount is
+    # re-asserted when the cadence has elapsed since `asserted` -- and also
+    # when `asserted` is missing (a state from before the clock existed),
+    # empty, not a number, or later than now, because a clock that cannot be
+    # read must never read as "recently said": a parse failure that
+    # suppressed the line would be silence passing for health. Unreadable
+    # uptime is due on every poll for the same reason.
+    _um_now=''
+    if [ -r /proc/uptime ]; then
+        read -r _um_now _um_rest < /proc/uptime || _um_now=''
+        _um_now=${_um_now%%.*}
+        case $_um_now in
+            ''|*[!0-9]*) _um_now='' ;;
+        esac
+    fi
+    _um_due=1
+    if [ -n "$_um_now" ]; then
+        # A leading zero is refused as well as a non-digit: `$(( ))` reads
+        # it as octal, and a bad octal digit is a fatal error in dash, not a
+        # false test. Nineteen digits or more is past what the shell's
+        # arithmetic holds. Both are due, never silent.
+        case $_um_asserted in
+            ''|*[!0-9]*|0?*|???????????????????*) ;;
+            *)
+                if [ "$_um_asserted" -le "$_um_now" ] \
+                        && [ $((_um_now - _um_asserted)) -lt "$SG_REASSERT_INTERVAL_S" ]; then
+                    _um_due=0
+                fi
+                ;;
+        esac
+    fi
+    # A fresh state is asserted in full below, unmarked, so it starts the
+    # clock too; a poll that is neither carries the old value forward.
+    if [ "$_um_fresh" -eq 1 ] || [ "$_um_due" -eq 1 ]; then
+        _um_stamp=$_um_now
+    else
+        _um_stamp=$_um_asserted
+    fi
+    [ -z "$_um_new" ] || printf 'asserted %s\n' "$_um_stamp" >> "$_um_new"
     while read -r _um_src _um_mnt _um_fs _um_opts _um_rest; do
         [ -n "$_um_fs" ] || continue
         # An octal-escaped mount point (a space, a tab, a newline or a
@@ -1889,7 +1975,12 @@ uncovered_report() {
         [ -z "$_um_new" ] || printf '%s %s\n' "$_um_mnt" "$_um_fs" >> "$_um_new"
         if [ "$_um_fresh" -eq 1 ] \
                 || ! uncovered_listed_in "$_um_prev" "$_um_mnt" "$_um_fs"; then
+            # New to this boot's memory: the change record, and only that.
             sg_report uncovered_mount "$_um_mnt" "$_um_fs" expensive
+        elif [ "$_um_due" -eq 1 ]; then
+            # Standing since an earlier poll, and the cadence has come round:
+            # the same record, marked, so a reader can tell it from a change.
+            sg_report uncovered_mount "$_um_mnt" "$_um_fs" expensive reasserted
         fi
     done < "$SG_MOUNT_TABLE"
     if [ -n "$_um_new" ] && [ "$_um_fresh" -eq 0 ]; then

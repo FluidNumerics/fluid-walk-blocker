@@ -672,6 +672,13 @@
           "minimum": 1,
           "default": 10,
           "description": "Grace after `relink_timeout_s` before the reconcile is killed outright. The reaper's own poll runs regardless: a Layer 1 diagnosis must not stop the Layer 2 backstop."
+        },
+        "reassert_interval_s": {
+          "type": "integer",
+          "minimum": 3600,
+          "maximum": 604800,
+          "default": 21600,
+          "description": "Seconds between re-assertions of Layer 1's standing conditions (ADR-0030). Choose at most half the shortest journal retention window measured on the target node; repetition is the safe direction. The effective cadence is this value rounded up to the next poll."
         }
       }
     }

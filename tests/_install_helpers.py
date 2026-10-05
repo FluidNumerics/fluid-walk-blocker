@@ -56,6 +56,9 @@ TEST_LOGGER = "walk-blocker-test-logger"
 
 AUDIT_FILENAME = "walk-blocker-audit.jsonl"
 
+# `[timer].reassert_interval_s` for the stamped copy (ADR-0030).
+REASSERT_INTERVAL_S = 21600
+
 # The reader group the stamped copy chgrps the spool to. CI is not root, so
 # it is the test user's own primary group -- the one group a non-root
 # `chgrp` is always allowed to name -- and never a fixed name, which would
@@ -425,6 +428,10 @@ def site_values(layout, **overrides):
         # The same function the build's derived value comes from, so the
         # installer's table is rendered exactly as the shim's is.
         "site.toml:derived.mount_overrides": render_shim_module.mount_overrides(FIXTURE_POLICY),
+        # The schema default (ADR-0030): long enough that no test crosses it
+        # by waiting, so a re-assertion happens only where a test moves the
+        # stored clock back.
+        "site.toml:timer.reassert_interval_s": REASSERT_INTERVAL_S,
     }
     for key, value in overrides.items():
         full = key if key == "VERSION" else "site.toml:" + key

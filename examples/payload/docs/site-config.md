@@ -285,6 +285,43 @@ group reads **the whole journal**: every service and every user.
 Re-measure when the group's membership changes, or journald's storage
 settings do. Turning the key off and redeploying revokes the grant.
 
+## Choose the re-assertion interval against the journal's retention
+
+Key: `[timer].reassert_interval_s`. Decision record: ADR-0030. Default
+21600, bounded to `[3600, 604800]` by the schema.
+
+Layer 1 reports an uncovered expensive mount when its standing changes
+(ADR-0019), and then re-asserts it, marked `"reasserted": true`, once per
+interval while it stands (ADR-0030). The interval exists so the condition
+is still in the journal after journald has rotated the first line away, so
+it is chosen against the shortest window the journal actually keeps on
+this node, not against a preference for quiet.
+
+1. Measure the retention the same way the runbook does (`operating.md`,
+   §10, "Who can see what, and for how long"):
+
+   ```sh
+   systemd-analyze cat-config systemd/journald.conf | grep -E 'SplitMode|SystemMax|MaxRetention'
+   journalctl --disk-usage
+   journalctl -o short-iso-precise | head -n 1    # the oldest entry you can read
+   ```
+
+   Under `SplitMode=uid` the window that matters is the shortest one any
+   reader's file holds, and with many active users it is usually set by
+   `SystemMaxFiles`, not by disk.
+2. Set the interval to at most half the shortest retained window, so at
+   least one re-assertion is always inside it, and no lower than 3600.
+   Repetition is the safe direction: a shorter interval costs one notice
+   line per standing mount per interval, and a longer one can leave the
+   journal holding no line at all for a condition that still holds.
+3. The effective cadence is the interval rounded up to the next poll. A
+   node with nothing uncovered writes nothing on the cadence.
+
+Re-measure when `journald.conf` changes (`SplitMode`, `SystemMaxFiles`,
+`SystemMaxUse`, `MaxRetentionSec`), or when the active-user population
+grows: under `SplitMode=uid` more users means more files sharing the same
+cap, and a shorter window.
+
 ## Measure the shim budgets from local disk
 
 Decision record: ADR-0015. No `site.toml` key: the budgets are arguments to

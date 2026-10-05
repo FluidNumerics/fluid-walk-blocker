@@ -54,7 +54,7 @@ the ADR it bears on.
 | 0016 A mount's class defaults from remoteness, is overridden per mount in site config, and is measured only out of band | n/a: design discussion |
 | 0017 The reaper's timer slot is site configuration chosen against the live schedule of the target node | Timer census at a reference deployment: the neighbours, their accuracy and delay settings, and the slot chosen |
 | 0018 The fork-free rule is the fast path's; the guarded path pays one documented fork to read the mount table | Guarded-path timing with the trusted `awk` against the pure-`sh` reader on a reference deployment's mount table; the clone and program counts under `strace` are tool facts and live in the test |
-| 0019 The reconcile reports an uncovered mount when its state changes, not on every poll | n/a: design discussion, prompted by the owner's reading of the first deployment plan |
+| 0019 The reconcile reports an uncovered mount when its state changes, not on every poll (narrowed by 0030: a standing mount is re-asserted on a slow cadence) | n/a: design discussion, prompted by the owner's reading of the first deployment plan |
 | 0020 `opaque_traversal` names a process blocked at two consecutive polls, not one | A predecessor's report-only trail over several days at a reference deployment: distinct processes per verdict, and what the `opaque_traversal` rows were |
 | 0021 Root is the authorization | n/a: structural |
 | 0022 The generic tree is published, and the term half of the gate runs only where the terms are | The pre-publication audit of the object graph: what was scanned, the one finding and the object that carried it, and the collection request outstanding at publication |
@@ -65,6 +65,7 @@ the ADR it bears on.
 | 0027 The uninstall refuses an install that was not built from its own configuration (narrowed by 0029: the payload is checked against its own lock) | n/a: structural |
 | 0028 An orphaned traversal is a finding only past the traversal budget | The trail row naming a reparented known-tool walk shortly after it started, and the same process's age at a later firing |
 | 0029 The dry run and the install check the payload against its own record | n/a: structural |
+| 0030 The reconcile re-asserts a standing uncovered mount on a slow cadence, beside its change records | journald's split mode and rotation limits as configured, the journal's disk usage, and the oldest entry a reader could read, against how long an uncovered mount had been standing |
 
 ## What this file is not
 

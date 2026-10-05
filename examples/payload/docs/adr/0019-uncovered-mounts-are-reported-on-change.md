@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-17
 The Consequences clause "**One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change." is narrowed by ADR-0025: the memory is `0640`, readable by the spool's one reader group, and the superseded wording is recorded under "Superseded wording" below.
+The Decision clause on a silent steady state and the Consequences clause "**A steady state is silent, and silence means what it did before**" are narrowed by ADR-0030: a standing uncovered mount is re-asserted, marked `reasserted`, once per `[timer].reassert_interval_s`, and the superseded wording is recorded under "Superseded wording" below.
 **Narrows:** ADR-0016, "The reconcile logs one journald line per mount in the live table that no override covers"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0019 — see `docs/evidence.md`
 
@@ -46,8 +47,9 @@ Two alternatives were weighed in their strongest form.
 ## Decision
 
 `report_uncovered_mounts()` in the installer's `--relink` arm reports
-**changes** in the set of uncovered expensive mounts, and is silent in a
-steady state. Three records, all under the existing `uncovered_mount`
+**changes** in the set of uncovered expensive mounts, and between changes
+re-asserts only the mounts still standing uncovered, on the slow cadence
+ADR-0030 sets. Three records, all under the existing `uncovered_mount`
 action, distinguished by `state`:
 
 - `expensive` — a mount is first seen running on its guarded default;
@@ -78,9 +80,11 @@ stays at notice.
 
 ## Consequences
 
-**A steady state is silent, and silence means what it did before**: nothing
-was refused, no override was used, and no mount has changed its standing
-since the last line. The operating guide no longer tells readers to filter
+**A steady state is silent between re-assertions.** Over a window shorter
+than `[timer].reassert_interval_s`, silence means nothing was refused, no
+override was used, and no mount has changed its standing since the last
+line; over a longer one it also means no expensive mount is standing
+uncovered (ADR-0030). The operating guide no longer tells readers to filter
 the record out; there is nothing to filter.
 
 **ADR-0016's promise is kept in its stronger form.** A new remote mount is
@@ -128,3 +132,16 @@ Narrowed by ADR-0025. The Consequences above read:
 The memory is `0640`, readable by root and the spool's reader group, and, by
 its mode bits, by nobody else. A named ACL entry can widen the reader set, and
 the deploy reports each one (ADR-0025).
+
+Narrowed by ADR-0030. The Decision above read:
+
+> `report_uncovered_mounts()` in the installer's `--relink` arm reports **changes** in the set of uncovered expensive mounts, and is silent in a steady state.
+
+The Consequences above read:
+
+> **A steady state is silent, and silence means what it did before**: nothing was refused, no override was used, and no mount has changed its standing since the last line.
+
+A mount still standing uncovered is reported again, with the same record
+marked `"reasserted": true`, once per `[timer].reassert_interval_s`, so a
+journal that rotated the change record away still holds the condition.
+Silence is complete only over a window at least that long.

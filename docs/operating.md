@@ -634,7 +634,13 @@ It carries three kinds of record:
   a mount in the live table is seen running on its compiled default with no
   `[[filesystems.mounts]]` override, `covered` once an override or a
   narrower default has taken it over, `unmounted` once it has left the
-  table. A steady state is silent. The `expensive` line is the visible cost
+  table. Between changes, a mount that is still uncovered is reported again,
+  once per `[timer].reassert_interval_s` (rounded up to the next poll), as
+  the same `expensive` record with `"reasserted": true` (ADR-0030), so a
+  journal that has rotated the first line away still says the condition
+  holds. A record without `reasserted` is a change; `covered` and
+  `unmounted` are never re-asserted, and a node with nothing uncovered
+  writes nothing on the cadence. The `expensive` line is the visible cost
   of not having surveyed: read the mount and the type, run the survey, and
   either add an override — the next poll answers with `covered` — or keep
   the survey output beside `site.toml` as the record that the default was
@@ -659,6 +665,11 @@ shown as `?`, as it always was.
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
 directory has the right mode, and no expensive mount is running uncovered.
+That last clause holds only over a window at least as long as
+`[timer].reassert_interval_s`: a standing uncovered mount is re-asserted on
+that cadence (ADR-0030), so quiet over a shorter window means only that
+nothing changed in it, not that nothing is uncovered. Read
+`<spool_dir>/uncovered-mounts.state` for the current set.
 **What it does not mean** is that no unbounded walk ran. Every Layer 1
 bypass — an absolute path, a private `PATH`, a container, a batch script, a
 shell function, a second-level shell, a session that started before the
@@ -704,7 +715,12 @@ Three consequences, and none of them is visible from the trail alone:
   every active user has their own file, and `SystemMaxFiles` (default 100)
   caps the archived files for all of them together. On a login node with
   many users that can be less than a day. A `proven-quiet` Layer 1 then
-  means quiet within that window, not since install. Measure it:
+  means quiet within that window, not since install. The standing
+  `uncovered_mount` condition is re-asserted every
+  `[timer].reassert_interval_s` (ADR-0030) so it survives that rotation;
+  set the interval to at most half the shortest window measured here
+  (`docs/site-config.md`). Change records and refusals are not
+  re-asserted. Measure it:
 
 ```sh
 systemd-analyze cat-config systemd/journald.conf | grep -E 'SplitMode|SystemMax|MaxRetention'

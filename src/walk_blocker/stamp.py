@@ -123,7 +123,7 @@ CONSUMERS = {
         "site.toml:hooks.fish.gate",
         "site.toml:filesystems.mount_table", "site.toml:filesystems.remote_fstypes[:]",
         "site.toml:filesystems.remote_proxy", "site.toml:derived.mount_overrides",
-        "site.toml:trusted_binaries.logger",
+        "site.toml:trusted_binaries.logger", "site.toml:timer.reassert_interval_s",
     ),
 }
 

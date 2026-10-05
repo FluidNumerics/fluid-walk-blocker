@@ -195,6 +195,34 @@ def test_two_builds_are_deep_equal_including_modes(payload, payload_again):
             == (payload_again / manifest.FILENAME).read_bytes())
 
 
+def _stamped_reassert_line(install_sh):
+    lines = [line for line in install_sh.read_text().splitlines()
+             if line.startswith("SG_REASSERT_INTERVAL_S=")]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def test_the_reassert_interval_is_stamped_from_the_site(payload, tmp_path):
+    """ADR-0030: the cadence reaches the node as a literal in install.sh
+    (ADR-0013), and it is the site's value, not the schema default: a
+    second build with a different value stamps that value."""
+    from walk_blocker import config
+    want = config.load_site(EXAMPLE).lookup("timer.reassert_interval_s")
+    assert _stamped_reassert_line(payload / "shim" / "install.sh") == (
+        "SG_REASSERT_INTERVAL_S='%d'  "
+        "# GENERATED from site.toml:timer.reassert_interval_s" % want)
+    text = open(EXAMPLE).read()
+    assert text.count("reassert_interval_s = %d" % want) == 1
+    site = tmp_path / "site.toml"
+    site.write_text(text.replace("reassert_interval_s = %d" % want,
+                                 "reassert_interval_s = 7200"))
+    out = tmp_path / "payload"
+    code, _o, err = _build(site, out)
+    assert code == 0, err
+    assert _stamped_reassert_line(out / "shim" / "install.sh").startswith(
+        "SG_REASSERT_INTERVAL_S='7200'  ")
+
+
 # ------------------------------------------------------------------ check --
 
 def test_check_is_clean_on_a_fresh_build(payload):
