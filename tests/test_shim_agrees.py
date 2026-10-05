@@ -756,11 +756,17 @@ def test_the_no_awk_record_never_interpolates_a_hostile_fstype(
         assert "fs_truncated" not in entry
 
 
-def test_the_no_awk_record_never_interpolates_a_hostile_tool_name(shim_variant, tmp_path):
+@pytest.mark.parametrize("hostile,expected", [
+    ('say"what', "unrepresentable"),
+    ("t" * 200, None),
+], ids=["quote", "over-long"])
+def test_the_no_awk_record_never_interpolates_a_hostile_tool_name(
+        shim_variant, tmp_path, hostile, expected):
     """The tool name is $0's basename, and any symlink to the shim sets it.
-    The dir seam audits a binary resolution for any name, wrapped or not."""
+    The dir seam audits a binary resolution for any name, wrapped or not. A
+    name outside the character set is replaced; one past 128 bytes is cut
+    and marked, like the fstype."""
     variant = shim_variant(SG_AWK="'/nonexistent/awk'")
-    hostile = 'say"what'
     os.symlink(os.path.join(variant["shim_dir"], "find"),
                os.path.join(variant["shim_dir"], hostile))
     # The seam names a PATH directory that holds the tool, so resolving with
@@ -782,7 +788,12 @@ def test_the_no_awk_record_never_interpolates_a_hostile_tool_name(shim_variant, 
     assert len(lines) == 1, lines
     entry = json.loads(lines[0])
     assert entry["seam"] == "WALK_BLOCKER_SHIM_DIR"
-    assert entry["tool"] == "unrepresentable"
+    if expected is None:
+        assert entry["tool"] == hostile[:128]
+        assert entry["tool_truncated"] is True
+    else:
+        assert entry["tool"] == expected
+        assert "tool_truncated" not in entry
     assert entry["fs"] == ""
 
 
