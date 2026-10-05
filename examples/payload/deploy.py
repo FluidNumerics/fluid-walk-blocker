@@ -1330,6 +1330,11 @@ SPOOL_MARKER = ".walk-blocker-spool"
 # carries the same literal as UNCOVERED_NAME, and a test pins that they agree.
 UNCOVERED_NAME = "uncovered-mounts.state"
 
+# The relink's memory of what has been linked since the install (ADR-0031):
+# coverage drift as a standing condition. install.sh carries the same
+# literal as LINKED_NAME, and a test pins that they agree.
+LINKED_NAME = "linked-names.state"
+
 INSTALLER_OWNED_SPOOL_NAMES = (
     SPOOL_MARKER,                   # the spool's identity, above
     "reaper-state.json",            # Layer 2's latch
@@ -1338,6 +1343,8 @@ INSTALLER_OWNED_SPOOL_NAMES = (
     "reaper-audit.jsonl.1",         # ...and its one rotation
     UNCOVERED_NAME,                 # the relink's memory (ADR-0019)
     UNCOVERED_NAME + ".new",        # ...and its write-and-rename
+    LINKED_NAME,                    # the linked-set memory (ADR-0031)
+    LINKED_NAME + ".new",           # ...and its write-and-rename
 )
 
 
@@ -3794,11 +3801,12 @@ def system_uninstall(args, env=None):
             "  the block between the walk-blocker markers in each shared hook\n"
             "  file, remove the fish drop-in outright (the whole file is\n"
             "  walk-blocker's) -- the hook files are %s -- then remove %s\n"
-            "  and the relink's memory %s.\n"
+            "  and the relink's two memories, %s and %s.\n"
             % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
                ", ".join(hooks) or "none on this site",
                os.path.join(args.prefix, "bin"),
-               os.path.join(args.spool_dir, UNCOVERED_NAME)))
+               os.path.join(args.spool_dir, UNCOVERED_NAME),
+               os.path.join(args.spool_dir, LINKED_NAME)))
         if granted:
             sys.stderr.write(
                 "  Then remove %s and revoke the journal read it\n"

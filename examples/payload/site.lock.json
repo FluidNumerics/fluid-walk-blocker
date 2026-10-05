@@ -2,7 +2,7 @@
   "files": {
     "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
     "README.md": "ffa87f2021e8419dd5d8cb7a4b50c4e6489a61f363d17484907fc460cd11dc0e",
-    "deploy.py": "b09b837ff1f9ddc587d6e9a7b2dfd67084e1f84b2366a2b5bd85397843bf790a",
+    "deploy.py": "0514a1b0cbc56c1031052fb9ce907c61858c9368d5f4eba844ee1dd94b28dad1",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "b84d631d0916e0a5073d7dd7c4fa7fd018a11a1f810fedd86514706be2c94285",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -43,7 +43,7 @@
     "reaper.py": "24c530adca39381cfb746d26680526a0bcaa8e687ae3aa7062f2a0d1a84f26b0",
     "search_rules.py": "07145a38a8f270f972dbab14427e301bf6613d7b435af39ab7888b932cc7325e",
     "shim/guard.sh": "26dbe2a0ecd35c868c4053fa49d397470b98d84cecdce5810527c1b8436b8e89",
-    "shim/install.sh": "2d0bf42a3c13cd817137d6c72d848bdc6e618f1d8d36c0fa18ba0c79c89d958a",
+    "shim/install.sh": "747c8f6c1207cdaa3be7b68e8261a3a4d1e6682c839faedae1e495fbdcd3f75c",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "cd23bc5e072bd8b4bc568a0c949aa693fc447c172212e3c6e8023eb6b6671f85",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",

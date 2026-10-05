@@ -12,7 +12,8 @@
 #                                      hook file's pre-install content to
 #                                      <file>.walk-blocker.orig, once, the
 #                                      first time this runs.
-#   install.sh --relink                reconcile: the symlink farm, the hook
+#   install.sh --relink                reconcile: the symlink farm and its
+#                                      drift since the install, the hook
 #                                      state, the audit directory's group
 #                                      and mode, and the mount table. The
 #                                      reaper's timer
@@ -681,6 +682,11 @@ link_farm() {
     _linked=0
     _skipped=''
     _dropped=0
+    # The names themselves, for linked_report() (ADR-0031): what this poll
+    # linked, and what it unlinked because the tool is gone. Table names
+    # only, so safe to carry space-separated; never put in a record.
+    SG_LINKED_NAMES=''
+    SG_DROPPED_NAMES=''
     for _name in $SG_WRAPPED_NAMES; do
         # Only link names that already resolve. A shim named `ag` where ag is
         # absent makes `command -v ag` succeed and silently changes how other
@@ -708,12 +714,14 @@ link_farm() {
             # shell-dependent.
             if [ -L "$_bin/$_name" ]; then
                 _dropped=$((_dropped + 1))
+                SG_DROPPED_NAMES="$SG_DROPPED_NAMES $_name"
             fi
             rm -f "$_bin/$_name"
             continue
         fi
         ln -sfn "$HERE/guard.sh" "$_bin/$_name"
         _linked=$((_linked + 1))
+        SG_LINKED_NAMES="$SG_LINKED_NAMES $_name"
     done
 
     # Unconditionally, and OUTSIDE the loop above. That loop skips a name the
@@ -749,6 +757,11 @@ link_farm() {
     # stdout above, under the unit, for whoever needs them.
     #
     # Silent when nothing was unwrapped, like every other report here.
+    # This is the CHANGE record, once, on the poll the link goes. A wrapped
+    # name that stays unlinked is a standing condition, re-asserted on a slow
+    # cadence by linked_report() against the memory of what was linked
+    # (ADR-0031); a swept link is never one, because its name is not in the
+    # table that memory is checked against.
     if [ "$((_dropped + SWEPT_N))" -gt 0 ]; then
         sg_report coverage_change "unwrapped-$((_dropped + SWEPT_N))"
     fi
@@ -757,6 +770,8 @@ link_farm() {
 
 SWEPT=''
 SWEPT_N=0
+SG_LINKED_NAMES=''
+SG_DROPPED_NAMES=''
 sweep_unclaimed() {
     # sweep_unclaimed DIR "NAME..." -- remove every symlink in DIR that the
     # name list does not claim. Sets SWEPT to what it removed.
@@ -1260,13 +1275,16 @@ assert_audit_dir() {
 
 sg_report() {
     # sg_report ACTION STATE
+    # sg_report ACTION STATE reasserted
     # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive|covered|unmounted
     # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive reasserted
     #
-    # The optional fifth argument marks a re-assertion of a standing
-    # condition (ADR-0030): the same record as the change record, plus
+    # The optional third argument of the short form, and the fifth of the
+    # long one, mark a re-assertion of a standing condition (ADR-0030,
+    # ADR-0031): the same record as the change record, plus
     # `"reasserted":true`. It must be the literal `reasserted`; anything else
-    # is a caller bug and the record says so.
+    # is a caller bug and the record says so. A third argument used to be
+    # ignored, which made a misspelt marker an unmarked change record.
     #
     # One line into `journalctl -t walk-blocker`, the tag the shim's
     # escape-hatch records already use. So one query answers what overrode
@@ -1295,6 +1313,15 @@ sg_report() {
     # Set on every call: install.sh runs under `set -u`, so a marker left
     # unset by a bad fifth argument would abort the relink, not report it.
     _rep_marker=''
+    if [ $# -eq 3 ]; then
+        # The short form's marker. Priority unchanged: the re-assertion is
+        # the same fact as the change record, at the same level.
+        if [ "$3" = reasserted ]; then
+            _rep_extra=',"reasserted":true'
+        else
+            _rep_bug=1
+        fi
+    fi
     if [ $# -eq 5 ]; then
         if [ "$5" = reasserted ]; then
             _rep_marker=',"reasserted":true'
@@ -1774,6 +1801,79 @@ sg_default_class() {
     sg_class=cheap
 }
 
+# --------------------------------------------------------------------------
+# the two memories' shared mechanics: the re-assertion clock (ADR-0030) and
+# the write into the pinned spool (ADR-0025). Each memory keeps its own
+# clock; only the rule for reading one is shared.
+# --------------------------------------------------------------------------
+
+sg_uptime_now() {
+    # Sets sg_now to the integer part of /proc/uptime, read with the builtin
+    # (no fork), or to empty where it cannot be read.
+    sg_now=''
+    _up_rest=''
+    if [ -r /proc/uptime ]; then
+        read -r sg_now _up_rest < /proc/uptime || sg_now=''
+        sg_now=${sg_now%%.*}
+        case $sg_now in
+            ''|*[!0-9]*) sg_now='' ;;
+        esac
+    fi
+    : "$_up_rest"
+    return 0
+}
+
+sg_clock_due() {
+    # sg_clock_due ASSERTED NOW -- 0 when a standing condition is due to be
+    # re-asserted, 1 when it was asserted recently enough to stay quiet.
+    #
+    # Due when the cadence has elapsed since ASSERTED -- and also when
+    # ASSERTED is missing, empty, not a number, or later than NOW, and on
+    # every poll where NOW could not be read, because a clock that cannot be
+    # read must never read as "recently said": a parse failure that
+    # suppressed the line would be silence passing for health. A leading
+    # zero is refused as well as a non-digit: `$(( ))` reads it as octal,
+    # and a bad octal digit is a fatal error in dash, not a false test.
+    # Nineteen digits or more is past what the shell's arithmetic holds.
+    [ -n "$2" ] || return 0
+    case $1 in
+        ''|*[!0-9]*|0?*|???????????????????*) return 0 ;;
+    esac
+    if [ "$1" -le "$2" ] && [ $(($2 - $1)) -lt "$SG_REASSERT_INTERVAL_S" ]; then
+        return 1
+    fi
+    return 0
+}
+
+sg_spool_new() {
+    # sg_spool_new NAME -- inside in_spool(): create ./NAME.new as a NEW
+    # inode, mode 0640, and set sg_new to its relative name, or to empty
+    # when it could not be created. `rm -f` removes whatever entry has the
+    # name -- a link included, never its target -- and noclobber makes the
+    # create exclusive, so the redirection cannot follow a link that
+    # appeared in between. 0640 like the rest of the spool (ADR-0025),
+    # whatever the caller's umask: systemd's default and a root shell's
+    # differ. Set on the new file, before it is renamed over the old one,
+    # so no chmod is ever aimed at the final name.
+    sg_new=''
+    rm -f -- "./$1.new" 2>/dev/null || :
+    if ( set -C; : > "./$1.new" ) 2>/dev/null; then
+        sg_new=./$1.new
+        chmod 0640 "$sg_new" 2>/dev/null || :
+    fi
+    return 0
+}
+
+sg_spool_commit() {
+    # sg_spool_commit NAME -- rename ./NAME.new over ./NAME in one step, or
+    # remove ./NAME.new when that fails. `-T`: measured, a plain
+    # `mv -f new name` where `name` is a link to a directory moves `new`
+    # INTO that directory. -T replaces the entry, a link included, and never
+    # writes through it.
+    mv -f -T "./$1.new" "./$1" 2>/dev/null || rm -f -- "./$1.new"
+    return 0
+}
+
 # Report-on-change memory for report_uncovered_mounts() (ADR-0019). One
 # line per mount the last relink found uncovered, after a first line naming
 # the boot it was written under and a second, `asserted N`, carrying the
@@ -1878,20 +1978,10 @@ uncovered_report() {
     _um_state=$1
     _um_new=''
     if [ -n "$_um_state" ]; then
-        # A NEW inode, created here: `rm -f` removes whatever entry has the
-        # name -- a link included, never its target -- and noclobber makes
-        # the create exclusive, so the redirection cannot follow a link that
-        # appeared in between.
-        rm -f -- "./$_um_state.new" 2>/dev/null || :
-        if ( set -C; : > "./$_um_state.new" ) 2>/dev/null; then
-            _um_new=./$_um_state.new
-            # 0640 like the rest of the spool (ADR-0025), whatever the
-            # caller's umask: systemd's default and a root shell's differ.
-            # Set on the new file, before it is renamed over the old one,
-            # so no chmod is ever aimed at the final name.
-            chmod 0640 "$_um_new" 2>/dev/null || :
-            printf 'boot %s\n' "$sg_boot" > "$_um_new"
-        fi
+        # A NEW inode, created here, never through a link: sg_spool_new().
+        sg_spool_new "$_um_state"
+        _um_new=$sg_new
+        [ -z "$_um_new" ] || printf 'boot %s\n' "$sg_boot" > "$_um_new"
     fi
     # Fresh means: report everything current, compare against nothing. A
     # memory that is a link is no memory: it was not written by this code.
@@ -1911,38 +2001,14 @@ uncovered_report() {
             _um_fresh=0
         fi
     fi
-    # The re-assertion clock (ADR-0030). `now` is the integer part of
-    # /proc/uptime, read with the builtin: no fork. A standing mount is
-    # re-asserted when the cadence has elapsed since `asserted` -- and also
-    # when `asserted` is missing (a state from before the clock existed),
-    # empty, not a number, or later than now, because a clock that cannot be
-    # read must never read as "recently said": a parse failure that
-    # suppressed the line would be silence passing for health. Unreadable
-    # uptime is due on every poll for the same reason.
-    _um_now=''
-    if [ -r /proc/uptime ]; then
-        read -r _um_now _um_rest < /proc/uptime || _um_now=''
-        _um_now=${_um_now%%.*}
-        case $_um_now in
-            ''|*[!0-9]*) _um_now='' ;;
-        esac
-    fi
+    # The re-assertion clock (ADR-0030), read by sg_clock_due(): a
+    # standing mount is re-asserted when the cadence has elapsed since
+    # `asserted`, and whenever `asserted` (a state from before the clock
+    # existed has none) or the uptime cannot be read.
+    sg_uptime_now
+    _um_now=$sg_now
     _um_due=1
-    if [ -n "$_um_now" ]; then
-        # A leading zero is refused as well as a non-digit: `$(( ))` reads
-        # it as octal, and a bad octal digit is a fatal error in dash, not a
-        # false test. Nineteen digits or more is past what the shell's
-        # arithmetic holds. Both are due, never silent.
-        case $_um_asserted in
-            ''|*[!0-9]*|0?*|???????????????????*) ;;
-            *)
-                if [ "$_um_asserted" -le "$_um_now" ] \
-                        && [ $((_um_now - _um_asserted)) -lt "$SG_REASSERT_INTERVAL_S" ]; then
-                    _um_due=0
-                fi
-                ;;
-        esac
-    fi
+    sg_clock_due "$_um_asserted" "$_um_now" || _um_due=0
     # A fresh state is asserted in full below, unmarked, so it starts the
     # clock too; a poll that is neither carries the old value forward.
     if [ "$_um_fresh" -eq 1 ] || [ "$_um_due" -eq 1 ]; then
@@ -2002,12 +2068,217 @@ uncovered_report() {
             fi
         done < "$_um_prev"
     fi
-    if [ -n "$_um_new" ]; then
-        # `-T`: measured, a plain `mv -f new name` where `name` is a link to
-        # a directory moves `new` INTO that directory. -T replaces the entry.
-        mv -f -T "$_um_new" "./$_um_state" 2>/dev/null || rm -f -- "$_um_new"
-    fi
+    [ -z "$_um_new" ] || sg_spool_commit "$_um_state"
     : "$_um_rest"
+    return 0
+}
+
+# --------------------------------------------------------------------------
+# the linked-set memory: coverage drift is a standing condition (ADR-0031)
+# --------------------------------------------------------------------------
+
+# link_farm() records a tool that stops being wrapped once, as a
+# `coverage_change` on the poll its link goes. That record rotates out of the
+# journal like any other while the tool stays unwrapped, so the drift is
+# remembered here and re-asserted on ADR-0030's cadence. The memory is a
+# HIGH-WATER mark: the wrapped names the last --system linked, plus every
+# name a relink has linked since. A name it lists that the table still wraps
+# and this poll did not link is STANDING. Neither "the table minus what is
+# linked" (a constant, mostly tools this node never had) nor "what the last
+# relink linked" (which forgets a missing tool one poll after it goes) can
+# say that.
+#
+# Format, read by position:
+#   boot <id>                      the boot it was written under
+#   asserted <uptime-int>          the clock (ADR-0030), this memory's own
+#   seeded system|seeded relink    who seeded it
+#   <name>                         one wrapped table name per line
+#
+# A new boot never resets it: a tool that was missing before a reboot is
+# still missing after it. A changed boot id only makes the re-assertion due,
+# since a journal on volatile storage forgot the earlier line. Only --system
+# reseeds it as `seeded system`. A memory the relink cannot read -- absent,
+# damaged, a link, not a regular file -- is reseeded from this poll as
+# `seeded relink`, and says so with `coverage_change unknown`, re-asserted
+# on the cadence until an install answers it. walk-job is never in it: it is
+# not a table name, and its link is made unconditionally.
+#
+# Its NAME, relative, like UNCOVERED_NAME: every read and write of it
+# happens in a working directory in_spool() pinned. deploy.py carries the
+# same literal as LINKED_NAME, and a test pins that they agree.
+LINKED_NAME=linked-names.state
+
+linked_in_list() {
+    # linked_in_list NAME "LIST" -- is NAME one of LIST's words? Quoted in
+    # the pattern, so a glob character matches only itself.
+    case " $2 " in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+
+linked_in_table() {
+    # linked_in_table NAME -- does the compiled table wrap NAME?
+    for _lt_name in $SG_WRAPPED_NAMES; do
+        if [ "$_lt_name" = "$1" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+linked_write() {
+    # linked_write STATE ORIGIN STAMP "NAMES" -- write the memory: this
+    # boot, the clock, the origin, and every table name in NAMES or linked
+    # this poll, in table order. A new inode renamed over the old one, never
+    # a write through the name (ADR-0025).
+    sg_spool_new "$1"
+    [ -n "$sg_new" ] || return 0
+    {
+        printf 'boot %s\n' "$sg_boot"
+        printf 'asserted %s\n' "$3"
+        printf 'seeded %s\n' "$2"
+        for _lw_name in $SG_WRAPPED_NAMES; do
+            if linked_in_list "$_lw_name" "$4" \
+                    || linked_in_list "$_lw_name" "$SG_LINKED_NAMES"; then
+                printf '%s\n' "$_lw_name"
+            fi
+        done
+    } > "$sg_new"
+    sg_spool_commit "$1"
+    return 0
+}
+
+linked_seed() {
+    # linked_seed STATE -- the --system arm, inside in_spool(), after
+    # link_farm(): the memory becomes exactly what this install linked, and
+    # its clock starts now. Whatever an earlier install or relink remembered
+    # is gone; the install is the answer to it.
+    uncovered_boot_id
+    sg_uptime_now
+    linked_write "$1" system "$sg_now" ''
+    return 0
+}
+
+linked_report() {
+    # linked_report STATE -- the relink, inside in_spool(), after
+    # link_farm(). Re-asserts standing drift when the clock is due, unions
+    # this poll's linked names into the memory, and rewrites it. Always
+    # returns 0 once it runs.
+    _ln_state=$1
+    _ln_bad=0
+    _ln_n=0
+    _ln_line=''
+    _ln_pboot=''
+    _ln_asserted=''
+    _ln_origin=''
+    _ln_mem=''
+    _ln_standing=''
+    _ln_sn=0
+    _ln_stamp=''
+    uncovered_boot_id
+    sg_uptime_now
+    _ln_now=$sg_now
+    # A link is no memory: it was not written by this code, and reading it
+    # would read whatever it points at.
+    if [ -L "./$_ln_state" ] || [ ! -f "./$_ln_state" ] \
+            || [ ! -r "./$_ln_state" ]; then
+        _ln_bad=1
+    else
+        # `|| [ -n ]`: a last line without its newline is still read, so a
+        # cut-short file loses no name it does hold.
+        while IFS= read -r _ln_line || [ -n "$_ln_line" ]; do
+            _ln_n=$((_ln_n + 1))
+            case $_ln_n in
+                1)
+                    case $_ln_line in
+                        'boot '*) _ln_pboot=${_ln_line#boot } ;;
+                        *) _ln_bad=1; break ;;
+                    esac
+                    case $_ln_pboot in
+                        *[!A-Za-z0-9-]*) _ln_bad=1; break ;;
+                    esac
+                    ;;
+                2)
+                    # A clock that does not parse is due, not damage: the
+                    # names below it are still good (ADR-0030).
+                    case $_ln_line in
+                        'asserted '*) _ln_asserted=${_ln_line#asserted } ;;
+                        *) _ln_asserted='' ;;
+                    esac
+                    ;;
+                3)
+                    case $_ln_line in
+                        'seeded system') _ln_origin=system ;;
+                        'seeded relink') _ln_origin=relink ;;
+                        *) _ln_bad=1; break ;;
+                    esac
+                    ;;
+                *)
+                    # A name this table does not wrap was not written by
+                    # this payload's relink or install. Checked for shape
+                    # first, so linked_in_list() never sees a space.
+                    case $_ln_line in
+                        ''|*[!A-Za-z0-9._+-]*) _ln_bad=1; break ;;
+                    esac
+                    if ! linked_in_table "$_ln_line"; then
+                        _ln_bad=1
+                        break
+                    fi
+                    if ! linked_in_list "$_ln_line" "$_ln_mem"; then
+                        _ln_mem="$_ln_mem $_ln_line"
+                    fi
+                    ;;
+            esac
+            _ln_line=''
+        done < "./$_ln_state"
+        [ "$_ln_n" -ge 3 ] || _ln_bad=1
+    fi
+    if [ "$_ln_bad" -eq 1 ]; then
+        # Garbage is never read as health, and absence is never read as
+        # "nothing was linked". Reseeded from what this poll linked, which is
+        # all that is known; drift before it is unknown, and the record says
+        # so, once now and on the cadence until an install reseeds.
+        sg_report coverage_change unknown
+        echo "walk-blocker: no readable memory of what was linked since the last install; drift before this poll is unknown until \`deploy.py --system\` runs"
+        linked_write "$_ln_state" relink "$_ln_now" ''
+        return 0
+    fi
+    # Standing: remembered, still wrapped, not linked now -- and not
+    # unlinked on THIS poll either, since link_farm() has just written the
+    # change record for that name, and a name gets the change record or the
+    # re-assertion on one poll, never both (ADR-0030).
+    for _ln_name in $_ln_mem; do
+        if linked_in_list "$_ln_name" "$SG_LINKED_NAMES" \
+                || linked_in_list "$_ln_name" "$SG_DROPPED_NAMES"; then
+            continue
+        fi
+        linked_in_table "$_ln_name" || continue
+        _ln_standing="$_ln_standing $_ln_name"
+        _ln_sn=$((_ln_sn + 1))
+    done
+    _ln_due=1
+    if [ "$_ln_pboot" = "$sg_boot" ]; then
+        sg_clock_due "$_ln_asserted" "$_ln_now" || _ln_due=0
+    fi
+    if [ "$_ln_due" -eq 1 ]; then
+        # The stamp moves whether or not anything is standing: an empty set
+        # writes no record (no heartbeat) and still starts a new interval.
+        _ln_stamp=$_ln_now
+        if [ "$_ln_sn" -gt 0 ]; then
+            # One record for the set, counted, like the change record; the
+            # names go to stdout, under the unit, as link_farm()'s do.
+            sg_report coverage_change "unwrapped-$_ln_sn" reasserted
+            echo "walk-blocker: linked since the last install, not linked now:$_ln_standing"
+        fi
+        if [ "$_ln_origin" = relink ]; then
+            sg_report coverage_change unknown reasserted
+            echo "walk-blocker: drift before the memory was reseeded is still unknown; \`deploy.py --system\` answers it"
+        fi
+    else
+        _ln_stamp=$_ln_asserted
+    fi
+    linked_write "$_ln_state" "$_ln_origin" "$_ln_stamp" "$_ln_mem"
     return 0
 }
 
@@ -2100,6 +2371,15 @@ case $MODE in
             assert_audit_dir || :
         fi
         link_farm "$BIN"
+        # Coverage drift as a standing condition (ADR-0031): what has been
+        # linked since the install and is not linked now, re-asserted on the
+        # cadence. Only in a pinned spool. Without one there is no memory,
+        # and this reads nothing, writes nothing and reports no drift: the
+        # table minus what is linked is not drift, it is mostly tools this
+        # node never had. link_farm()'s change record has already fired.
+        if spool_fit "$SG_SPOOL_DIR"; then
+            in_spool linked_report "$LINKED_NAME" || :
+        fi
         # The symlink farm is half of Layer 1; the hook blocks that put those
         # symlinks on anyone's PATH are the half a routine package update can
         # remove, so both are checked here. Reports; never repairs, never
@@ -2157,10 +2437,20 @@ case $MODE in
             # so the first poll after it names every mount on its default
             # once (ADR-0019). The audit trail beside it is left alone. In
             # the pinned spool, like every other write into it.
+            # The linked-set memory goes too (ADR-0031), so an install whose
+            # seed below cannot be written leaves no memory -- which the next
+            # relink reports as `unknown` -- rather than an earlier one.
             if spool_fit "$SG_SPOOL_DIR"; then
                 in_spool rm -f -- "./$UNCOVERED_NAME" || :
+                in_spool rm -f -- "./$LINKED_NAME" "./$LINKED_NAME.new" || :
             fi
             link_farm "$BIN"
+            # ...and is seeded with exactly what this install linked, as
+            # `seeded system`, its clock starting now. A tool missing at the
+            # install is not drift; one that goes after it is.
+            if spool_fit "$SG_SPOOL_DIR"; then
+                in_spool linked_seed "$LINKED_NAME" || :
+            fi
             for _wh in $SG_HOOKS_REQUIRED; do
                 write_hook "$_wh"
             done
@@ -2294,11 +2584,12 @@ SYS
         # since the rmdir below would then fail into its own `|| true`.
         sweep_unclaimed "$BIN" ""
         rmdir "$BIN" 2>/dev/null || true
-        # The report-on-change memory is upkeep state, not a record; the
-        # spool stays for the audit trail it holds. Removed from the pinned
-        # spool, never through a link at its name.
+        # The two memories are upkeep state, not records; the spool stays
+        # for the audit trail it holds. Removed from the pinned spool, never
+        # through a link at their names: `rm -f` on a link removes the link.
         if spool_fit "$SG_SPOOL_DIR"; then
             in_spool rm -f -- "./$UNCOVERED_NAME" || :
+            in_spool rm -f -- "./$LINKED_NAME" "./$LINKED_NAME.new" || :
         fi
         echo "walk-blocker: removed from$_removed and $BIN"
         echo "walk-blocker: $SG_TIMER_UNIT is stopped and not enabled, so Layer 2 (the reaper) is not running either"

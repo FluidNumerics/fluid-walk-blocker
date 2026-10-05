@@ -2646,6 +2646,8 @@ def test_a_refused_uninstall_helper_names_the_spool_memory(
     assert deploy.system_uninstall(args) == 5
     err = capsys.readouterr().err
     assert os.path.join(args.spool_dir, deploy.UNCOVERED_NAME) in err, err
+    # And the linked-set memory beside it (ADR-0031).
+    assert os.path.join(args.spool_dir, deploy.LINKED_NAME) in err, err
 
 
 def test_deploy_and_install_name_the_same_spool_memory():
@@ -2653,6 +2655,17 @@ def test_deploy_and_install_name_the_same_spool_memory():
     with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
         text = fh.read()
     assert "\nUNCOVERED_NAME=%s\n" % deploy.UNCOVERED_NAME in text
+
+
+def test_deploy_and_install_name_the_same_linked_memory():
+    """ADR-0031's memory: one literal in install.sh, one in deploy.py, and
+    both it and its write-and-rename are installer-owned spool names, so
+    the deploy repairs and checks them like the rest."""
+    with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
+        text = fh.read()
+    assert "\nLINKED_NAME=%s\n" % deploy.LINKED_NAME in text
+    assert deploy.LINKED_NAME in deploy.INSTALLER_OWNED_SPOOL_NAMES
+    assert deploy.LINKED_NAME + ".new" in deploy.INSTALLER_OWNED_SPOOL_NAMES
 
 
 def test_a_refused_uninstall_helper_gives_the_journal_revoke_commands(
