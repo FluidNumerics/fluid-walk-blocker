@@ -1971,6 +1971,36 @@ def test_the_uninstall_removes_the_memory_and_keeps_the_spool(tmp_path):
     assert "left in place" in result.stdout
 
 
+@pytest.mark.parametrize("mode", ["--system", "--uninstall"])
+@pytest.mark.parametrize("planted", ["files", "links"])
+def test_install_and_uninstall_remove_both_memory_names_never_through_a_link(
+        tmp_path, mode, planted):
+    """The memory and its write-and-rename file both go, from the pinned
+    spool, at an install and at an uninstall: a relink that stops between
+    the create and the rename leaves the `.new` behind, and it is the
+    installer's to take. A link at either name is removed and its target
+    left alone. Mutation: drop the `.new` from either `rm -f`, and the
+    matching case fails."""
+    layout = _stateful_layout(tmp_path)
+    H.stage_spool(layout)
+    if mode == "--uninstall":
+        layout.bin.mkdir(parents=True)
+    sentinel = _sentinel(tmp_path)
+    before = _sentinel_state(sentinel)
+    for name in (STATE_NAME, STATE_NAME + ".new"):
+        path = layout.spool / name
+        if planted == "links":
+            os.symlink(str(sentinel), str(path))
+        else:
+            path.write_text("boot x\n/archive nfs4\n")
+    result, layout = run_install(tmp_path, [mode], fake_uid=0, layout=layout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name in (STATE_NAME, STATE_NAME + ".new"):
+        assert not os.path.lexists(str(layout.spool / name)), name
+    assert _sentinel_state(sentinel) == before
+    assert layout.spool.is_dir()
+
+
 def test_the_memory_is_readable_like_the_spool_whatever_the_umask(tmp_path):
     """ADR-0019 says the memory is readable like the rest of the spool, which
     is 0640 for the reader group (ADR-0025); a root relink under a 077 umask
@@ -3049,6 +3079,36 @@ def _uptime_unreadable(layout):
     text = layout.script.read_text()
     assert "/proc/uptime" in text
     layout.script.write_text(text.replace("/proc/uptime", "/nonexistent/uptime"))
+
+
+def _clock_due(tmp_path, shell, asserted, now, interval):
+    """Run install.sh's sg_clock_due alone with a chosen NOW, which a relink
+    cannot be given: it reads /proc/uptime, and that moves between a test's
+    stamp and the relink's read. True when it says due."""
+    text = stamped_install(tmp_path, dest=tmp_path / "clock-copy").script.read_text()
+    body = re.search(r"^sg_clock_due\(\) \{\n.*?^\}\n", text, re.S | re.M).group(0)
+    driver = tmp_path / "clock.sh"
+    driver.write_text("set -eu\nSG_REASSERT_INTERVAL_S=%d\n%s"
+                      'if sg_clock_due "$1" "$2"; then echo due; else echo quiet; fi\n'
+                      % (interval, body))
+    result = subprocess.run([shutil.which(shell), str(driver), str(asserted), str(now)],
+                            capture_output=True, text=True, timeout=30, env={"PATH": ""})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout in ("due\n", "quiet\n"), result.stdout
+    return result.stdout == "due\n"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("elapsed,due", [
+    (0, False), (REASSERT - 1, False), (REASSERT, True), (REASSERT + 1, True),
+], ids=["same-second", "one-short", "exactly-the-interval", "one-past"])
+def test_the_cadence_is_due_once_the_interval_has_elapsed(tmp_path, shell, elapsed, due):
+    """The boundary of ADR-0030's clock, shared by both memories: a condition
+    asserted exactly one interval ago is due on this poll, not the next.
+    Mutation: `-lt` to `-le` in sg_clock_due(), and exactly-the-interval
+    fails."""
+    asserted = 1000
+    assert _clock_due(tmp_path, shell, asserted, asserted + elapsed, REASSERT) is due
 
 
 @pytest.mark.parametrize("shell", SHELLS)

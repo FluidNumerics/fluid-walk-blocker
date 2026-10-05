@@ -2441,7 +2441,7 @@ case $MODE in
             # seed below cannot be written leaves no memory -- which the next
             # relink reports as `unknown` -- rather than an earlier one.
             if spool_fit "$SG_SPOOL_DIR"; then
-                in_spool rm -f -- "./$UNCOVERED_NAME" || :
+                in_spool rm -f -- "./$UNCOVERED_NAME" "./$UNCOVERED_NAME.new" || :
                 in_spool rm -f -- "./$LINKED_NAME" "./$LINKED_NAME.new" || :
             fi
             link_farm "$BIN"
@@ -2588,7 +2588,7 @@ SYS
         # for the audit trail it holds. Removed from the pinned spool, never
         # through a link at their names: `rm -f` on a link removes the link.
         if spool_fit "$SG_SPOOL_DIR"; then
-            in_spool rm -f -- "./$UNCOVERED_NAME" || :
+            in_spool rm -f -- "./$UNCOVERED_NAME" "./$UNCOVERED_NAME.new" || :
             in_spool rm -f -- "./$LINKED_NAME" "./$LINKED_NAME.new" || :
         fi
         echo "walk-blocker: removed from$_removed and $BIN"
