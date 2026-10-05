@@ -56,8 +56,26 @@ TEST_LOGGER = "walk-blocker-test-logger"
 
 AUDIT_FILENAME = "walk-blocker-audit.jsonl"
 
-# `[timer].reassert_interval_s` for the stamped copy (ADR-0030).
-REASSERT_INTERVAL_S = 21600
+# `[timer].reassert_interval_s` for the stamped copy (ADR-0030). Not the
+# schema default: the clock tests build a due clock as `uptime - interval - 1`
+# and a not-due one inside the interval, and both have to be real uptimes,
+# never negative. A negative value is malformed and so always due, which on a
+# host up less than the default made the not-due oracle fail and every due
+# oracle pass vacuously. Half the uptime, capped at the default, keeps both
+# constructible on any host. The node source is stamped directly, so the
+# schema's floor does not apply to a test copy. Uptime only grows, so a value
+# fixed at import stays at most half of every later reading.
+def _test_reassert_interval():
+    with open("/proc/uptime") as fh:
+        uptime = int(fh.read().split()[0].split(".")[0])
+    interval = min(21600, (uptime - 1) // 2)
+    assert interval >= 8, (
+        "host uptime %ds is too short to construct the ADR-0030 clock "
+        "oracles; refusing to run them vacuously" % uptime)
+    return interval
+
+
+REASSERT_INTERVAL_S = _test_reassert_interval()
 
 # The reader group the stamped copy chgrps the spool to. CI is not root, so
 # it is the test user's own primary group -- the one group a non-root
@@ -428,9 +446,9 @@ def site_values(layout, **overrides):
         # The same function the build's derived value comes from, so the
         # installer's table is rendered exactly as the shim's is.
         "site.toml:derived.mount_overrides": render_shim_module.mount_overrides(FIXTURE_POLICY),
-        # The schema default (ADR-0030): long enough that no test crosses it
-        # by waiting, so a re-assertion happens only where a test moves the
-        # stored clock back.
+        # ADR-0030's cadence, sized to the host (above): still far longer
+        # than any test waits between relinks, so a re-assertion happens
+        # only where a test moves the stored clock back.
         "site.toml:timer.reassert_interval_s": REASSERT_INTERVAL_S,
     }
     for key, value in overrides.items():

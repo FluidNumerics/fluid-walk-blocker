@@ -2071,13 +2071,13 @@ def test_the_memory_carries_the_clock_on_its_second_line(tmp_path):
 
 @pytest.mark.parametrize("shell", SHELLS)
 def test_a_standing_mount_is_not_reasserted_before_the_cadence(tmp_path, shell):
-    """THE ORACLE, not yet due: two minutes short of the interval, the
-    steady state is still silent. Mutation: re-assert on every poll, and
-    this fails."""
+    """THE ORACLE, not yet due: two minutes (or a quarter of a short
+    interval) short of it, the steady state is still silent. Mutation:
+    re-assert on every poll, and this fails."""
     _need(shell)
     layout = _stateful_layout(tmp_path)
     _relink(tmp_path, layout, shell)
-    stamp = _uptime() - (REASSERT - 120)
+    stamp = _uptime() - (REASSERT - min(120, REASSERT // 4))
     _set_asserted_line(layout, "asserted %d" % stamp)
     records = _relink(tmp_path, layout, shell)
     assert _marked(records) == [], records
