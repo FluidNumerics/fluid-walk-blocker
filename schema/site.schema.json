@@ -374,32 +374,32 @@
         "logger": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/logger",
-          "description": "Writes the shim's escape-hatch and the reconcile's hook-state records to journald under the `walk-blocker` tag. Must accept `--size` (util-linux `logger` does; BusyBox `logger` does not): a logger that rejects it drops every record."
+          "description": "Writes the shim's escape-hatch and the reconcile's hook-state records to journald under the `walk-blocker` tag. Must accept `--size` (util-linux `logger` does; BusyBox `logger` does not): a logger that rejects it drops every record. See `docs/node-requirements.md`."
         },
         "awk": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/awk",
-          "description": "Used by `walk-job` and the installer for field extraction; never by the shim before it decides."
+          "description": "The shim's one program before a mount judgement: run once over the mount table on the guarded path, never on the fast path (ADR-0018). Also builds and escapes the shim's audit record. Its `gsub` replacement must keep a backslash before a quote literal, which BusyBox `awk` does not; see `docs/node-requirements.md`. The installer and `measure.sh` use the `awk` on `PATH`, not this one."
         },
         "id": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/id",
-          "description": "Resolves the invoking account for audit records and for `walk-job`'s output path."
+          "description": "Resolves the invoking uid for the shim's audit record."
         },
         "date": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/date",
-          "description": "Timestamps audit records outside the shim's decision path."
+          "description": "Timestamps the shim's audit record, past the decision."
         },
         "timeout": {
           "$ref": "#/$defs/sink_path",
           "default": "/usr/bin/timeout",
-          "description": "Bounds the reconcile's hook probes and the survey's per-mount measurement, so a wedged filesystem cannot hang either."
+          "description": "Bounds the whole `install.sh --relink` the timer's service runs before the reaper, with `--kill-after`, so a wedged relink cannot hold the reaper back."
         },
         "sh": {
           "$ref": "#/$defs/sink_path",
           "default": "/bin/sh",
-          "description": "The POSIX shell the shim and `walk-job` run under. Must be dash-clean at the site (ADR-0015)."
+          "description": "The POSIX shell `deploy.py` and the timer's service run `install.sh` under. Must be dash-clean at the site (ADR-0015). The shim, `walk-job` and the measurement scripts run under their own `#!/bin/sh`, not this path."
         },
         "python3": {
           "$ref": "#/$defs/sink_path",
@@ -408,7 +408,7 @@
         },
         "bfs": {
           "$ref": "#/$defs/sink_path",
-          "description": "An optional breadth-first `find` the refusal text may recommend for shallow, wide trees. Wrapped only when named here and resolvable at install."
+          "description": "Optional. Where `walk-job bfs ...` runs `bfs` from on the compute node: the job runs this path when it is executable there and a bare `bfs` otherwise. Unset, `walk-job` submits `bfs` as typed. Whether the shim wraps `bfs` is the rule table's and `[shim].unwrapped_tools`' business, not this key's."
         }
       }
     },

@@ -159,9 +159,10 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0031` |
+| `docs/adr/` | the decisions, `0001` through `0032` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
+| `docs/node-requirements.md` | what the destination node must provide |
 | `docs/operating.md` | the operator's runbook |
 | `docs/plan.md` | the architecture as built, on one page |
 | `docs/evidence.md` | where the evidence is, and why it is not here |
@@ -228,10 +229,12 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0031`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0032`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
-5. `docs/operating.md` — the operator's runbook
-6. `docs/alternatives.md` — what to run instead: the users' grimoire, and the
+5. `docs/node-requirements.md` — what the node must provide, and the floor
+   below which a fault is unsupported
+6. `docs/operating.md` — the operator's runbook
+7. `docs/alternatives.md` — what to run instead: the users' grimoire, and the
    generic half of the page every refusal names
-7. `docs/evidence.md` — where the evidence is, and why it is not here
-8. `CLAUDE.md` — the non-negotiables, and the parts that are easy to get wrong
+8. `docs/evidence.md` — where the evidence is, and why it is not here
+9. `CLAUDE.md` — the non-negotiables, and the parts that are easy to get wrong

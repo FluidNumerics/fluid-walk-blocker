@@ -30,18 +30,22 @@ On the node you deploy to:
   table (ADR-0002).
 - Python 3.9 or later, stdlib only. Nothing under `node/` imports a
   third-party package, and there is no `uv` on the node (ADR-0015).
-- A POSIX `sh` that is dash-clean. The shim, `install.sh`, `walk-job` and
-  `measure.sh` all run under `[trusted_binaries].sh`.
+- A POSIX `sh` that is dash-clean. `deploy.py` and the timer's service run
+  `install.sh` under `[trusted_binaries].sh`; the shim, `walk-job` and the
+  measurement scripts run under their own `#!/bin/sh`.
 - The Slurm client (`sbatch`) reachable at `[slurm].sbatch_glob`, for
   `walk-job`. The scheduler is what enforces the wall-clock bound the
   refusal text offers (ADR-0007).
 - A `logger` at `[trusted_binaries].logger` that accepts `--size`. Every
   Layer 1 record is sent with it, and a logger that rejects the option
-  drops the record silently. util-linux `logger` has it: present in 2.32.1
-  and 2.37.4 as measured; the util-linux man pages put its arrival at 2.27,
-  not measured. BusyBox `logger` does not have it.
+  drops the record silently. util-linux `logger` has it from 2.27, by its
+  man pages; BusyBox `logger` does not have it.
 - Root, held by the person running the install. Nothing here escalates;
   `deploy.py` checks `os.geteuid()` and refuses otherwise (ADR-0004).
+
+The full list, one row per dependency with the feature relied on, is
+`docs/node-requirements.md`. A fault that occurs only below a row there is
+unsupported (ADR-0032).
 
 ## 2. Write `site.toml`
 

@@ -713,6 +713,79 @@ def test_escape_hatch_degrades_honestly_with_no_awk_to_escape_with(shim_variant,
     assert entry["tool"] == "find"
 
 
+def _failing_awk(tmp_path):
+    awk = tmp_path / "failing-awk"
+    awk.write_text("#!/bin/sh\nexit 1\n")
+    awk.chmod(0o755)
+    return str(awk)
+
+
+@pytest.mark.parametrize("awk", ["absent", "fails"])
+@pytest.mark.parametrize("fstype,expected", [
+    ('fuse.say"what', "unrepresentable"),
+    ("fuse.back\\slash", "unrepresentable"),
+    ("fuse." + "x" * 200, None),
+])
+def test_the_no_awk_record_never_interpolates_a_hostile_fstype(
+        shim_variant, tmp_path, awk, fstype, expected):
+    """The no-awk record runs whenever awk yields no record: none found, or
+    one that fails. A FUSE subtype is chosen by whoever mounted it, so the
+    fstype takes sg_report's character check and its bound, and the record
+    still parses (issue #138)."""
+    mounts = tmp_path / "mounts"
+    mounts.write_text("/dev/sda1 / ext4 rw,relatime 0 0\n"
+                      "srv:/export /scratch %s rw,relatime 0 0\n" % fstype)
+    trusted_awk = "'/nonexistent/awk'" if awk == "absent" else _failing_awk(tmp_path)
+    variant = shim_variant(SG_AWK=trusted_awk,
+                           SG_MOUNTS_TRUSTED="'%s'" % mounts)
+    audit = tmp_path / "audit.jsonl"
+    result = run_shim(variant, ["find", "/scratch", "-name", "x"],
+                      env={R.ESCAPE_HATCH: "1", "WALK_BLOCKER_AUDIT": str(audit)})
+    assert result.returncode == 0, result.stderr.decode()
+    lines = [line for line in audit.read_text().splitlines() if line.strip()]
+    assert len(lines) == 1, lines
+    entry = json.loads(lines[0])
+    assert "no awk" in entry["note"], "the awk record ran, so the fallback was not tested"
+    assert entry["action"] == "escape_hatch"
+    assert entry["reason"] == "at_or_near_root"
+    if expected is None:
+        assert entry["fs"] == fstype[:128]
+        assert entry["fs_truncated"] is True
+    else:
+        assert entry["fs"] == expected
+        assert "fs_truncated" not in entry
+
+
+def test_the_no_awk_record_never_interpolates_a_hostile_tool_name(shim_variant, tmp_path):
+    """The tool name is $0's basename, and any symlink to the shim sets it.
+    The dir seam audits a binary resolution for any name, wrapped or not."""
+    variant = shim_variant(SG_AWK="'/nonexistent/awk'")
+    hostile = 'say"what'
+    os.symlink(os.path.join(variant["shim_dir"], "find"),
+               os.path.join(variant["shim_dir"], hostile))
+    # The seam names a PATH directory that holds the tool, so resolving with
+    # and without it differs, which is what the dir seam audits.
+    seam_dir = tmp_path / "seam-dir"
+    seam_dir.mkdir()
+    for d in (str(seam_dir), variant["bin_dir"]):
+        stub = os.path.join(d, hostile)
+        with open(stub, "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(stub, 0o755)
+    audit = tmp_path / "audit.jsonl"
+    result = run_shim(variant, [hostile],
+                      env={"WALK_BLOCKER_SHIM_DIR": str(seam_dir),
+                           "WALK_BLOCKER_AUDIT": str(audit),
+                           "PATH": "%s:%s" % (seam_dir, variant["bin_dir"])})
+    assert result.returncode == 0, result.stderr.decode()
+    lines = [line for line in audit.read_text().splitlines() if line.strip()]
+    assert len(lines) == 1, lines
+    entry = json.loads(lines[0])
+    assert entry["seam"] == "WALK_BLOCKER_SHIM_DIR"
+    assert entry["tool"] == "unrepresentable"
+    assert entry["fs"] == ""
+
+
 def test_escape_hatch_says_nothing_when_the_file_sink_is_unwritable(shim_env, tmp_path):
     if os.getuid() == 0:
         pytest.skip("root can write anywhere; the unwritable branch is unreachable")

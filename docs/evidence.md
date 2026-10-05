@@ -67,6 +67,7 @@ the ADR it bears on.
 | 0029 The dry run and the install check the payload against its own record | n/a: structural |
 | 0030 The reconcile re-asserts a standing uncovered mount on a slow cadence, beside its change records (narrowed by 0031: coverage drift is standing too) | journald's split mode and rotation limits as configured, the journal's disk usage, and the oldest entry a reader could read, against how long an uncovered mount had been standing |
 | 0031 Coverage drift is a standing condition, remembered as a high-water linked set | n/a: structural; retention as ADR-0030 |
+| 0032 The node has declared requirements, and a fault only below one is unsupported | n/a: upstream documentation and measurements on the tool; no site evidence |
 
 ## What this file is not
 
