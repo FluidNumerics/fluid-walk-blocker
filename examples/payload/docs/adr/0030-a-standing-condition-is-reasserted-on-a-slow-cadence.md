@@ -1,6 +1,7 @@
 # ADR-0030: The reconcile re-asserts a standing uncovered mount on a slow cadence, beside its change records
 
 **Status:** accepted, 2026-10-05
+The Decision clause naming `uncovered_mount` as the only standing condition and the Consequences clause "**`coverage_change` is deferred to issue #152.**" are narrowed by ADR-0031: coverage drift is a standing condition too, remembered as a high-water linked set, and the superseded wording is recorded under "Superseded wording" below.
 **Narrows:** ADR-0019, "`report_uncovered_mounts()` in the installer's `--relink` arm reports **changes** in the set of uncovered expensive mounts, and is silent in a steady state."
 **Narrows:** ADR-0019, "**A steady state is silent, and silence means what it did before**: nothing was refused, no override was used, and no mount has changed its standing since the last line."
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0030 — see `docs/evidence.md`
@@ -67,8 +68,8 @@ The alternatives, in their strongest form:
 
 The reconcile re-asserts each **standing** condition on a slow cadence, on
 top of ADR-0019's change records. A standing condition is one that persists
-and is otherwise reported only when it changes; today that is
-`uncovered_mount` with `state: expensive`, and nothing else.
+and is otherwise reported only when it changes: `uncovered_mount` with
+`state: expensive`, and the coverage drift ADR-0031 remembers.
 
 `[timer].reassert_interval_s` sets the cadence: an integer from 3600 to
 604800, default 21600, compiled into `install.sh` as a literal (ADR-0013).
@@ -103,11 +104,10 @@ the report stays per poll and unmarked.
 - **Events are not re-asserted.** `covered` and `unmounted` answer an earlier
   line once; the shim's `refused` and escape-hatch records describe a moment.
   None has a standing form to repeat.
-- **`coverage_change` is deferred to issue #152.** It records that coverage
-  shrank — an event, with a count and no names — and it has no standing form
-  until a memory of the linked set exists to say what is still missing.
-  Issue #152 designs that memory; until it lands, this record leaves
-  `coverage_change` as ADR-0019's sibling records are: once, on the change.
+- **`coverage_change` has a standing form, with its own memory.** ADR-0031
+  keeps the linked set in `linked-names.state`, with its own `asserted`
+  clock read by the same rule, and re-asserts the names still unlinked as
+  one `coverage_change` marked `reasserted` on this cadence.
 - **The marker is a field, never a different record.** A query for
   `uncovered_mount` keeps matching, and a record without `reasserted` is a
   change. `sg_report` accepts the marker only as the literal `reasserted`;
@@ -144,3 +144,18 @@ it.
 - `[timer].reassert_interval_s` — the cadence.
 - `[install].spool_dir` — where `uncovered-mounts.state`, and its clock,
   live.
+
+## Superseded wording
+
+Narrowed by ADR-0031. The Decision above read:
+
+> A standing condition is one that persists and is otherwise reported only when it changes; today that is `uncovered_mount` with `state: expensive`, and nothing else.
+
+The Consequences above read:
+
+> **`coverage_change` is deferred to issue #152.** It records that coverage shrank — an event, with a count and no names — and it has no standing form until a memory of the linked set exists to say what is still missing. Issue #152 designs that memory; until it lands, this record leaves `coverage_change` as ADR-0019's sibling records are: once, on the change.
+
+Coverage drift is a standing condition as well: a wrapped name linked
+since the install and not linked now is re-asserted on this cadence, as
+one `coverage_change` marked `"reasserted": true`, and a memory the relink
+cannot read is re-asserted as `coverage_change` `unknown`.

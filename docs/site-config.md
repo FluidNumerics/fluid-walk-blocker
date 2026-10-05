@@ -287,12 +287,15 @@ settings do. Turning the key off and redeploying revokes the grant.
 
 ## Choose the re-assertion interval against the journal's retention
 
-Key: `[timer].reassert_interval_s`. Decision record: ADR-0030. Default
-21600, bounded to `[3600, 604800]` by the schema.
+Key: `[timer].reassert_interval_s`. Decision records: ADR-0030 and
+ADR-0031. Default 21600, bounded to `[3600, 604800]` by the schema.
 
-Layer 1 reports an uncovered expensive mount when its standing changes
-(ADR-0019), and then re-asserts it, marked `"reasserted": true`, once per
-interval while it stands (ADR-0030). The interval exists so the condition
+Layer 1 reports two standing conditions when they change and then
+re-asserts each, marked `"reasserted": true`, once per interval while it
+stands: an uncovered expensive mount (ADR-0019, ADR-0030), and coverage
+drift, a wrapped name linked since the install and not linked now
+(ADR-0031). Each keeps its own clock; this one key sets both. The interval
+exists so the condition
 is still in the journal after journald has rotated the first line away, so
 it is chosen against the shortest window the journal actually keeps on
 this node, not against a preference for quiet.

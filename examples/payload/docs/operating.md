@@ -347,7 +347,9 @@ account (ADR-0004):
   carries `.walk-blocker-spool`, the root-owned marker that the relink and the
   reaper require before they write into it as root. The relink
   keeps `uncovered-mounts.state` there too, its memory of which mounts it has
-  reported (ADR-0019);
+  reported (ADR-0019), and `linked-names.state`, its memory of which wrapped
+  names have been linked since the install, which the install seeds
+  (ADR-0031);
 - a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
@@ -615,7 +617,20 @@ It carries three kinds of record:
   `coverage_change` when coverage shrank — a name was unwrapped, or a shim
   the name list no longer claims was swept — with the count, never the
   names; a name that starts being wrapped writes no record, so this is the
-  only signal of a removal and its absence after an addition is normal;
+  only signal of a removal and its absence after an addition is normal.
+  The drift is then a standing condition (ADR-0031): once per
+  `[timer].reassert_interval_s`, while any name linked since the install is
+  still not linked, the relink writes one `coverage_change` `unwrapped-N`
+  with `"reasserted": true` and prints the names. N means two things: on an
+  unmarked record it counts the links that went on that poll, swept ones
+  included; on a marked one it counts the remembered names still unlinked.
+  A swept name is never re-asserted, and a tool absent at the install is
+  never drift. When the relink cannot read its memory,
+  `<spool_dir>/linked-names.state` — absent, damaged, or a link — it
+  reseeds it from that poll and writes `coverage_change` `unknown`, then
+  re-asserts `unknown`, marked, on the same cadence until
+  `deploy.py --system` reseeds it: drift before that poll is not known.
+  Without a pinned spool no drift is reported at all;
   `relink_refused` when the relink stopped at one of its own checks;
 - one **`refused`** record per refusal, from the shim itself, carrying the
   tool, the root it was asked to walk, the mount and type that judged it,
@@ -664,12 +679,14 @@ shown as `?`, as it always was.
 
 **What an empty journal means.** Quiet is healthy: nothing was refused, no
 override was used, every hook block is present and fires, the audit
-directory has the right mode, and no expensive mount is running uncovered.
-That last clause holds only over a window at least as long as
-`[timer].reassert_interval_s`: a standing uncovered mount is re-asserted on
-that cadence (ADR-0030), so quiet over a shorter window means only that
-nothing changed in it, not that nothing is uncovered. Read
-`<spool_dir>/uncovered-mounts.state` for the current set.
+directory has the right mode, no expensive mount is running uncovered, and
+every name linked since the install is still linked. Those last two clauses
+hold only over a window at least as long as `[timer].reassert_interval_s`:
+a standing uncovered mount (ADR-0030) and standing coverage drift
+(ADR-0031) are re-asserted on that cadence, so quiet over a shorter window
+means only that nothing changed in it, not that nothing is uncovered or
+unlinked. Read `<spool_dir>/uncovered-mounts.state` and
+`<spool_dir>/linked-names.state` for the current sets.
 **What it does not mean** is that no unbounded walk ran. Every Layer 1
 bypass — an absolute path, a private `PATH`, a container, a batch script, a
 shell function, a second-level shell, a session that started before the
@@ -715,11 +732,12 @@ Three consequences, and none of them is visible from the trail alone:
   every active user has their own file, and `SystemMaxFiles` (default 100)
   caps the archived files for all of them together. On a login node with
   many users that can be less than a day. A `proven-quiet` Layer 1 then
-  means quiet within that window, not since install. The standing
-  `uncovered_mount` condition is re-asserted every
-  `[timer].reassert_interval_s` (ADR-0030) so it survives that rotation;
-  set the interval to at most half the shortest window measured here
-  (`docs/site-config.md`). Change records and refusals are not
+  means quiet within that window, not since install. The two standing
+  conditions, an `uncovered_mount` (ADR-0030) and coverage drift as
+  `coverage_change` (ADR-0031), are re-asserted every
+  `[timer].reassert_interval_s` so they survive that rotation; set the
+  interval to at most half the shortest window measured here
+  (`docs/site-config.md`). Other change records and refusals are not
   re-asserted. Measure it:
 
 ```sh
@@ -942,8 +960,9 @@ their unit files; removes the journal drop-in under
 `[install].tmpfiles_dir` and revokes, under each journal directory that
 exists, the read it granted to the gids it records (ADR-0026); strips every hook block
 and removes the fish drop-in whether or not that shell still resolves
-(ADR-0008); and removes `<prefix>/bin` and the uncovered-mounts memory in
-the spool. It does not remove the prefix: the payload stays under it. The
+(ADR-0008); and removes `<prefix>/bin` and the relink's two memories in
+the spool, `uncovered-mounts.state` and `linked-names.state`. It does not
+remove the prefix: the payload stays under it. The
 `<file>.walk-blocker.orig` backups and the audit trail under
 `[install].spool_dir` are records; read its output for what it left, and
 copy the trail somewhere before removing it if the evidence is still
@@ -960,7 +979,7 @@ refuses with exit 3, having stripped nothing, unless systemd then reports
 both units inactive and the timer not enabled. The one timer drives the
 relink and the reaper both, so this stops Layer 2 too, and the output says
 so. It then strips every hook block, removes the fish drop-in, and removes
-`<prefix>/bin` and the uncovered-mounts memory in the spool. It leaves in
+`<prefix>/bin` and the relink's two memories in the spool. It leaves in
 place the payload under the prefix, the disabled unit files, the journal
 drop-in and the grant it records, the `<file>.walk-blocker.orig` backups,
 and the spool with its audit trail. To restore both layers, run
