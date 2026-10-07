@@ -3364,6 +3364,9 @@ def test_the_uninstall_removes_the_linked_memory_never_through_a_link(
 
 NOT_ARMED = "so Layer 2 (the reaper) and the reconcile are not armed"
 CANNOT_READ = "cannot read the state of walk-blocker.timer"
+# deploy.py can stop after install.sh without arming (its ownership
+# re-check returns 9), so the line promises arming only conditionally.
+UNDER_DEPLOY = "(under deploy.py, they are armed after this step unless a later step fails)"
 
 
 def _timer_lines(stdout):
@@ -3405,6 +3408,7 @@ def test_a_system_install_says_when_the_timer_is_not_armed(tmp_path, shell, stat
     assert len(lines) == 1, result.stdout
     assert "walk-blocker.timer is %s, %s" % (said, NOT_ARMED) in lines[0], lines
     assert "`python3 deploy.py --system`" in lines[0], lines
+    assert lines[0].endswith(UNDER_DEPLOY), lines
     assert "systemctl enable" not in result.stdout + result.stderr
     assert "system-wide install complete" in result.stdout
 
@@ -3433,6 +3437,7 @@ def test_an_unreadable_timer_state_is_said_not_silenced(tmp_path, shell, quirk, 
     lines = _timer_lines(result.stdout)
     assert len(lines) == 1 and CANNOT_READ in lines[0], result.stdout
     assert "`python3 deploy.py --system`" in lines[0], lines
+    assert lines[0].endswith(UNDER_DEPLOY), lines
 
 
 @pytest.mark.parametrize("shell", SHELLS)
