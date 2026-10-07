@@ -15,6 +15,7 @@ would be a second, unversioned YAML implementation, and its bugs would surface
 as confident assertions about a workflow that says something else.
 """
 import os
+import re
 import shlex
 
 # A plain import, deliberately, not `pytest.importorskip`. PyYAML is a declared
@@ -296,20 +297,47 @@ def test_one_row_runs_the_banner_tests_with_colour_forced():
         "%d" % len(steps))
     step = steps[0]
     condition = " ".join(str(step.get("if", "")).split())
+    if condition.startswith("${{") and condition.endswith("}}"):
+        condition = condition[3:-2].strip()
     assert condition == "matrix.python-version == '3.14'", (
         "the forced-colour step is not keyed to the 3.14 row alone: %r"
         % step.get("if"))
-    body = str(step.get("run", ""))
-    assert "runuser -u ciuser" in body, (
-        "the forced-colour step does not run as the non-root user")
-    # The env list is every NAME=value word between `env` and `uv`; env
-    # applies them in order, so the value the child sees is the last one.
-    words = shlex.split(body.replace("\\\n", " "))
-    env_list = words[words.index("env") + 1:words.index("uv")]
+    # Read the body as bash would: continuations joined, comments dropped.
+    # It must be one command, `runuser -u ciuser -- env`, then NAME=value
+    # words, then `uv run`. A second line or a `;`, `&&` or `|` could run
+    # the tests outside that env list, and words an `echo` or a comment
+    # merely mentions are not the env list at all.
+    body = str(step.get("run", "")).replace("\\\n", " ")
+    lines = [line for line in body.splitlines()
+             if shlex.split(line, comments=True)]
+    assert len(lines) == 1, (
+        "the forced-colour step must be one command, found %d: %r"
+        % (len(lines), lines))
+    lexer = shlex.shlex(lines[0], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    words = list(lexer)
+    operators = [w for w in words if w and set(w) <= set(";&|()<>")]
+    assert not operators, (
+        "the forced-colour step chains or redirects with %r" % operators)
+    head = ["runuser", "-u", "ciuser", "--", "env"]
+    assert words[:len(head)] == head, (
+        "the forced-colour step does not start `%s`: %r"
+        % (" ".join(head), words[:len(head)]))
+    rest = words[len(head):]
+    env_list = []
+    while rest and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", rest[0]):
+        env_list.append(rest.pop(0))
+    assert rest[:2] == ["uv", "run"], (
+        "runuser's env list is not followed by `uv run`: %r" % rest[:2])
+    names = [w.split("=", 1)[0] for w in env_list]
     forced = [w.split("=", 1)[1] for w in env_list
               if w.startswith("FORCE_COLOR=")]
     assert forced == ["3"], (
-        "runuser's env list must set FORCE_COLOR=3 once, ahead of `uv run`; "
-        "it sets %r" % forced)
-    assert "tests/test_banner.py" in body, (
+        "runuser's env list must set FORCE_COLOR=3 once; it sets %r"
+        % forced)
+    # On 3.14 NO_COLOR, and PYTHON_COLORS=0, outrank FORCE_COLOR.
+    assert not {"NO_COLOR", "PYTHON_COLORS"} & set(names), (
+        "runuser's env list sets a variable that outranks FORCE_COLOR: %r"
+        % names)
+    assert "tests/test_banner.py" in rest, (
         "the forced-colour step does not run the banner tests")
