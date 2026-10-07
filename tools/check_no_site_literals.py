@@ -24,6 +24,10 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The default root is the tree this copy of the script belongs to, not the
+# current directory: run from the main checkout against a worktree's script,
+# "." scanned the main checkout and passed on a tree nobody asked about.
+REPO = os.path.dirname(HERE)
 DEFAULT_PATTERNS = os.path.join(HERE, "forbidden-patterns.txt")
 DEFAULT_TERMS = os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
@@ -162,7 +166,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("paths", nargs="*",
                     help="files or directories; default is every tracked file")
-    ap.add_argument("--root", default=".")
+    ap.add_argument("--root", default=REPO,
+                    help="tree to scan; default is the repository holding "
+                         "this script, never the current directory")
     ap.add_argument("--patterns", default=DEFAULT_PATTERNS)
     ap.add_argument("--terms", default=None,
                     help="customer term list; default $WALK_BLOCKER_FORBIDDEN_TERMS, "
@@ -205,8 +211,9 @@ def main(argv=None):
                                       terms, a.quiet))
     for line in findings:
         print(line)
-    sys.stderr.write("%d file(s), %d finding(s), terms=%s\n"
-                     % (len(files), len(findings), "on" if terms else "off"))
+    # The root is named so a pass says which tree it passed.
+    sys.stderr.write("%d file(s) under %s, %d finding(s), terms=%s\n"
+                     % (len(files), root, len(findings), "on" if terms else "off"))
     return EXIT_FINDINGS if findings else EXIT_CLEAN
 
 

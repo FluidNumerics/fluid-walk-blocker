@@ -28,9 +28,13 @@ python3 tools/check_no_site_literals.py --root path/to/payload .  # a built payl
 git config core.hooksPath tools/hooks                         # pre-commit early warning, once per clone
 ```
 
+Without `--root` it scans the repository that holds the script, whatever the
+current directory: to check a worktree, run that worktree's copy of the script.
+
 Exit codes: 0 clean, 1 findings, 2 configuration error, 3 `--require-terms`
-given and no term list found. The stderr summary always says `terms=on` or
-`terms=off`, so a structural-only pass is visible as such.
+given and no term list found. The stderr summary always names the root it
+scanned and says `terms=on` or `terms=off`, so a pass on the wrong tree and a
+structural-only pass are both visible as such.
 
 ## Rotating the secret
 

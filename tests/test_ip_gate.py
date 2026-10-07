@@ -37,6 +37,24 @@ def test_the_customer_term_list_is_consulted_when_present():
     assert r.stderr.strip().endswith("terms=on")
 
 
+def test_the_default_root_is_the_scripts_repository_not_the_cwd(tmp_path):
+    # Issue #164: "." as the default scanned whatever directory the caller
+    # stood in. From an unrelated, empty directory the gate must still scan
+    # this repository, and say so.
+    r = run(["--terms", os.devnull], cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
+                             capture_output=True, check=True).stdout.count(b"\0")
+    assert r.stderr.strip() == "%d file(s) under %s, 0 finding(s), terms=off" % (tracked, ROOT)
+
+
+def test_the_summary_names_the_root_it_scanned(tmp_path):
+    (tmp_path / "a.md").write_text("plain\n")
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "a.md"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert " under %s, " % tmp_path in r.stderr
+
+
 # --- the scanner, against made-up terms ----------------------------------------
 
 @pytest.fixture
