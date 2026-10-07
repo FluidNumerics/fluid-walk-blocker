@@ -484,7 +484,14 @@ def read_proc(pid, uptime, proc_root="/proc"):
         parts = raw.split(b"\0")
         if parts and parts[-1] == b"":
             parts.pop()
-        argv = [a.decode("utf-8", "replace") for a in parts]
+        # os.fsdecode(), as the mount table and the cwd link are decoded,
+        # never "replace" (issue #171). A path byte that is not UTF-8 then
+        # decodes to the same surrogate in an argv root as in the mount point
+        # it names; replaced, `find /mnt/\377c` named a U+FFFD path no mount
+        # matched, and Layer 2 missed a walk the shim refuses. A surrogate
+        # reaches the records as a JSON escape, and the text listing only
+        # through stdout, which main() sets to errors="replace".
+        argv = [os.fsdecode(a) for a in parts]
     except OSError:
         argv = []
 

@@ -28,7 +28,7 @@ import pytest
 from _reaper_helpers import (REQUIRED_SOURCES, load_stamped_reaper,
                              site_values, source_text, stamped_text)
 from argv_cases import CASES
-from conftest import BASE_MOUNTS, resolve_cwd
+from conftest import BASE_MOUNTS, resolve_cwd, run_shim
 import walk_blocker
 from walk_blocker import stamp
 
@@ -3340,3 +3340,42 @@ def test_non_utf8_comm_and_cgroup_are_an_ordinary_poll(tmp_path, procfs,
         assert sorted(e["pid"] for e in listing) == [4108, 4109]
     else:
         assert b"pid=4108" in result.stdout and b"pid=4109" in result.stdout
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_a_non_utf8_argv_root_matches_its_mount(tmp_path, procfs, shim_env,
+                                                locale, output):
+    """Issue #171. cmdline was decoded with "replace", the mount table with
+    os.fsdecode(), so `find /mnt/\\377c` named `/mnt/\\ufffdc`, no expensive
+    mount matched it, and Layer 2 called a walk the shim refuses no
+    traversal at all. Both now decode alike: the reaper names the walk and
+    its mount, the shim refuses the same call, and the record and the
+    listing that carry the surrogate are written without raising."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                       b"fast /mnt/\377c wekafs rw 0 0\n")
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    base = write_proc(procfs, 4110, "find", ["find"], ppid=500, state="D",
+                      cpu_s=600.0, age_s=4 * 86400)
+    (base / "cmdline").write_bytes(b"find\0/mnt/\377c\0-name\0x\0")
+
+    result, entries, listing = _run_poll(tmp_path, procfs, cg, mounts,
+                                         locale, output)
+    assert result.returncode == reaper.EXIT_ACTIONABLE, result.stderr
+    assert [(e["pid"], e["verdict"], e["root"], e["mount"], e["cmdline"])
+            for e in entries] == [
+        (4110, "runaway_traversal", "/mnt/\udcffc", "/mnt/\udcffc",
+         "find /mnt/\udcffc -name x")], entries
+    if listing is not None:
+        assert [e["root"] for e in listing] == ["/mnt/\udcffc"]
+    else:
+        # main() sets errors="replace": the byte prints as `?`, it does not
+        # raise.
+        assert b"pid=4110" in result.stdout
+        assert b"find /mnt/?c -name x" in result.stdout, result.stdout
+
+    shim = run_shim(shim_env, ["find", "/mnt/\udcffc", "-name", "x"],
+                    env={"WALK_BLOCKER_MOUNTS": str(mounts), "LC_ALL": locale})
+    assert shim.returncode == R.EXIT_REFUSED, shim.stderr
