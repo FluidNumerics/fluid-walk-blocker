@@ -282,11 +282,13 @@ def test_the_matrix_reaches_the_newest_interpreters():
 
 def test_one_row_runs_the_banner_tests_with_colour_forced():
     """The CI oracle for the autouse colour fixture in tests/conftest.py
-    (issue #93). Only 3.14 argparse colours `--help`, and only when the
-    environment forces it, so without this step deleting the fixture fails
-    no CI run. FORCE_COLOR must reach the child through runuser's `env`
-    list: set anywhere else, it does not survive runuser and the step runs
-    the tests uncoloured and passes vacuously."""
+    (issue #93). Only 3.14 argparse colours `--help`, and with output
+    captured (no tty) only when the environment forces it, so without this
+    step deleting the fixture fails no CI run. FORCE_COLOR is pinned in
+    runuser's `env` list, beside everything else the child runs under: set
+    on the step instead, it would reach the tests only as far as runuser,
+    PAM and login.defs pass it through, and a step whose tests ran
+    uncoloured would pass vacuously."""
     steps = [s for s in _steps("test") if "FORCE_COLOR" in _text(s)]
     assert len(steps) == 1, (
         "expected exactly one step in the test job that forces colour, found "

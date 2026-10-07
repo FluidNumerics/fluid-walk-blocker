@@ -54,9 +54,10 @@ jobs:
         # The oracle for the colour fixture in tests/conftest.py (issue #93).
         # From 3.14 argparse colours `--help` when FORCE_COLOR is set, tty or
         # not; before 3.14 it never does, so no other row can see the fixture
-        # go missing. FORCE_COLOR is passed through `env` by name: runuser
-        # does not carry the caller's environment, and a step that set it
-        # only outside would run the tests without it and pass vacuously.
+        # go missing. FORCE_COLOR goes in the `env` list beside everything
+        # else the child runs under: runuser keeps most of the caller's
+        # environment, but PAM and login.defs may change it, and a variable
+        # stated in the command does not depend on what they let through.
         if: matrix.python-version == '3.14'
         run: |
           runuser -u ciuser -- env \
