@@ -59,9 +59,14 @@ def _unescape(field):
 
 
 def parse_mount_table(text):
+    """Rows of a mount table. Lines end at newline only and fields split on
+    runs of space and tab only, as the shim's readers and read_mounts() split
+    them: splitlines() and str.split() also break on \\v, \\f, \\r, U+0085,
+    U+00A0 and more, which the kernel leaves unescaped in a source somebody
+    chose (issue #172)."""
     rows = []
-    for line in text.splitlines():
-        parts = line.split()
+    for line in text.split("\n"):
+        parts = [field for field in re.split("[ \t]+", line) if field]
         if len(parts) < 4:
             continue
         rows.append({

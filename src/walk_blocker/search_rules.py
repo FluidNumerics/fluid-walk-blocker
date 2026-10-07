@@ -1097,6 +1097,24 @@ def clean_path(path, cwd):
     return re.sub(r"/{2,}", "/", os.path.normpath(path)) or "/"
 
 
+_MOUNT_FIELD_SEP = re.compile("[ \t]+")
+
+
+def _mount_fields(line):
+    """The fields of one mount table line, split on runs of space and tab.
+
+    Not str.split(), which also splits on \\v, \\f, \\r, \\x1c-\\x1f, U+0085,
+    U+00A0 and the rest of Unicode's whitespace. The kernel escapes only
+    space, tab, newline and backslash, so any of the others can sit inside a
+    source somebody chose, and the shim's two readers -- awk in the C locale
+    and sh's `read` -- split on space and tab alone. Splitting on more
+    shifted every later field: a `host\\v:/e` source read as two fields, and
+    the real mount point became the type (issue #172).
+    """
+    return [field for field in _MOUNT_FIELD_SEP.split(line.rstrip("\n"))
+            if field]
+
+
 def read_mounts(path, policy):
     """The EXPENSIVE rows of a mount table, longest mount point first.
 
@@ -1125,8 +1143,7 @@ def read_mounts(path, policy):
     try:
         with open(path, "rb") as fh:
             for raw in fh:
-                line = os.fsdecode(raw)
-                parts = line.split()
+                parts = _mount_fields(os.fsdecode(raw))
                 if len(parts) < 4:
                     continue
                 # /proc/mounts octal-escapes spaces and tabs in the mountpoint.

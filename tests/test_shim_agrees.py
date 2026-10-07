@@ -995,6 +995,47 @@ def test_the_table_and_the_shim_class_a_non_utf8_table_alike(
             root, reader, locale, result.stderr.decode(errors="replace"))
 
 
+# Issue #172. Characters str.split() treats as whitespace and the kernel
+# leaves unescaped, each inside a `host:` source of a type the policy does not
+# list: \v and \f, and U+00A0 and U+0085 as UTF-8.
+ODD_SPACE_TABLE = (b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                   b"h\x0b:/e /mnt/v xfs rw 0 0\n"
+                   b"h\x0c:/e /mnt/f xfs rw 0 0\n"
+                   b"h\xc2\xa0:/e /mnt/n xfs rw 0 0\n"
+                   b"h\xc2\x85:/e /mnt/x xfs rw 0 0\n")
+
+
+@pytest.mark.parametrize("locale", ("C", "utf8"))
+@pytest.mark.parametrize("reader", ("awk", "sh"))
+def test_the_table_splits_mount_fields_as_the_shim_does(
+        shim_variant, tmp_path, policy, reader, locale):
+    """Issue #172. The shim's readers split a mount line on space and tab
+    only; read_mounts() used str.split(), which also splits on \\v, \\f,
+    U+00A0, U+0085 and more. A source holding one of them read as two
+    fields, every later field shifted, and the remote mount the shim refuses
+    was not in the reaper's table at all. Mutation: put str.split() back and
+    the table loses every row."""
+    if locale == "utf8":
+        locale = _utf8_locale()
+        if locale is None:
+            pytest.skip("no UTF-8 locale is installed")
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(ODD_SPACE_TABLE)
+    table = R.read_mounts(str(mounts), policy)
+    assert sorted(row[0] for row in table) == [
+        "/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"], table
+    variant = (shim_variant() if reader == "awk"
+               else shim_variant(SG_AWK="'/nonexistent/awk'"))
+    for root in ("/mnt/v", "/mnt/f", "/mnt/n", "/mnt/x"):
+        argv = ["find", root, "-name", "x"]
+        assert R.check(argv, "/", table, policy) is not None, root
+        result = run_shim(variant, argv,
+                          env={"WALK_BLOCKER_MOUNTS": str(mounts),
+                               "LC_ALL": locale})
+        assert result.returncode == R.EXIT_REFUSED, (
+            root, reader, locale, result.stderr.decode(errors="replace"))
+
+
 def test_the_shim_ignores_a_whitespace_escaped_mount_and_the_table_does_not(
         shim_env, tmp_path, policy):
     """A DOCUMENTED divergence, pinned so it stays documented. /proc/mounts

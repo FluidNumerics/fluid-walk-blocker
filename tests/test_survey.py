@@ -266,3 +266,21 @@ def test_a_non_utf8_mount_table_is_surveyed_not_raised(tmp_path, locale):
             rows = by_mountpoint(json.loads(r.stdout))
             assert rows["/mnt/b"]["remote_reason"] == "source"
             assert rows["/mnt/\ufffdc"]["remote_reason"] == "type"
+
+
+def test_survey_splits_mount_fields_as_the_shim_does(tmp_path):
+    """Issue #172. splitlines() and str.split() break a line on \\v, \\f,
+    U+00A0 and U+0085 as well as on space and tab; the shim's readers do
+    not. Each `host:` source below holds one of them, and each row is still
+    remote by its source, at its own mount point."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
+                       b"h\x0b:/e /mnt/v xfs rw 0 0\n"
+                       b"h\x0c:/e /mnt/f xfs rw 0 0\n"
+                       b"h\xc2\xa0:/e /mnt/n xfs rw 0 0\n"
+                       b"h\xc2\x85:/e /mnt/x xfs rw 0 0\n")
+    rows = by_mountpoint(survey.survey(str(mounts), timeout=0.5,
+                                       statvfs_command=FAKE_CHILD))
+    assert sorted(rows) == ["/", "/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"]
+    for point in ("/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"):
+        assert rows[point]["remote_reason"] == "source", rows[point]
