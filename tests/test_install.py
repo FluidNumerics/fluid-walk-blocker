@@ -2552,8 +2552,18 @@ def _hooked_layout(tmp_path, **state):
     result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
     assert result.returncode == 0, result.stdout + result.stderr
     assert BEGIN in layout.bashrc.read_text()
-    assert H.systemctl_calls(layout.toolbin) == [], "the install touched the units"
+    # The install READS the timer's state to say whether it is armed (issue
+    # #105) and changes nothing. Its reads are cleared from the log, so a
+    # test of what the uninstall then calls sees the uninstall's calls only.
+    # missing_ok: an install that made no read leaves no log to clear.
+    calls = [argv for argv, _block in H.systemctl_calls(layout.toolbin)]
+    assert set(calls) <= TIMER_READS, "the install touched the units: %r" % calls
+    H.systemctl_paths(layout.toolbin)[1].unlink(missing_ok=True)
     return layout
+
+
+TIMER_READS = {"is-active walk-blocker.timer",
+               "show walk-blocker.timer --property=UnitFileState --value"}
 
 
 ARMED = {"TIMER_FILE": "enabled", "TIMER_ACTIVE": "active",
@@ -3346,3 +3356,105 @@ def test_the_uninstall_removes_the_linked_memory_never_through_a_link(
         assert not os.path.lexists(str(layout.spool / name)), name
     assert _sentinel_state(sentinel) == before
     assert layout.spool.is_dir() and (layout.spool / H.SPOOL_MARKER).exists()
+
+
+# --------------------------------------------------------------------------
+# install.sh --system says when the timer is not armed (issue #105)
+# --------------------------------------------------------------------------
+
+NOT_ARMED = "so Layer 2 (the reaper) and the reconcile are not armed"
+CANNOT_READ = "cannot read the state of walk-blocker.timer"
+# deploy.py can stop after install.sh without arming (its ownership
+# re-check returns 9), so the line promises arming only conditionally.
+UNDER_DEPLOY = "(under deploy.py, they are armed next unless deploy.py stops before arming them)"
+
+
+def _timer_lines(stdout):
+    return [line for line in stdout.splitlines()
+            if "walk-blocker.timer" in line and "Layer 2" in line]
+
+
+def _system_install(tmp_path, shell, absent=False, tools=("find", "grep", "du"),
+                    **state):
+    _need(shell)
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(STOCK_BASHRC)
+    H.set_systemctl_state(layout.toolbin, **state)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout,
+                                 shell=shutil.which(shell), systemctl_absent=absent,
+                                 tools=tools)
+    calls = [] if absent else [a for a, _b in H.systemctl_calls(layout.toolbin)]
+    assert set(calls) <= TIMER_READS, "the install changed the units: %r" % calls
+    return result
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("state, said", [
+    ({"TIMER_FILE": "disabled", "TIMER_ACTIVE": "inactive"}, "inactive and disabled"),
+    ({"TIMER_FILE": "enabled", "TIMER_ACTIVE": "inactive"}, "inactive and enabled"),
+    ({"TIMER_FILE": "disabled", "TIMER_ACTIVE": "active"}, "active and disabled"),
+    ({"TIMER_FILE": "absent", "TIMER_ACTIVE": "inactive"},
+     "inactive and without a unit file"),
+], ids=["after-uninstall", "stopped", "not-at-boot", "no-unit"])
+def test_a_system_install_says_when_the_timer_is_not_armed(tmp_path, shell, state, said):
+    """After `install.sh --uninstall` the timer is disabled, and a by-hand
+    `--system` restored Layer 1 and said nothing about Layer 2. One stdout
+    line names the state as read and the one restore; it never advises
+    `systemctl enable`. Mutation: make timer_notice return 0 at once, and
+    every case here fails."""
+    result = _system_install(tmp_path, shell, **state)
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = _timer_lines(result.stdout)
+    assert len(lines) == 1, result.stdout
+    assert "walk-blocker.timer is %s, %s" % (said, NOT_ARMED) in lines[0], lines
+    assert "`python3 deploy.py --system`" in lines[0], lines
+    assert lines[0].endswith(UNDER_DEPLOY), lines
+    assert "systemctl enable" not in result.stdout + result.stderr
+    assert "system-wide install complete" in result.stdout
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_an_armed_timer_gets_no_line(tmp_path, shell):
+    """Silence is earned by the one healthy reading, active and enabled."""
+    result = _system_install(tmp_path, shell, TIMER_FILE="enabled",
+                             TIMER_ACTIVE="active")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _timer_lines(result.stdout) == [], result.stdout
+    assert "system-wide install complete" in result.stdout
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("quirk, absent", [
+    ("", True), ("show-fails", False), ("bus-error", False),
+], ids=["no-systemctl", "show-fails", "bus-error"])
+def test_an_unreadable_timer_state_is_said_not_silenced(tmp_path, shell, quirk, absent):
+    """Absent systemctl, a failing `show` and a bus that prints nothing are
+    not a healthy reading. The timer is set armed underneath, so only the
+    read failing can produce the line."""
+    result = _system_install(tmp_path, shell, absent=absent, QUIRK=quirk,
+                             TIMER_FILE="enabled", TIMER_ACTIVE="active")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = _timer_lines(result.stdout)
+    assert len(lines) == 1 and CANNOT_READ in lines[0], result.stdout
+    assert "`python3 deploy.py --system`" in lines[0], lines
+    assert lines[0].endswith(UNDER_DEPLOY), lines
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_hook_failure_exit_also_says_the_timer_is_not_armed(tmp_path, shell):
+    """`verify_hooks || exit 4` is the other way out of a writing install,
+    and Layer 2's state is as much worth saying there. Exit 4 unchanged."""
+    result = _system_install(tmp_path, shell, tools=(), TIMER_FILE="disabled",
+                             TIMER_ACTIVE="inactive")
+    assert result.returncode == 4, result.stdout + result.stderr
+    lines = _timer_lines(result.stdout)
+    assert len(lines) == 1, result.stdout
+    assert "inactive and disabled, " + NOT_ARMED in lines[0], lines
+    assert "system-wide install complete" not in result.stdout
+
+
+def test_the_dry_run_says_the_install_does_not_enable_the_timer(tmp_path):
+    result, _layout = run_install(tmp_path, ["--system", "--dry-run"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("#   - NOT enable walk-blocker.timer: install.sh --system leaves it "
+            "as it found it") in result.stdout, result.stdout

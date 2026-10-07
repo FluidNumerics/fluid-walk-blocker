@@ -383,7 +383,10 @@ What it verifies, and refuses on:
   the timer disabled and says so. When more than one step fails, the exit
   status is the most severe and the rest are reported on stderr only: a
   hook-proof failure (4) outranks a journal step that did not land (10, or a
-  command's own status);
+  command's own status). `install.sh` runs while the timer is disabled, so
+  its output carries a line saying the timer is not armed; that is the
+  state at that moment. The deploy enables the timer after it unless it
+  stops before that point (§14);
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;
@@ -990,9 +993,14 @@ so. It then strips every hook block, removes the fish drop-in, and removes
 `<prefix>/bin` and the relink's two memories in the spool. It leaves in
 place the payload under the prefix, the disabled unit files, the journal
 drop-in and the grant it records, the `<file>.walk-blocker.orig` backups,
-and the spool with its audit trail. To restore both layers, run
-`python3 deploy.py --system` from a payload; to finish the teardown, run
-`python3 deploy.py --uninstall` from the payload, as above. Never re-arm
+and the spool with its audit trail. The only restore is
+`python3 deploy.py --system` from a payload, which puts back both layers;
+to finish the teardown instead, run `python3 deploy.py --uninstall` from
+the payload, as above. `sh <prefix>/shim/install.sh --system` is not a
+restore: it rewrites Layer 1 and leaves the timer as it found it,
+disabled, so Layer 2 and the relink stay off. It says so: a writing
+`install.sh --system` prints one line naming the timer's state unless it
+reads active and enabled, and a state it cannot read is said too. Never re-arm
 the timer with `systemctl enable` by hand: its first poll runs a relink over
 the removed hooks, which rebuilds `<prefix>/bin` and reports each missing
 block as damage (ADR-0008).
