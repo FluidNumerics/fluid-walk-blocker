@@ -3884,7 +3884,13 @@ def system_uninstall(args, env=None):
         return 8
 
     write_not_checked(unknown, before="uninstalling")
-    print("\nremoved. the audit trail under %s is left in place." % args.spool_dir)
+    if args.dry_run:
+        print("\ndry run complete. the installed files would be removed; "
+              "the audit trail under %s would be left in place."
+              % args.spool_dir)
+    else:
+        print("\nremoved. the audit trail under %s is left in place."
+              % args.spool_dir)
     return 0
 
 

@@ -542,6 +542,21 @@ def test_the_uninstall_dry_run_needs_no_root_and_writes_nothing(
     assert deploy.system_uninstall(_args(tmp_path)) == 3
 
 
+def test_uninstall_dry_run_output_does_not_claim_removal(
+        tmp_path, monkeypatch, capsys):
+    """Issue #109: a preview describes the planned outcome as hypothetical."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 0
+    out = capsys.readouterr().out
+    assert "would be removed" in out, out
+    assert "would be left in place" in out, out
+    assert "\nremoved." not in out, out
+
+
 def _locked_prefix(tmp_path, monkeypatch):
     """A prefix under a parent this user may not search: the stat every
     uninstall check starts with answers EACCES."""
