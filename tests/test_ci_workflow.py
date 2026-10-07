@@ -15,6 +15,7 @@ would be a second, unversioned YAML implementation, and its bugs would surface
 as confident assertions about a workflow that says something else.
 """
 import os
+import shlex
 
 # A plain import, deliberately, not `pytest.importorskip`. PyYAML is a declared
 # member of the `dev` group, so absent it the environment is broken and the
@@ -294,14 +295,21 @@ def test_one_row_runs_the_banner_tests_with_colour_forced():
         "expected exactly one step in the test job that forces colour, found "
         "%d" % len(steps))
     step = steps[0]
-    assert "3.14" in str(step.get("if", "")) and \
-        "matrix.python-version" in str(step.get("if", "")), (
-        "the forced-colour step is not keyed to the 3.14 row: %r"
+    condition = " ".join(str(step.get("if", "")).split())
+    assert condition == "matrix.python-version == '3.14'", (
+        "the forced-colour step is not keyed to the 3.14 row alone: %r"
         % step.get("if"))
     body = str(step.get("run", ""))
     assert "runuser -u ciuser" in body, (
         "the forced-colour step does not run as the non-root user")
-    assert "FORCE_COLOR=3" in body.split("uv run", 1)[0], (
-        "FORCE_COLOR=3 is not in runuser's env list ahead of `uv run`")
+    # The env list is every NAME=value word between `env` and `uv`; env
+    # applies them in order, so the value the child sees is the last one.
+    words = shlex.split(body.replace("\\\n", " "))
+    env_list = words[words.index("env") + 1:words.index("uv")]
+    forced = [w.split("=", 1)[1] for w in env_list
+              if w.startswith("FORCE_COLOR=")]
+    assert forced == ["3"], (
+        "runuser's env list must set FORCE_COLOR=3 once, ahead of `uv run`; "
+        "it sets %r" % forced)
     assert "tests/test_banner.py" in body, (
         "the forced-colour step does not run the banner tests")
