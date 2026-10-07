@@ -574,13 +574,16 @@ def read_proc(pid, uptime, proc_root="/proc"):
     # Bytes and os.fsdecode() as well, for the reason stat is (issue #170): a
     # cgroup name is chosen by whoever creates it, which in a delegated
     # subtree is the user.
+    # Only the line's own newline comes off: str.strip() would also take a
+    # trailing space, NEL or NBSP that is part of the name, and which of
+    # those it took would depend on the locale's fsdecode codec.
     leaf_cgroup = None
     try:
         with open(os.path.join(base, "cgroup"), "rb") as fh:
             for raw in fh:
                 line = os.fsdecode(raw)
                 if line.startswith("0::"):
-                    leaf_cgroup = line.strip().rsplit("/", 1)[-1] or None
+                    leaf_cgroup = line.rstrip("\n").rsplit("/", 1)[-1] or None
                     break
     except OSError:
         pass

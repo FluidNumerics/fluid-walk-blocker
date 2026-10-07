@@ -246,9 +246,11 @@ def test_a_filesystem_that_reports_more_free_inodes_than_it_has_reads_as_zero():
 
 @pytest.mark.parametrize("locale", ("C", "C.UTF-8"))
 def test_a_non_utf8_mount_table_is_surveyed_not_raised(tmp_path, locale):
-    """Issue #163, for the other node reader of the mount table. A source
-    byte that is not UTF-8 is replaced, not raised on, and the `host:` source
-    still reads as remote, as the shim's byte readers class it."""
+    """Issue #163, for the other node reader of the mount table. survey.py
+    already decoded with errors="replace", so this pins behaviour that held
+    before the fix; it is not the fix's oracle. A source byte that is not
+    UTF-8 is replaced, not raised on, and the `host:` source still reads as
+    remote, as the shim's byte readers class it."""
     mounts = tmp_path / "mounts"
     mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
                        b"\377h:/e /mnt/b xfs rw 0 0\n"
@@ -283,4 +285,19 @@ def test_survey_splits_mount_fields_as_the_shim_does(tmp_path):
                                        statvfs_command=FAKE_CHILD))
     assert sorted(rows) == ["/", "/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"]
     for point in ("/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"):
+        assert rows[point]["remote_reason"] == "source", rows[point]
+
+
+def test_survey_keeps_a_carriage_return_inside_its_field(tmp_path):
+    """Issue #172, from PR #174's review. The shim's readers end a row on
+    \\n alone, so a \\r is a byte of its field. Universal newlines ended the
+    row on it: `/m\\rp` became a mount point `p`."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
+                       b"h:/e /m\rp xfs rw 0 0\n"
+                       b"h\r:/e /mnt/r xfs rw 0 0\r\n")
+    rows = by_mountpoint(survey.survey(str(mounts), timeout=0.5,
+                                       statvfs_command=FAKE_CHILD))
+    assert sorted(rows) == ["/", "/m\rp", "/mnt/r"]
+    for point in ("/m\rp", "/mnt/r"):
         assert rows[point]["remote_reason"] == "source", rows[point]

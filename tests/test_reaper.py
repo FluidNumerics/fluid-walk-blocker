@@ -3342,6 +3342,19 @@ def test_non_utf8_comm_and_cgroup_are_an_ordinary_poll(tmp_path, procfs,
         assert b"pid=4108" in result.stdout and b"pid=4109" in result.stdout
 
 
+@pytest.mark.parametrize("tail", (b" ", b"\x0b", b"\xc2\x85", b"\xc2\xa0",
+                                  b"\x85", b"\xa0"))
+def test_a_cgroup_name_keeps_its_trailing_bytes(procfs, tail):
+    """Issue #170, from PR #174's review. Only the line's newline is dropped
+    from the leaf cgroup: a name may end in a space, \\v, NEL or NBSP, and
+    str.strip() took those off, which ones depending on the locale's fsdecode
+    codec. The leaf is read as the kernel wrote it."""
+    base = write_proc(procfs, 4110, "find", ["find", "/scratch/e"])
+    (base / "cgroup").write_bytes(b"0::/user.slice/s.scope" + tail + b"\n")
+    proc = reaper.read_proc(4110, 1000000.0, str(procfs))
+    assert proc.leaf_cgroup == "s.scope" + os.fsdecode(tail)
+
+
 @pytest.mark.parametrize("output", ("text", "json"))
 @pytest.mark.parametrize("locale", _poll_locales())
 def test_a_non_utf8_argv_root_matches_its_mount(tmp_path, procfs, shim_env,

@@ -143,7 +143,10 @@ def survey(mount_table="/proc/mounts", timeout=2.0, include_all=False,
            statvfs_command=None, remote_fstypes=None, remote_proxy=True):
     """One dict per mount: the table fields, the tier-one verdict and the
     measurement. `statvfs_command` is a test seam and nothing else."""
-    with open(mount_table, encoding="utf-8", errors="replace") as fh:
+    # newline="": a bare \r is a byte of its field, as it is to the shim's
+    # readers; universal newlines would end the row on it.
+    with open(mount_table, encoding="utf-8", errors="replace",
+              newline="") as fh:
         entries = parse_mount_table(fh.read())
     rows = []
     for entry in entries:
