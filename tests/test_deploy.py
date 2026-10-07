@@ -1211,6 +1211,67 @@ def test_a_hook_proof_failure_still_arms_the_reaper(
     assert "None" not in err.splitlines(), err
 
 
+def _failing_systemctl(calls, failing, installer_rc):
+    """recording_run, except that `failing` exits 5 and, like the real run(),
+    raises SystemExit with that status under check=True."""
+    inner = recording_run(calls, installer_rc=installer_rc)
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        result = inner(cmd, check=check, capture=capture, dry_run=dry_run,
+                       env=env)
+        if cmd[:len(failing)] == failing:
+            sys.stderr.write("failed: %s\n" % " ".join(cmd))
+            if check:
+                raise SystemExit(5)
+            return subprocess.CompletedProcess(cmd, 5, "", "")
+        return result
+    return fake_run
+
+
+@pytest.mark.parametrize("failing", [
+    ["systemctl", "daemon-reload"],
+    ["systemctl", "enable", "--now"],
+])
+def test_a_systemctl_failure_after_a_hook_proof_failure_says_both(
+        tmp_path, monkeypatch, capsys, failing):
+    """Issue #145, ruled: the command's own status wins over 4, because 4
+    promises Layer 2 is running and a failed daemon-reload or enable means
+    it is not known to be. The hook failure is still reported by deploy.py,
+    not left to install.sh's stderr. Mutations: drop the notice, and "NOT
+    proven" is missing; return 4 instead of re-raising, and no SystemExit."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(deploy, "run",
+                        _failing_systemctl(calls, failing, installer_rc=4))
+    with contextlib.redirect_stdout(io.StringIO()), \
+            pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == 5
+    err = capsys.readouterr().err
+    assert "Layer 1 NOT proven AND Layer 2 NOT armed" in err, err
+    assert "Layer 2 is running" not in err, err
+    # The notice follows run()'s own report of the command, not the reverse.
+    assert err.index("failed: " + " ".join(failing)) \
+        < err.index("NOT proven"), err
+
+
+def test_a_systemctl_failure_with_the_hooks_proven_names_no_hook(
+        tmp_path, monkeypatch, capsys):
+    """The other half of #145: only an unproven hook adds the notice. With the
+    hooks proven, a failed enable exits with its own status and says nothing
+    about Layer 1."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", _failing_systemctl(
+        [], ["systemctl", "enable", "--now"], installer_rc=0))
+    with contextlib.redirect_stdout(io.StringIO()), \
+            pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == 5
+    assert "NOT proven" not in capsys.readouterr().err
+
+
 def test_a_journal_abort_does_not_hide_the_hook_notice(
         tmp_path, monkeypatch, capsys):
     """journal_step() runs run() with check=True, which raises SystemExit

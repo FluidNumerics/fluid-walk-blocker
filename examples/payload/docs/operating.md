@@ -482,9 +482,9 @@ required hook that failed its proof (4), because the install carries on to
 re-arm Layer 2. If the ownership check after `install.sh` then refuses, the
 status is 9, as above, and the timer stays disabled. If `systemctl
 daemon-reload` or `enable --now` then fails, the status is that command's
-own, and the run ends before `deploy.py` prints its Layer-1-not-proven
-notice: `install.sh`'s own stderr is then the only report of the hook
-failure (issue #145). If the journal step then fails, the status is 4. Under
+own, not 4, because 4 promises that Layer 2 is running and here it is not
+known to be; `deploy.py` says on stderr that neither layer can be relied on
+(issue #145). If the journal step then fails, the status is 4. Under
 `--verify`, drift and an unreadable file together exit 1. The install's dry
 run can report two refusals, from its checks and from the payload check, but
 both are 6. Order, not severity, decides between the uninstall's 5 and 7:
