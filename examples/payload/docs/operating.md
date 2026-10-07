@@ -635,6 +635,9 @@ It carries three kinds of record:
   reseeds it from that poll and writes `coverage_change` `unknown`, then
   re-asserts `unknown`, marked, on the same cadence until
   `deploy.py --system` reseeds it: drift before that poll is not known.
+  `unwrapped-N` is at warning priority and `unknown` at error priority,
+  re-assertions included, so `journalctl -t walk-blocker -p err` isolates a
+  relink that cannot judge drift (ADR-0033).
   Without a pinned spool no drift is reported at all;
   `relink_refused` when the relink stopped at one of its own checks;
 - one **`refused`** record per refusal, from the shim itself, carrying the

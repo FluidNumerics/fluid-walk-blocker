@@ -159,7 +159,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0032` |
+| `docs/adr/` | the decisions, `0001` through `0033` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/node-requirements.md` | what the destination node must provide |
@@ -229,7 +229,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0032`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0033`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the node must provide, and the floor
    below which a fault is unsupported
