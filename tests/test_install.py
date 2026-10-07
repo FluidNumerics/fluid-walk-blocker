@@ -3366,7 +3366,7 @@ NOT_ARMED = "so Layer 2 (the reaper) and the reconcile are not armed"
 CANNOT_READ = "cannot read the state of walk-blocker.timer"
 # deploy.py can stop after install.sh without arming (its ownership
 # re-check returns 9), so the line promises arming only conditionally.
-UNDER_DEPLOY = "(under deploy.py, they are armed after this step unless a later step fails)"
+UNDER_DEPLOY = "(under deploy.py, they are armed next unless deploy.py stops before arming them)"
 
 
 def _timer_lines(stdout):

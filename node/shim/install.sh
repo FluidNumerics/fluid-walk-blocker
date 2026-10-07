@@ -2299,8 +2299,9 @@ timer_notice() {
     # `--system` restored the hooks and the farm and said nothing about
     # Layer 2, so its success read as "back to normal". Under deploy.py
     # the timer is disabled on purpose while this runs and enabled after
-    # only if deploy.py's later steps succeed (its ownership re-check can
-    # return 9 first), so the line promises no more than that. It never
+    # only if deploy.py gets that far (its ownership re-check can return 9
+    # first; its journal step runs after the enable and can fail with the
+    # timer armed), so the line promises no more than that. It never
     # suggests `systemctl enable`: only deploy.py writes the units it
     # would arm.
     #
@@ -2318,9 +2319,9 @@ timer_notice() {
         fi
     fi
     if [ -n "$_tn_state" ]; then
-        echo "walk-blocker: $SG_TIMER_UNIT is $_tn_state, so Layer 2 (the reaper) and the reconcile are not armed; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed after this step unless a later step fails)"
+        echo "walk-blocker: $SG_TIMER_UNIT is $_tn_state, so Layer 2 (the reaper) and the reconcile are not armed; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed next unless deploy.py stops before arming them)"
     else
-        echo "walk-blocker: cannot read the state of $SG_TIMER_UNIT, so whether Layer 2 (the reaper) and the reconcile are armed is unknown; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed after this step unless a later step fails)"
+        echo "walk-blocker: cannot read the state of $SG_TIMER_UNIT, so whether Layer 2 (the reaper) and the reconcile are armed is unknown; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed next unless deploy.py stops before arming them)"
     fi
     return 0
 }
