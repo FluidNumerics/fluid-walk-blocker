@@ -552,6 +552,61 @@ def test_a_walk_exactly_at_the_budget_is_not_yet_past_it(
         verdict]
 
 
+def test_an_opaque_traversal_exactly_at_the_budget_is_not_yet_past_it(
+        procfs, mounts_path):
+    """The opaque_traversal arm reads `past_budget` too (ADR-0020 keeps it a
+    conjunct), and with the D streak already met it is the only term left
+    between a young blocked process and a record. Issue #132: dropping it,
+    or loosening `>` to `>=`, passed the suite. At the budget: nothing. One
+    second past: exactly one opaque_traversal. Ages land exactly, as in the
+    test above."""
+    budget = reaper.TRAVERSAL_BUDGET_S
+    argv = ["rsync", "-a", "/scratch/x", "/tmp/y"]
+    write_proc(procfs, 900, "rsync", argv,
+               uid=UID_B, ppid=800, state="D", cpu_s=5.0, age_s=budget)
+    procs = scan(procfs)
+    assert procs[900].age_s == budget, procs[900].age_s
+    assert reaper.classify(procs, read_mounts(mounts_path),
+                           d_streak=persisted(procs)) == []
+    write_proc(procfs, 900, "rsync", argv,
+               uid=UID_B, ppid=800, state="D", cpu_s=5.0, age_s=budget + 1)
+    procs = scan(procfs)
+    assert procs[900].age_s == budget + 1, procs[900].age_s
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
+    assert [f.verdict for f in findings] == ["opaque_traversal"]
+
+
+@pytest.mark.parametrize("comm, argv, ppid, verdict", [
+    ("find", ["find", "/scratch", "-type", "f"], 500, "runaway_traversal"),
+    ("find", ["find", "/scratch", "-type", "f"], 1, "orphan_traversal"),
+    ("rsync", ["rsync", "-a", "/scratch/x", "/tmp/y"], 800, "opaque_traversal"),
+])
+def test_a_fraction_of_a_second_past_the_budget_is_past_it(
+        procfs, mounts_path, comm, argv, ppid, verdict):
+    """A real age is fractional; every other age these tests hand classify()
+    is a whole second, so a `past_budget` that truncated, rounded or added
+    half a second passed them (issue #133). A quarter-second past the budget
+    is past it, in every arm that reads `past_budget`.
+
+    A quarter, not the half the issue suggested: `round()` rounds a half to
+    even, so `round(budget + 0.5) > budget` holds whenever the budget is odd
+    and the mutant would survive at such a site. A quarter rounds down at any
+    budget. It also kills `int(age)`, `age > budget + 0.5` and
+    `age >= budget + 1`. A quarter second is a whole number of ticks at any
+    CLK_TCK divisible by four, Linux's 100 among them, and the first
+    assertion checks it landed."""
+    budget = reaper.TRAVERSAL_BUDGET_S
+    write_proc(procfs, 500, "bash", ["-bash"], uid=UID_B, ppid=1, state="S")
+    write_proc(procfs, 502, comm, argv,
+               uid=UID_B, ppid=ppid, state="D", cpu_s=5.0, age_s=budget + 0.25)
+    procs = scan(procfs)
+    assert procs[502].age_s == budget + 0.25, procs[502].age_s
+    findings = reaper.classify(procs, read_mounts(mounts_path),
+                               d_streak=persisted(procs))
+    assert [(f.proc.pid, f.verdict) for f in findings] == [(502, verdict)]
+
+
 def test_orphan_idle_is_reported_never_killed(procfs, mounts_path):
     """PPID-1 readers of pipes whose writers are gone: a leak, not a load."""
     write_proc(procfs, 4103, "grep",
