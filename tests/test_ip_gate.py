@@ -45,7 +45,27 @@ def test_the_default_root_is_the_scripts_repository_not_the_cwd(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
                              capture_output=True, check=True).stdout.count(b"\0")
-    assert r.stderr.strip() == "%d file(s) under %s, 0 finding(s), terms=off" % (tracked, ROOT)
+    assert r.stderr.strip() == "%d file(s) under %s, 0 finding(s), terms=off" % (
+        tracked, os.path.realpath(ROOT))
+
+
+def test_a_symlinked_tools_dir_still_finds_the_repository(tmp_path):
+    # The script's directory is resolved, not taken lexically: through a link
+    # the lexical parent of tools/ is tmp_path, which is not a repository.
+    (tmp_path / "linked").symlink_to(TOOLS)
+    r = subprocess.run([sys.executable, str(tmp_path / "linked" / "check_no_site_literals.py"),
+                        "--terms", os.devnull], capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert " under %s, " % os.path.realpath(ROOT) in r.stderr
+
+
+def test_named_paths_without_root_are_read_from_the_cwd(tmp_path):
+    # A relative path is the caller's, not the script's repository's: read
+    # against REPO it named a file that is not there and passed.
+    (tmp_path / "a.md").write_text("plain\n")
+    r = run(["--terms", os.devnull, "a.md"], cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.strip() == "1 file(s) under %s, 0 finding(s), terms=off" % tmp_path
 
 
 def test_the_summary_names_the_root_it_scanned(tmp_path):

@@ -23,10 +23,13 @@ import re
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-# The default root is the tree this copy of the script belongs to, not the
-# current directory: run from the main checkout against a worktree's script,
-# "." scanned the main checkout and passed on a tree nobody asked about.
+# realpath, not abspath: through a symlinked tools/ the lexical parent is the
+# link's directory, not the repository.
+HERE = os.path.dirname(os.path.realpath(__file__))
+# The default root for a whole-tree scan is the tree this copy of the script
+# belongs to, not the current directory: run from the main checkout against a
+# worktree's script, "." scanned the main checkout and passed on a tree nobody
+# asked about.
 REPO = os.path.dirname(HERE)
 DEFAULT_PATTERNS = os.path.join(HERE, "forbidden-patterns.txt")
 DEFAULT_TERMS = os.path.join(
@@ -166,9 +169,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("paths", nargs="*",
                     help="files or directories; default is every tracked file")
-    ap.add_argument("--root", default=REPO,
+    ap.add_argument("--root", default=None,
                     help="tree to scan; default is the repository holding "
-                         "this script, never the current directory")
+                         "this script, or the current directory for named paths")
     ap.add_argument("--patterns", default=DEFAULT_PATTERNS)
     ap.add_argument("--terms", default=None,
                     help="customer term list; default $WALK_BLOCKER_FORBIDDEN_TERMS, "
@@ -178,7 +181,15 @@ def main(argv=None):
     ap.add_argument("--files-from", help="NUL- or newline-separated list, - for stdin")
     ap.add_argument("--quiet", action="store_true", help="never print matched text")
     a = ap.parse_args(argv)
-    root = os.path.abspath(a.root)
+    # Paths named on the command line mean what they mean to the caller's
+    # shell, so without --root they resolve against the current directory.
+    # A whole-tree scan and --files-from (git's repo-relative names) use REPO.
+    if a.root:
+        root = os.path.abspath(a.root)
+    elif a.paths and not a.files_from:
+        root = os.getcwd()
+    else:
+        root = REPO
 
     rules, allow = load_patterns(a.patterns)
     terms_path = (a.terms or os.environ.get("WALK_BLOCKER_FORBIDDEN_TERMS")
