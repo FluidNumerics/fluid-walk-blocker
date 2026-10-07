@@ -68,6 +68,17 @@ def test_named_paths_without_root_are_read_from_the_cwd(tmp_path):
     assert r.stderr.strip() == "1 file(s) under %s, 0 finding(s), terms=off" % tmp_path
 
 
+def test_files_from_without_root_reads_names_against_the_repository(tmp_path):
+    # --files-from carries git's repo-relative names, so it keeps REPO as the
+    # root even when a path is named too (that path is ignored today, #193).
+    (tmp_path / "list").write_text("README.md\n")
+    (tmp_path / "a.md").write_text("plain\n")
+    r = run(["--terms", os.devnull, "--files-from", "list", "a.md"], cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.strip() == "1 file(s) under %s, 0 finding(s), terms=off" % (
+        os.path.realpath(ROOT))
+
+
 def test_the_summary_names_the_root_it_scanned(tmp_path):
     (tmp_path / "a.md").write_text("plain\n")
     r = run(["--root", str(tmp_path), "--terms", os.devnull, "a.md"])
