@@ -3269,6 +3269,22 @@ def test_coverage_change_unwrapped_stays_at_warning(tmp_path, shell, marker):
 
 
 @pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("marker", [(), ("reasserted",)])
+def test_a_long_form_unknown_is_not_raised_to_err(tmp_path, shell, marker):
+    """The raise is for the short form, the only form the relink reports
+    `coverage_change` in; the grammar is unchanged, so a long-form call
+    keeps the long form's notice (ADR-0033; issue #189 asks whether it
+    should be a caller bug). Mutation: raise on any argument count, and
+    these read user.err."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "coverage_change", "/mnt/a",
+                                    "nfs", "unknown", *marker, shell=shell)
+    assert record["action"] == "coverage_change", record
+    assert record["state"] == "unknown", record
+    assert prio == "user.notice", (marker, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
 def test_a_caller_bug_with_unknown_is_not_raised_to_err(tmp_path, shell):
     """A bad third argument makes a caller-bug record, and that keeps the
     warning: the raise is for the fact `unknown` reports, not for a call

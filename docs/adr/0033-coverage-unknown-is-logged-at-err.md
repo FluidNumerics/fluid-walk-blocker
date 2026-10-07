@@ -39,11 +39,15 @@ The alternatives, in their strongest form:
 ## Decision
 
 `sg_report` logs `coverage_change` with state `unknown` at `user.err`:
-the change record and each re-assertion of it. Every other record keeps
-its priority: `coverage_change` `unwrapped-N` at `user.warning`, marked
-or not, `uncovered_mount` at `user.notice`, and the hook records at
-`user.warning`. A caller-bug record keeps `user.warning`, whatever state
-the bad call named. The record's grammar is unchanged.
+the change record and each re-assertion of it, both in the short form,
+the only form the relink reports it in. Every other record keeps its
+priority: `coverage_change` `unwrapped-N` at `user.warning`, marked or
+not, `uncovered_mount` at `user.notice`, and the `hook_check`,
+`audit_dir` and `relink_refused` records at `user.warning`. A caller-bug
+record keeps `user.warning`, whatever state the bad call named. The
+record's grammar is unchanged, so a long-form call naming
+`coverage_change` keeps the long form's `user.notice`; no caller makes
+one, and issue #189 asks whether it should be a caller bug instead.
 
 ## Consequences
 
