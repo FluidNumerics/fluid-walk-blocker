@@ -438,9 +438,15 @@ def _uptime(proc_root="/proc"):
 
 def read_proc(pid, uptime, proc_root="/proc"):
     base = os.path.join(proc_root, str(pid))
+    # Bytes, decoded with os.fsdecode() as the mount table is: comm is
+    # whatever the process last named itself (prctl, /proc/self/comm), any
+    # unprivileged user chooses it, and the kernel writes it here unescaped.
+    # A strict decode raised on one byte that is not UTF-8 and ended the
+    # whole poll (issue #170). fsdecode cannot raise, and the fields after
+    # the last ')' are ASCII either way.
     try:
-        with open(os.path.join(base, "stat"), "r") as fh:
-            stat = fh.read()
+        with open(os.path.join(base, "stat"), "rb") as fh:
+            stat = os.fsdecode(fh.read())
     except OSError:
         return None
     # comm is parenthesized and may itself contain spaces and parentheses, so
@@ -486,10 +492,16 @@ def read_proc(pid, uptime, proc_root="/proc"):
     # directory says the same thing on a live /proc, but reading it from
     # status is what lets a synthetic /proc in the tests describe another
     # user's process without needing root to create one.
+    #
+    # Bytes and os.fsdecode() too (issue #170). A strict decode of the Name:
+    # line, the same comm, raised a ValueError the except below caught, and
+    # the uid silently fell back to the directory's owner, which is root for
+    # a process that is not dumpable.
     uid = None
     try:
-        with open(os.path.join(base, "status"), "r") as fh:
-            for line in fh:
+        with open(os.path.join(base, "status"), "rb") as fh:
+            for raw in fh:
+                line = os.fsdecode(raw)
                 if line.startswith("Uid:"):
                     uid = int(line.split()[1])
                     break
@@ -551,10 +563,15 @@ def read_proc(pid, uptime, proc_root="/proc"):
     # can say whether Layer 1 was ever in its PATH. Same OSError discipline as
     # everything else here: a process that exits mid-scan is a None, not a
     # traceback.
+    #
+    # Bytes and os.fsdecode() as well, for the reason stat is (issue #170): a
+    # cgroup name is chosen by whoever creates it, which in a delegated
+    # subtree is the user.
     leaf_cgroup = None
     try:
-        with open(os.path.join(base, "cgroup"), "r") as fh:
-            for line in fh:
+        with open(os.path.join(base, "cgroup"), "rb") as fh:
+            for raw in fh:
+                line = os.fsdecode(raw)
                 if line.startswith("0::"):
                     leaf_cgroup = line.strip().rsplit("/", 1)[-1] or None
                     break

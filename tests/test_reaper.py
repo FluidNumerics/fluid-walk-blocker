@@ -3270,3 +3270,73 @@ def test_a_non_utf8_mount_table_is_an_ordinary_poll(tmp_path, procfs, locale,
         assert sorted(e["pid"] for e in json.loads(listing)) == [4106, 4107]
     else:
         assert b"pid=4106" in result.stdout and b"pid=4107" in result.stdout
+
+
+def _run_poll(tmp_path, procfs, cg, mounts, locale, output):
+    """One poll of the stamped payload in its own interpreter, as the unit
+    runs it, under `locale`. (result, audit entries, --json listing or
+    None)."""
+    audit = tmp_path / "audit.jsonl"
+    command = [sys.executable, reaper.__file__,
+               "--spool", str(tmp_path / "spool"), "--audit", str(audit),
+               "--cgroup-root", str(cg), "--proc-root", str(procfs),
+               "--mounts", str(mounts), "--min-interval", "0",
+               "--settle", "0"]
+    if output == "json":
+        command.append("--json")
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    environ["LC_ALL"] = locale
+    result = subprocess.run(command, capture_output=True, env=environ,
+                            timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert "Traceback" not in stderr, stderr
+    listing = None
+    if output == "json":
+        # The PSI table is printed first; the record list follows it.
+        listing = json.loads(result.stdout[result.stdout.index(b"\n[") + 1:])
+    entries = _read_audit(str(audit)) if audit.exists() else []
+    return result, entries, listing
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_non_utf8_comm_and_cgroup_are_an_ordinary_poll(tmp_path, procfs,
+                                                       locale, output):
+    """Issue #170. comm is whatever a process last named itself, and the
+    kernel writes it into stat and status unescaped; a cgroup name is chosen
+    by whoever creates it. A strict decode of either raised outside the
+    OSError the reader catches and ended the poll. Both are now decoded as
+    the mount table is: the poll completes, both processes are still
+    classified, the comm keeps the last-')' rule, the uid still comes from
+    status, and every record parses."""
+    mounts = tmp_path / "mounts"
+    mounts.write_text(BASE_MOUNTS)
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    named = write_proc(procfs, 4108, "x", ["find", "/scratch/e", "-name", "x"],
+                       uid=UID_B, ppid=500, state="D", cpu_s=600.0,
+                       age_s=4 * 86400)
+    stat = (named / "stat").read_bytes()
+    (named / "stat").write_bytes(stat.replace(b"(x)", b"(x\377) y)", 1))
+    (named / "status").write_bytes(
+        b"Name:\tx\377) y\nUid:\t%d\t%d\t%d\t%d\n" % ((UID_B,) * 4))
+    grouped = write_proc(procfs, 4109, "find",
+                         ["find", "/scratch/e", "-name", "x"],
+                         ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400)
+    (grouped / "cgroup").write_bytes(
+        b"0::/user.slice/user-%d.slice/s\377.scope\n" % UID_A)
+
+    result, entries, listing = _run_poll(tmp_path, procfs, cg, mounts,
+                                         locale, output)
+    assert result.returncode == reaper.EXIT_ACTIONABLE, result.stderr
+    rows = {e["pid"]: e for e in entries}
+    assert sorted(rows) == [4108, 4109], entries
+    assert rows[4108]["verdict"] == rows[4109]["verdict"] == "runaway_traversal"
+    assert rows[4108]["comm"] == "x\udcff) y"
+    assert rows[4108]["uid"] == UID_B
+    assert rows[4109]["leaf_cgroup"] == "s\udcff.scope"
+    if listing is not None:
+        assert sorted(e["pid"] for e in listing) == [4108, 4109]
+    else:
+        assert b"pid=4108" in result.stdout and b"pid=4109" in result.stdout
