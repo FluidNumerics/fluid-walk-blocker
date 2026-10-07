@@ -2292,6 +2292,40 @@ linked_report() {
     return 0
 }
 
+timer_notice() {
+    # One stdout line unless the reconcile timer reads active AND enabled
+    # (issue #105). `--system` rewrites Layer 1 and leaves the timer as it
+    # found it: after an `--uninstall`, which disables it, a by-hand
+    # `--system` restored the hooks and the farm and said nothing about
+    # Layer 2, so its success read as "back to normal". Under deploy.py
+    # the timer is disabled on purpose while this runs and enabled after
+    # only if deploy.py gets that far (its ownership re-check can return 9
+    # first; its journal step runs after the enable and can fail with the
+    # timer armed), so the line promises no more than that. It never
+    # suggests `systemctl enable`: only deploy.py writes the units it
+    # would arm.
+    #
+    # The same idioms as units_are_down(): the state WORD is judged, never
+    # is-active's exit status, and show's status is judged first because a
+    # broken bus also prints nothing. Anything that cannot be read says so
+    # -- silence is earned only by the one healthy reading.
+    _tn_state=''
+    if command -v systemctl >/dev/null 2>&1; then
+        _tn_active=$(systemctl is-active "$SG_TIMER_UNIT" 2>/dev/null) || :
+        if [ -n "$_tn_active" ] &&
+            _tn_file=$(systemctl show "$SG_TIMER_UNIT" --property=UnitFileState --value 2>/dev/null); then
+            [ "$_tn_active:$_tn_file" = active:enabled ] && return 0
+            _tn_state="$_tn_active and ${_tn_file:-without a unit file}"
+        fi
+    fi
+    if [ -n "$_tn_state" ]; then
+        echo "walk-blocker: $SG_TIMER_UNIT is $_tn_state, so Layer 2 (the reaper) and the reconcile are not armed; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed next unless deploy.py stops before arming them)"
+    else
+        echo "walk-blocker: cannot read the state of $SG_TIMER_UNIT, so whether Layer 2 (the reaper) and the reconcile are armed is unknown; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed next unless deploy.py stops before arming them)"
+    fi
+    return 0
+}
+
 units_are_down() {
     # 0 when neither unit can fire, or 1 with the reason written. Mirrors
     # _units_are_down() in deploy.py, and the pair must agree: judged by the
@@ -2464,7 +2498,10 @@ case $MODE in
             for _wh in $SG_HOOKS_REQUIRED; do
                 write_hook "$_wh"
             done
-            verify_hooks || exit 4
+            # The timer notice on both ways out of a writing install: a
+            # failed hook proof leaves Layer 1 half-written, and Layer 2's
+            # state is as much worth saying there.
+            verify_hooks || { timer_notice; exit 4; }
             # Best-effort, gated on presence, and outside the gate above: a
             # best-effort shell's absence is the ordinary case at this site,
             # not a reason to fail an otherwise-good install, and its hook
@@ -2476,6 +2513,7 @@ case $MODE in
                     "$HK_VERIFY_FN" || echo "walk-blocker: the $_wh hook did not verify -- best-effort, not fatal; see ADR-0008" >&2
                 fi
             done
+            timer_notice
             echo "walk-blocker: system-wide install complete under $PREFIX"
         elif [ "$WILL_WRITE" -eq 1 ]; then
             echo "install.sh: --system must run as root; use --dry-run to see what it would do" >&2
@@ -2520,6 +2558,7 @@ SYS
             done
             cat <<SYS
 #   - point WALK_BLOCKER_AUDIT at $AUDIT
+#   - NOT enable $SG_TIMER_UNIT: install.sh --system leaves it as it found it
 #
 # Reverting: as root, from the built payload (it also removes the systemd
 # units):
