@@ -3228,16 +3228,57 @@ def test_sg_report_takes_a_marker_in_its_short_form(tmp_path, shell):
     assert record == {"layer": "shim", "action": "coverage_change",
                       "state": "unwrapped-2", "reasserted": True}
     prio, record = _drive_sg_report(tmp_path / "plain", "coverage_change",
-                                    "unknown", shell=shell)
+                                    "unwrapped-2", shell=shell)
     assert prio == "user.warning"
     assert record == {"layer": "shim", "action": "coverage_change",
-                      "state": "unknown"}
+                      "state": "unwrapped-2"}
     for third in ("bogus", "", "true", "Reasserted"):
         _prio, record = _drive_sg_report(tmp_path / ("bad-" + (third or "empty")),
                                          "coverage_change", "unwrapped-2", third,
                                          shell=shell)
         assert record == {"layer": "shim", "action": "caller-bug",
                           "state": "caller-bug"}, (third, record)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("marker", [(), ("reasserted",)])
+def test_coverage_change_unknown_is_logged_at_err(tmp_path, shell, marker):
+    """Issue #159, ADR-0033: `unknown` says the relink cannot tell whether
+    coverage drifted, and ranks above the warning real drift carries -- the
+    change record and every re-assertion of it. Mutation: drop the
+    `coverage_change:unknown` branch, and both cases read user.warning."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "coverage_change", "unknown",
+                                    *marker, shell=shell)
+    assert prio == "user.err", (marker, prio)
+    want = {"layer": "shim", "action": "coverage_change", "state": "unknown"}
+    if marker:
+        want["reasserted"] = True
+    assert record == want, record
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("marker", [(), ("reasserted",)])
+def test_coverage_change_unwrapped_stays_at_warning(tmp_path, shell, marker):
+    """Real drift keeps its priority (ADR-0031, as narrowed by ADR-0033)."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "coverage_change", "unwrapped-1",
+                                    *marker, shell=shell)
+    assert prio == "user.warning", (marker, prio)
+    assert record["state"] == "unwrapped-1", record
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_caller_bug_with_unknown_is_not_raised_to_err(tmp_path, shell):
+    """A bad third argument makes a caller-bug record, and that keeps the
+    warning: the raise is for the fact `unknown` reports, not for a call
+    that only names it."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "coverage_change", "unknown",
+                                    "bogus", shell=shell)
+    assert record == {"layer": "shim", "action": "caller-bug",
+                      "state": "caller-bug"}, record
+    assert prio == "user.warning", prio
 
 
 @pytest.mark.parametrize("shell", SHELLS)
