@@ -385,7 +385,8 @@ What it verifies, and refuses on:
   hook-proof failure (4) outranks a journal step that did not land (10, or a
   command's own status). `install.sh` runs while the timer is disabled, so
   its output carries a line saying the timer is not armed; that is the
-  state at that moment, and the deploy enables the timer after it (§14);
+  state at that moment. The deploy enables the timer after it unless a
+  later step fails (§14);
 - **ownership.** Everything under the prefix is reasserted `root:root` with
   group and other write stripped, and the unit is not written if anything
   under the prefix still fails that test;

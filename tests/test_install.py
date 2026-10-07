@@ -2555,9 +2555,10 @@ def _hooked_layout(tmp_path, **state):
     # The install READS the timer's state to say whether it is armed (issue
     # #105) and changes nothing. Its reads are cleared from the log, so a
     # test of what the uninstall then calls sees the uninstall's calls only.
+    # missing_ok: an install that made no read leaves no log to clear.
     calls = [argv for argv, _block in H.systemctl_calls(layout.toolbin)]
     assert set(calls) <= TIMER_READS, "the install touched the units: %r" % calls
-    H.systemctl_paths(layout.toolbin)[1].unlink()
+    H.systemctl_paths(layout.toolbin)[1].unlink(missing_ok=True)
     return layout
 
 

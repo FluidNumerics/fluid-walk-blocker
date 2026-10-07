@@ -2298,9 +2298,11 @@ timer_notice() {
     # found it: after an `--uninstall`, which disables it, a by-hand
     # `--system` restored the hooks and the farm and said nothing about
     # Layer 2, so its success read as "back to normal". Under deploy.py
-    # the timer is disabled on purpose while this runs and enabled after,
-    # so the line is worded to be true there as well. It never suggests
-    # `systemctl enable`: only deploy.py writes the units it would arm.
+    # the timer is disabled on purpose while this runs and enabled after
+    # only if deploy.py's later steps succeed (its ownership re-check can
+    # return 9 first), so the line promises no more than that. It never
+    # suggests `systemctl enable`: only deploy.py writes the units it
+    # would arm.
     #
     # The same idioms as units_are_down(): the state WORD is judged, never
     # is-active's exit status, and show's status is judged first because a
@@ -2316,9 +2318,9 @@ timer_notice() {
         fi
     fi
     if [ -n "$_tn_state" ]; then
-        echo "walk-blocker: $SG_TIMER_UNIT is $_tn_state, so Layer 2 (the reaper) and the reconcile are not armed; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, that happens next)"
+        echo "walk-blocker: $SG_TIMER_UNIT is $_tn_state, so Layer 2 (the reaper) and the reconcile are not armed; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed after this step unless a later step fails)"
     else
-        echo "walk-blocker: cannot read the state of $SG_TIMER_UNIT, so whether Layer 2 (the reaper) and the reconcile are armed is unknown; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, that happens next)"
+        echo "walk-blocker: cannot read the state of $SG_TIMER_UNIT, so whether Layer 2 (the reaper) and the reconcile are armed is unknown; only \`python3 deploy.py --system\` from a payload arms them (under deploy.py, they are armed after this step unless a later step fails)"
     fi
     return 0
 }
