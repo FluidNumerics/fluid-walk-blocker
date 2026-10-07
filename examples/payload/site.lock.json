@@ -35,7 +35,7 @@
     "docs/adr/0030-a-standing-condition-is-reasserted-on-a-slow-cadence.md": "28193f7c8a1df84ec54a5f7e7a0708a93dcec8147423774be4e34d3521f26cd4",
     "docs/adr/0031-coverage-drift-is-a-standing-condition.md": "71909184ab4d6f3fbf07f97931d3f7a0e42aa2b7c086db45261005c7ebcea5b7",
     "docs/adr/0032-the-node-has-declared-requirements.md": "1aa3ed1105b6aea42cfa94cc8a281c33a22669a1269cc3cd3ff661b350d8bd5c",
-    "docs/adr/0033-coverage-unknown-is-logged-at-err.md": "8a3536e14bfb501a55c055df7c63231a61fd034ba71b2033e8e553bc862d9a14",
+    "docs/adr/0033-coverage-unknown-is-logged-at-err.md": "d749a57edf6081b79832c031b0605539f0c5733ee40b6dec0be7ccb5a972cdc1",
     "docs/adr/TEMPLATE.md": "2f91c335abaaab317e1337a6b1a99ffe73e54e1e8e1541111480073b9391733b",
     "docs/alternatives.md": "847b77f60d40fbead0393434bbcb2403d653caa34fbb51781a9bb7c4f8ecea05",
     "docs/evidence.md": "fb499de5d0aad217a26e9d65018cae1ab2312330631c48da352781fbdc18d65c",

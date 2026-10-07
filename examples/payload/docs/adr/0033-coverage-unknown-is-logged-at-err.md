@@ -44,8 +44,9 @@ the only form the relink reports it in. Every other record keeps its
 priority: `coverage_change` `unwrapped-N` at `user.warning`, marked or
 not, `uncovered_mount` at `user.notice`, and the `hook_check`,
 `audit_dir` and `relink_refused` records at `user.warning`. A caller-bug
-record keeps `user.warning`, whatever state the bad call named. The
-record's grammar is unchanged, so a long-form call naming
+record is never raised, whatever state the bad call named: it keeps its
+form's priority, `user.warning` in the short form and `user.notice` in
+the long. The record's grammar is unchanged, so a long-form call naming
 `coverage_change` keeps the long form's `user.notice`; no caller makes
 one, and issue #189 asks whether it should be a caller bug instead.
 
@@ -61,10 +62,10 @@ one, and issue #189 asks whether it should be a caller bug instead.
   does.
 - **The raise is for the fact, not the name.** It lives after
   `sg_report`'s caller-bug check, so a malformed call that happens to
-  name `unknown` stays a warning-level bug report.
+  name `unknown` stays a bug report at its form's priority.
 - Tests in `tests/test_install.py` pin `unknown` at err with and without
-  `reasserted`, `unwrapped-1` at warning, and a caller-bug call at
-  warning, under both shells.
+  `reasserted`, `unwrapped-1` at warning, a short-form caller-bug call
+  at warning, and a long-form `unknown` at notice, under both shells.
 
 ## Re-measure when
 
