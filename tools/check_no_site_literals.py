@@ -171,7 +171,8 @@ def main(argv=None):
                     help="files or directories; default is every tracked file")
     ap.add_argument("--root", default=None,
                     help="tree to scan; default is the repository holding "
-                         "this script, or the current directory for named paths")
+                         "this script, or the current directory for named paths "
+                         "(not with --files-from, which uses the repository)")
     ap.add_argument("--patterns", default=DEFAULT_PATTERNS)
     ap.add_argument("--terms", default=None,
                     help="customer term list; default $WALK_BLOCKER_FORBIDDEN_TERMS, "
