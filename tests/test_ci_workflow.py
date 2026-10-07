@@ -304,21 +304,37 @@ def test_one_row_runs_the_banner_tests_with_colour_forced():
         % step.get("if"))
     # Read the body as bash would: continuations joined, comments dropped.
     # It must be one command, `runuser -u ciuser -- env`, then NAME=value
-    # words, then `uv run`. A second line or a `;`, `&&` or `|` could run
-    # the tests outside that env list, and words an `echo` or a comment
-    # merely mentions are not the env list at all.
+    # words, then `uv run`. A second line, an operator (`;`, `&&`, `|`, a
+    # redirection or a subshell) or a command substitution could run `uv`
+    # outside that env list, and words an `echo` or a comment merely
+    # mentions are not the env list at all. Each line is split with its
+    # quotes kept, because, as in bash, `#` starts a comment only at the
+    # start of an unquoted word: shlex's own comment handling would also
+    # cut `x#y ; uv run` short and hide the `;`.
     body = str(step.get("run", "")).replace("\\\n", " ")
-    lines = [line for line in body.splitlines()
-             if shlex.split(line, comments=True)]
-    assert len(lines) == 1, (
+    commands = []
+    for line in body.splitlines():
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        raw = list(lexer)
+        comment = [i for i, w in enumerate(raw) if w.startswith("#")]
+        if comment:
+            raw = raw[:comment[0]]
+        if raw:
+            commands.append(raw)
+    assert len(commands) == 1, (
         "the forced-colour step must be one command, found %d: %r"
-        % (len(lines), lines))
-    lexer = shlex.shlex(lines[0], posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    words = list(lexer)
-    operators = [w for w in words if w and set(w) <= set(";&|()<>")]
+        % (len(commands), commands))
+    raw = commands[0]
+    operators = [w for w in raw if set(w) <= set(";&|()<>")]
     assert not operators, (
         "the forced-colour step chains or redirects with %r" % operators)
+    substitutions = [w for w in raw if "`" in w or "$(" in w]
+    assert not substitutions, (
+        "the forced-colour step runs a command substitution: %r"
+        % substitutions)
+    words = shlex.split(" ".join(raw))
     head = ["runuser", "-u", "ciuser", "--", "env"]
     assert words[:len(head)] == head, (
         "the forced-colour step does not start `%s`: %r"
