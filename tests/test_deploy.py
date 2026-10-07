@@ -1249,8 +1249,11 @@ def test_a_systemctl_failure_after_a_hook_proof_failure_says_both(
         deploy.system_execute(_args(tmp_path))
     assert exc.value.code == 5
     err = capsys.readouterr().err
-    assert "Layer 1 NOT proven AND Layer 2 NOT armed" in err, err
+    assert "Layer 1 NOT proven, and Layer 2 not known to be armed" in err, err
+    # Neither claim may be stronger than a failed command proves: enable --now
+    # can enable the timer and fail only to start it.
     assert "Layer 2 is running" not in err, err
+    assert "NOT armed" not in err, err
     # The notice follows run()'s own report of the command, not the reverse.
     assert err.index("failed: " + " ".join(failing)) \
         < err.index("NOT proven"), err
