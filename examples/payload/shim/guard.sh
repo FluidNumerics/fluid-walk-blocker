@@ -634,7 +634,16 @@ sg_audit_emit() {
     sg_awk=$SG_AWK
     [ -x "$sg_awk" ] || sg_awk=$(command -v awk 2>/dev/null)
     sg_line=''
+    # `unset POSIXLY_CORRECT` first, inside the substitution so the caller's
+    # shell keeps it. gawk writes ONE backslash for the replacement "\\\\"
+    # whenever that variable is in its environment, even empty, and the
+    # caller sets the environment: a backslash in a root would reach the
+    # record bare and the line would not parse. A `POSIXLY_CORRECT=` prefix
+    # still puts it in the environment, and `env -u` would be a fifth program
+    # on this path; `unset` is a builtin, so the count of four stands
+    # (ADR-0018).
     [ -n "$sg_awk" ] && sg_line=$(
+        unset POSIXLY_CORRECT
         SG_J_TS=$sg_when SG_J_ACTION=$sg_ae_action SG_J_SEAM=$sg_ae_seam \
         SG_J_TOOL=$sg_tool SG_J_ROOT=$sg_ae_root \
         SG_J_MOUNT=$sg_ae_mount SG_J_FS=$sg_ae_fs SG_J_REASON=$sg_ae_reason \
