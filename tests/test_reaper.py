@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -27,7 +28,7 @@ import pytest
 from _reaper_helpers import (REQUIRED_SOURCES, load_stamped_reaper,
                              site_values, source_text, stamped_text)
 from argv_cases import CASES
-from conftest import BASE_MOUNTS, resolve_cwd
+from conftest import BASE_MOUNTS, resolve_cwd, run_shim
 import walk_blocker
 from walk_blocker import stamp
 
@@ -3197,3 +3198,197 @@ def test_a_root_run_does_not_create_a_missing_spool(tmp_path, procfs,
                     out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
     assert rc == reaper.EXIT_UNRECORDED
     assert not spool.exists()
+
+
+# --------------------------------------------------------------------------
+# a mount table that is not UTF-8 (issue #163)
+# --------------------------------------------------------------------------
+
+def _poll_locales():
+    """The C locale, and a UTF-8 one when this machine has one."""
+    names = ["C"]
+    try:
+        listed = subprocess.run(["locale", "-a"], capture_output=True,
+                                text=True, errors="replace").stdout.split()
+    except OSError:
+        listed = []
+    names += [name for name in listed
+              if name.lower().endswith((".utf8", ".utf-8"))][:1]
+    return names
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_a_non_utf8_mount_table_is_an_ordinary_poll(tmp_path, procfs, locale,
+                                                    output):
+    """Issue #163. One byte that is not UTF-8 in a mount source raised in
+    read_mounts(), and main() has no handler, so every poll ended in a
+    traceback with no finding, no blind record and no audit line. Run the
+    stamped payload the way the unit does, a separate interpreter under the
+    node's locale, over a table with a byte in a source and a byte in a mount
+    point: the poll exits as a poll that found something, names both walks,
+    and every record it writes parses as JSON, the mount point carried as the
+    surrogate os.fsdecode() gives it."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                       b"\377h:/e /mnt/b xfs rw 0 0\n"
+                       b"fast /mnt/\377c wekafs rw 0 0\n")
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    # Remote by its source alone: xfs is not a listed type.
+    write_proc(procfs, 4106, "find", ["find", "/mnt/b", "-name", "x"],
+               ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400)
+    # The byte mount point, reached through a cwd: os.readlink() decodes the
+    # link as read_mounts() decodes the table, so the two compare equal.
+    write_proc(procfs, 4107, "find", ["find", ".", "-name", "x"],
+               ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400,
+               cwd="/mnt/\udcffc")
+    audit = tmp_path / "audit.jsonl"
+    command = [sys.executable, reaper.__file__,
+               "--spool", str(tmp_path / "spool"), "--audit", str(audit),
+               "--cgroup-root", str(cg), "--proc-root", str(procfs),
+               "--mounts", str(mounts), "--min-interval", "0",
+               "--settle", "0"]
+    if output == "json":
+        command.append("--json")
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    environ["LC_ALL"] = locale
+    result = subprocess.run(command, capture_output=True, env=environ,
+                            timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert "Traceback" not in stderr, stderr
+    assert result.returncode == reaper.EXIT_ACTIONABLE, (result.returncode,
+                                                         stderr)
+    entries = _read_audit(str(audit))
+    assert sorted((e["pid"], e["verdict"], e["mount"]) for e in entries) == [
+        (4106, "runaway_traversal", "/mnt/b"),
+        (4107, "runaway_traversal", "/mnt/\udcffc")], entries
+    if output == "json":
+        # The PSI table is printed first; the record list follows it.
+        listing = result.stdout[result.stdout.index(b"\n[") + 1:]
+        assert sorted(e["pid"] for e in json.loads(listing)) == [4106, 4107]
+    else:
+        assert b"pid=4106" in result.stdout and b"pid=4107" in result.stdout
+
+
+def _run_poll(tmp_path, procfs, cg, mounts, locale, output):
+    """One poll of the stamped payload in its own interpreter, as the unit
+    runs it, under `locale`. (result, audit entries, --json listing or
+    None)."""
+    audit = tmp_path / "audit.jsonl"
+    command = [sys.executable, reaper.__file__,
+               "--spool", str(tmp_path / "spool"), "--audit", str(audit),
+               "--cgroup-root", str(cg), "--proc-root", str(procfs),
+               "--mounts", str(mounts), "--min-interval", "0",
+               "--settle", "0"]
+    if output == "json":
+        command.append("--json")
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    environ["LC_ALL"] = locale
+    result = subprocess.run(command, capture_output=True, env=environ,
+                            timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert "Traceback" not in stderr, stderr
+    listing = None
+    if output == "json":
+        # The PSI table is printed first; the record list follows it.
+        listing = json.loads(result.stdout[result.stdout.index(b"\n[") + 1:])
+    entries = _read_audit(str(audit)) if audit.exists() else []
+    return result, entries, listing
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_non_utf8_comm_and_cgroup_are_an_ordinary_poll(tmp_path, procfs,
+                                                       locale, output):
+    """Issue #170. comm is whatever a process last named itself, and the
+    kernel writes it into stat and status unescaped; a cgroup name is chosen
+    by whoever creates it. A strict decode of either raised outside the
+    OSError the reader catches and ended the poll. Both are now decoded as
+    the mount table is: the poll completes, both processes are still
+    classified, the comm keeps the last-')' rule, the uid still comes from
+    status, and every record parses."""
+    mounts = tmp_path / "mounts"
+    mounts.write_text(BASE_MOUNTS)
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    named = write_proc(procfs, 4108, "x", ["find", "/scratch/e", "-name", "x"],
+                       uid=UID_B, ppid=500, state="D", cpu_s=600.0,
+                       age_s=4 * 86400)
+    stat = (named / "stat").read_bytes()
+    (named / "stat").write_bytes(stat.replace(b"(x)", b"(x\377) y)", 1))
+    (named / "status").write_bytes(
+        b"Name:\tx\377) y\nUid:\t%d\t%d\t%d\t%d\n" % ((UID_B,) * 4))
+    grouped = write_proc(procfs, 4109, "find",
+                         ["find", "/scratch/e", "-name", "x"],
+                         ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400)
+    (grouped / "cgroup").write_bytes(
+        b"0::/user.slice/user-%d.slice/s\377.scope\n" % UID_A)
+
+    result, entries, listing = _run_poll(tmp_path, procfs, cg, mounts,
+                                         locale, output)
+    assert result.returncode == reaper.EXIT_ACTIONABLE, result.stderr
+    rows = {e["pid"]: e for e in entries}
+    assert sorted(rows) == [4108, 4109], entries
+    assert rows[4108]["verdict"] == rows[4109]["verdict"] == "runaway_traversal"
+    assert rows[4108]["comm"] == "x\udcff) y"
+    assert rows[4108]["uid"] == UID_B
+    assert rows[4109]["leaf_cgroup"] == "s\udcff.scope"
+    if listing is not None:
+        assert sorted(e["pid"] for e in listing) == [4108, 4109]
+    else:
+        assert b"pid=4108" in result.stdout and b"pid=4109" in result.stdout
+
+
+@pytest.mark.parametrize("tail", (b" ", b"\x0b", b"\xc2\x85", b"\xc2\xa0",
+                                  b"\x85", b"\xa0"))
+def test_a_cgroup_name_keeps_its_trailing_bytes(procfs, tail):
+    """Issue #170, from PR #174's review. Only the line's newline is dropped
+    from the leaf cgroup: a name may end in a space, \\v, NEL or NBSP, and
+    str.strip() took those off, which ones depending on the locale's fsdecode
+    codec. The leaf is read as the kernel wrote it."""
+    base = write_proc(procfs, 4110, "find", ["find", "/scratch/e"])
+    (base / "cgroup").write_bytes(b"0::/user.slice/s.scope" + tail + b"\n")
+    proc = reaper.read_proc(4110, 1000000.0, str(procfs))
+    assert proc.leaf_cgroup == "s.scope" + os.fsdecode(tail)
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_a_non_utf8_argv_root_matches_its_mount(tmp_path, procfs, shim_env,
+                                                locale, output):
+    """Issue #171. cmdline was decoded with "replace", the mount table with
+    os.fsdecode(), so `find /mnt/\\377c` named `/mnt/\\ufffdc`, no expensive
+    mount matched it, and Layer 2 called a walk the shim refuses no
+    traversal at all. Both now decode alike: the reaper names the walk and
+    its mount, the shim refuses the same call, and the record and the
+    listing that carry the surrogate are written without raising."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                       b"fast /mnt/\377c wekafs rw 0 0\n")
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    base = write_proc(procfs, 4110, "find", ["find"], ppid=500, state="D",
+                      cpu_s=600.0, age_s=4 * 86400)
+    (base / "cmdline").write_bytes(b"find\0/mnt/\377c\0-name\0x\0")
+
+    result, entries, listing = _run_poll(tmp_path, procfs, cg, mounts,
+                                         locale, output)
+    assert result.returncode == reaper.EXIT_ACTIONABLE, result.stderr
+    assert [(e["pid"], e["verdict"], e["root"], e["mount"], e["cmdline"])
+            for e in entries] == [
+        (4110, "runaway_traversal", "/mnt/\udcffc", "/mnt/\udcffc",
+         "find /mnt/\udcffc -name x")], entries
+    if listing is not None:
+        assert [e["root"] for e in listing] == ["/mnt/\udcffc"]
+    else:
+        # main() sets errors="replace": the byte prints as `?`, it does not
+        # raise.
+        assert b"pid=4110" in result.stdout
+        assert b"find /mnt/?c -name x" in result.stdout, result.stdout
+
+    shim = run_shim(shim_env, ["find", "/mnt/\udcffc", "-name", "x"],
+                    env={"WALK_BLOCKER_MOUNTS": str(mounts), "LC_ALL": locale})
+    assert shim.returncode == R.EXIT_REFUSED, shim.stderr

@@ -1097,6 +1097,24 @@ def clean_path(path, cwd):
     return re.sub(r"/{2,}", "/", os.path.normpath(path)) or "/"
 
 
+_MOUNT_FIELD_SEP = re.compile("[ \t]+")
+
+
+def _mount_fields(line):
+    """The fields of one mount table line, split on runs of space and tab.
+
+    Not str.split(), which also splits on \\v, \\f, \\r, \\x1c-\\x1f, U+0085,
+    U+00A0 and the rest of Unicode's whitespace. The kernel escapes only
+    space, tab, newline and backslash, so any of the others can sit inside a
+    source somebody chose, and the shim's two readers -- awk in the C locale
+    and sh's `read` -- split on space and tab alone. Splitting on more
+    shifted every later field: a `host\\v:/e` source read as two fields, and
+    the real mount point became the type (issue #172).
+    """
+    return [field for field in _MOUNT_FIELD_SEP.split(line.rstrip("\n"))
+            if field]
+
+
 def read_mounts(path, policy):
     """The EXPENSIVE rows of a mount table, longest mount point first.
 
@@ -1109,12 +1127,23 @@ def read_mounts(path, policy):
 
     Longest-first is what makes the containing-mount lookup correct: `/big`
     must win over `/` for a path under it.
+
+    Read as bytes and decoded with os.fsdecode(), never as text. The kernel
+    escapes only whitespace and backslash in a source or a mount point, and
+    whoever mounts a filesystem chooses both -- a FUSE source is a user's
+    string -- so a field may hold any other byte, valid UTF-8 or not. A
+    strict decode raised on such a row and ended the reaper's poll with no
+    record at all (issue #163). fsdecode cannot raise: an undecodable byte
+    becomes a lone surrogate, the row's other fields still classify, a
+    `host:` source still reads as remote, as it does to the shim's byte
+    readers, and a mount point decodes exactly as os.readlink() decodes a
+    process's cwd, so the two still compare equal.
     """
     found = []
     try:
-        with open(path, "r") as fh:
-            for line in fh:
-                parts = line.split()
+        with open(path, "rb") as fh:
+            for raw in fh:
+                parts = _mount_fields(os.fsdecode(raw))
                 if len(parts) < 4:
                     continue
                 # /proc/mounts octal-escapes spaces and tabs in the mountpoint.

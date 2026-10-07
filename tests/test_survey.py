@@ -242,3 +242,62 @@ def test_a_filesystem_that_reports_more_free_inodes_than_it_has_reads_as_zero():
     assert row["measured"] is True
     assert row["inodes"] == 10 and row["inodes_free"] == 25
     assert row["inodes_used"] == 0
+
+
+@pytest.mark.parametrize("locale", ("C", "C.UTF-8"))
+def test_a_non_utf8_mount_table_is_surveyed_not_raised(tmp_path, locale):
+    """Issue #163, for the other node reader of the mount table. survey.py
+    already decoded with errors="replace", so this pins behaviour that held
+    before the fix; it is not the fix's oracle. A source byte that is not
+    UTF-8 is replaced, not raised on, and the `host:` source still reads as
+    remote, as the shim's byte readers class it."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
+                       b"\377h:/e /mnt/b xfs rw 0 0\n"
+                       b"fast /mnt/\377c wekafs rw 0 0\n")
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    environ["LC_ALL"] = locale
+    for extra in (["--json"], []):
+        r = subprocess.run([sys.executable,
+                            os.path.join(paths.node_dir(), "survey.py"),
+                            "--mounts", str(mounts), "--timeout", "0.5"] + extra,
+                           capture_output=True, env=environ, timeout=60)
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+        if extra:
+            rows = by_mountpoint(json.loads(r.stdout))
+            assert rows["/mnt/b"]["remote_reason"] == "source"
+            assert rows["/mnt/\ufffdc"]["remote_reason"] == "type"
+
+
+def test_survey_splits_mount_fields_as_the_shim_does(tmp_path):
+    """Issue #172. splitlines() and str.split() break a line on \\v, \\f,
+    U+00A0 and U+0085 as well as on space and tab; the shim's readers do
+    not. Each `host:` source below holds one of them, and each row is still
+    remote by its source, at its own mount point."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
+                       b"h\x0b:/e /mnt/v xfs rw 0 0\n"
+                       b"h\x0c:/e /mnt/f xfs rw 0 0\n"
+                       b"h\xc2\xa0:/e /mnt/n xfs rw 0 0\n"
+                       b"h\xc2\x85:/e /mnt/x xfs rw 0 0\n")
+    rows = by_mountpoint(survey.survey(str(mounts), timeout=0.5,
+                                       statvfs_command=FAKE_CHILD))
+    assert sorted(rows) == ["/", "/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"]
+    for point in ("/mnt/f", "/mnt/n", "/mnt/v", "/mnt/x"):
+        assert rows[point]["remote_reason"] == "source", rows[point]
+
+
+def test_survey_keeps_a_carriage_return_inside_its_field(tmp_path):
+    """Issue #172, from PR #174's review. The shim's readers end a row on
+    \\n alone, so a \\r is a byte of its field. Universal newlines ended the
+    row on it: `/m\\rp` became a mount point `p`."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
+                       b"h:/e /m\rp xfs rw 0 0\n"
+                       b"h\r:/e /mnt/r xfs rw 0 0\r\n")
+    rows = by_mountpoint(survey.survey(str(mounts), timeout=0.5,
+                                       statvfs_command=FAKE_CHILD))
+    assert sorted(rows) == ["/", "/m\rp", "/mnt/r"]
+    for point in ("/m\rp", "/mnt/r"):
+        assert rows[point]["remote_reason"] == "source", rows[point]
