@@ -17,7 +17,7 @@ jobs:
     container: rockylinux:9
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       # The container runs as root, which would make every ownership and
       # permission test vacuous. The suite runs as a real unprivileged user.
@@ -49,6 +49,24 @@ jobs:
             UV_PYTHON="$UV_PYTHON" \
             UV_CACHE_DIR=/home/ciuser/.cache/uv \
             uv run --group dev pytest tests/ -q
+
+      - name: Run the banner tests with colour forced (3.14 only)
+        # The oracle for the colour fixture in tests/conftest.py (issue #93).
+        # From 3.14 argparse colours `--help` when FORCE_COLOR is set, tty or
+        # not; before 3.14 it never does, so no other row can see the fixture
+        # go missing. FORCE_COLOR goes in the `env` list beside everything
+        # else the child runs under: runuser keeps most of the caller's
+        # environment, but PAM and login.defs may change it, and a variable
+        # stated in the command does not depend on what they let through.
+        if: matrix.python-version == '3.14'
+        run: |
+          runuser -u ciuser -- env \
+            HOME=/home/ciuser \
+            PATH="$PATH" \
+            UV_PYTHON="$UV_PYTHON" \
+            UV_CACHE_DIR=/home/ciuser/.cache/uv \
+            FORCE_COLOR=3 \
+            uv run --group dev pytest tests/test_banner.py -q
 
   lint:
     runs-on: ubuntu-latest

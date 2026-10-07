@@ -290,7 +290,7 @@ Commands marked with a milestone do not work yet, or run only as a placeholder
 that says so; they name the shape the tooling will take so the docs do not
 have to be rewritten when it lands.
 
-CI runs the suite on Python 3.9–3.12 in an enterprise-Linux container as a
+CI runs the suite on Python 3.9–3.14 in an enterprise-Linux container as a
 non-root user, so that when the shell and permission tests arrive with the
 node code they see both dash and bash-as-`/bin/sh` and are not vacuous under
 root.

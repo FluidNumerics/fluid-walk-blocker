@@ -15,6 +15,8 @@ would be a second, unversioned YAML implementation, and its bugs would surface
 as confident assertions about a workflow that says something else.
 """
 import os
+import re
+import shlex
 
 # A plain import, deliberately, not `pytest.importorskip`. PyYAML is a declared
 # member of the `dev` group, so absent it the environment is broken and the
@@ -267,3 +269,91 @@ def test_a_ratio_run_that_compared_carries_no_warning(tmp_path):
     assert "compared 8/8 usable pairs" in summary, summary
     assert "=== 8/8 usable pairs ===" in summary, summary
     assert "fast-path ratio (median)" in summary, summary
+
+
+def test_the_matrix_reaches_the_newest_interpreters():
+    """Issue #130: a failure that exists only from 3.13 or 3.14 passed CI
+    while the matrix stopped at 3.12, though `uv run` on a current
+    workstation resolves 3.14."""
+    versions = _jobs()["test"]["strategy"]["matrix"]["python-version"]
+    assert [str(v) for v in versions] == [
+        "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"], (
+        "the test matrix is %r. 3.9 is the node floor (ADR-0015) and 3.14 is "
+        "what a workstation resolves; both ends are load-bearing" % versions)
+
+
+def test_one_row_runs_the_banner_tests_with_colour_forced():
+    """The CI oracle for the autouse colour fixture in tests/conftest.py
+    (issue #93). Only 3.14 argparse colours `--help`, and with output
+    captured (no tty) only when the environment forces it, so without this
+    step deleting the fixture fails no CI run. FORCE_COLOR is pinned in
+    runuser's `env` list, beside everything else the child runs under: set
+    on the step instead, it would reach the tests only as far as runuser,
+    PAM and login.defs pass it through, and a step whose tests ran
+    uncoloured would pass vacuously."""
+    steps = [s for s in _steps("test") if "FORCE_COLOR" in _text(s)]
+    assert len(steps) == 1, (
+        "expected exactly one step in the test job that forces colour, found "
+        "%d" % len(steps))
+    step = steps[0]
+    condition = " ".join(str(step.get("if", "")).split())
+    if condition.startswith("${{") and condition.endswith("}}"):
+        condition = condition[3:-2].strip()
+    assert condition == "matrix.python-version == '3.14'", (
+        "the forced-colour step is not keyed to the 3.14 row alone: %r"
+        % step.get("if"))
+    # Read the body as bash would: continuations joined, comments dropped.
+    # It must be one command, `runuser -u ciuser -- env`, then NAME=value
+    # words, then `uv run`. A second line, an operator (`;`, `&&`, `|`, a
+    # redirection or a subshell) or a command substitution could run `uv`
+    # outside that env list, and words an `echo` or a comment merely
+    # mentions are not the env list at all. Each line is split with its
+    # quotes kept, because, as in bash, `#` starts a comment only at the
+    # start of an unquoted word: shlex's own comment handling would also
+    # cut `x#y ; uv run` short and hide the `;`.
+    body = str(step.get("run", "")).replace("\\\n", " ")
+    commands = []
+    for line in body.splitlines():
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        raw = list(lexer)
+        comment = [i for i, w in enumerate(raw) if w.startswith("#")]
+        if comment:
+            raw = raw[:comment[0]]
+        if raw:
+            commands.append(raw)
+    assert len(commands) == 1, (
+        "the forced-colour step must be one command, found %d: %r"
+        % (len(commands), commands))
+    raw = commands[0]
+    operators = [w for w in raw if set(w) <= set(";&|()<>")]
+    assert not operators, (
+        "the forced-colour step chains or redirects with %r" % operators)
+    substitutions = [w for w in raw if "`" in w or "$(" in w]
+    assert not substitutions, (
+        "the forced-colour step runs a command substitution: %r"
+        % substitutions)
+    words = shlex.split(" ".join(raw))
+    head = ["runuser", "-u", "ciuser", "--", "env"]
+    assert words[:len(head)] == head, (
+        "the forced-colour step does not start `%s`: %r"
+        % (" ".join(head), words[:len(head)]))
+    rest = words[len(head):]
+    env_list = []
+    while rest and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", rest[0]):
+        env_list.append(rest.pop(0))
+    assert rest[:2] == ["uv", "run"], (
+        "runuser's env list is not followed by `uv run`: %r" % rest[:2])
+    names = [w.split("=", 1)[0] for w in env_list]
+    forced = [w.split("=", 1)[1] for w in env_list
+              if w.startswith("FORCE_COLOR=")]
+    assert forced == ["3"], (
+        "runuser's env list must set FORCE_COLOR=3 once; it sets %r"
+        % forced)
+    # On 3.14 NO_COLOR, and PYTHON_COLORS=0, outrank FORCE_COLOR.
+    assert not {"NO_COLOR", "PYTHON_COLORS"} & set(names), (
+        "runuser's env list sets a variable that outranks FORCE_COLOR: %r"
+        % names)
+    assert "tests/test_banner.py" in rest, (
+        "the forced-colour step does not run the banner tests")
