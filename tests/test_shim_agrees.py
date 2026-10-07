@@ -870,6 +870,75 @@ def test_both_mount_readers_skip_a_malformed_short_line(shim_variant, tmp_path):
         assert result.returncode == R.EXIT_REFUSED, (awk, result.stderr.decode())
 
 
+def _utf8_locale():
+    """A UTF-8 locale this machine has, or None."""
+    try:
+        listed = subprocess.run(["locale", "-a"], capture_output=True,
+                                text=True, errors="replace").stdout.split()
+    except OSError:
+        return None
+    for want in ("en_US.utf8", "en_US.UTF-8", "C.utf8", "C.UTF-8"):
+        if want in listed:
+            return want
+    return next((name for name in listed
+                 if name.lower().endswith((".utf8", ".utf-8"))), None)
+
+
+@pytest.mark.parametrize("shell", ("dash", "bash"))
+@pytest.mark.parametrize("reader", ("awk", "sh"))
+def test_both_mount_readers_judge_a_non_utf8_source_alike_in_a_utf8_locale(
+        shim_variant, rendered_shim, tmp_path, policy, shell, reader):
+    """Issue #162. The reader's awk ran in the caller's locale, and under a
+    UTF-8 one gawk's `^[^/]+:` does not match a source whose bytes before
+    the colon are not valid UTF-8: the awk reader called this remote mount,
+    of a type the site does not list, cheap, and sg_classify, which matches
+    bytes, called it expensive. Both readers, both shells, one answer, and
+    it is the table's. Mutation: drop the reader's `LC_ALL=C` and the awk
+    cases fail."""
+    from conftest import shim_invocation
+
+    locale = _utf8_locale()
+    if locale is None:
+        pytest.skip("no UTF-8 locale is installed, so the caller's locale "
+                    "cannot be made one")
+    real = shutil.which(shell)
+    if real is None:
+        pytest.skip("%s is not installed" % shell)
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                       b"\377h:/e /mnt/b xfs rw 0 0\n")
+    # The table's answer, which both readers must give.
+    assert R.classify_mount(("\udcffh:/e", "/mnt/b", "xfs", "rw"), policy) == "expensive"
+
+    awk = _sg_var(rendered_shim["guard_text"], "SG_AWK")
+    if reader == "awk":
+        if not os.access(awk, os.X_OK):
+            pytest.skip("the shim's trusted awk %s is not here" % awk)
+        # Precondition: this awk, in this locale, misses the byte source. One
+        # that matches it anyway cannot show the defect.
+        probe = subprocess.run(
+            [awk, "$1 ~ /^[^\\/]+:/ { print \"match\" }", str(mounts)],
+            capture_output=True, env={"LC_ALL": locale})
+        if b"match" in probe.stdout:
+            pytest.skip("%s matches a non-UTF-8 source under %s, so it cannot "
+                        "show the defect" % (awk, locale))
+        variant = shim_variant()
+    else:
+        variant = shim_variant(SG_AWK="'/nonexistent/awk'")
+
+    as_sh = tmp_path / ("as-sh-" + shell)
+    as_sh.mkdir()
+    os.symlink(real, str(as_sh / "sh"))
+    command, environ, cwd = shim_invocation(
+        variant, ["find", "/mnt/b", "-name", "x"],
+        env={"WALK_BLOCKER_MOUNTS": str(mounts), "LC_ALL": locale})
+    result = subprocess.run([str(as_sh / "sh")] + command, env=environ,
+                            cwd=cwd, capture_output=True)
+    assert result.returncode == R.EXIT_REFUSED, (
+        "the %s reader under %s in %s did not guard the remote mount: %r"
+        % (reader, shell, locale, result.stderr.decode(errors="replace")))
+
+
 def test_the_shim_ignores_a_whitespace_escaped_mount_and_the_table_does_not(
         shim_env, tmp_path, policy):
     """A DOCUMENTED divergence, pinned so it stays documented. /proc/mounts

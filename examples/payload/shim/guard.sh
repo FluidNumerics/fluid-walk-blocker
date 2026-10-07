@@ -1778,8 +1778,15 @@ sg_load_mounts() {
         # answer, which is worse than the documented difference between the
         # layers below. The lists arrive through the environment, not `-v`:
         # awk's -v processes escape sequences, and the ERE list carries `\.`.
+        #
+        # LC_ALL=C, as the record's awk has it: the answer must not depend on
+        # the caller's locale. Under a UTF-8 one, gawk's `^[^\/]+:` does not
+        # match a source whose bytes before the colon are not valid UTF-8, so
+        # this reader called such a remote mount cheap while sg_classify,
+        # which matches bytes, called it expensive. An assignment prefix,
+        # so still the one program this path runs (ADR-0018).
         sg_expensive=$(SG_R_RELIST=$SG_FSTYPES_RE SG_R_OVERRIDES=$SG_MOUNT_OVERRIDES \
-            SG_R_PROXY=$SG_PROXY "$SG_AWK" '
+            SG_R_PROXY=$SG_PROXY LC_ALL=C "$SG_AWK" '
             BEGIN {
                 sg_nre = split(ENVIRON["SG_R_RELIST"], sg_re, " ")
                 sg_novr = split(ENVIRON["SG_R_OVERRIDES"], sg_rows, " ")
