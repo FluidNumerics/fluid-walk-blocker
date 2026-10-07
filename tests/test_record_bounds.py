@@ -186,3 +186,65 @@ def test_the_runbook_states_the_size_and_bounds_the_code_uses():
     assert "holds every field whole" not in doc
     prereq = doc[doc.index("## 1. Prerequisites"):doc.index("## 2.")]
     assert "accepts `--size`" in prereq
+
+
+# --------------------------------------------------------------------------
+# a caller's POSIXLY_CORRECT (issue #160)
+# --------------------------------------------------------------------------
+
+def _shim_awk(guard_text):
+    """The trusted awk the rendered shim names, as an executable path."""
+    value = re.search(r"\nSG_AWK=(.*)\n", guard_text).group(1).strip("'\"")
+    if not os.access(value, os.X_OK):
+        pytest.skip("the shim's trusted awk %s is not here" % value)
+    return value
+
+
+def _awk_halves_the_escape_under_posix(awk):
+    """The defect's precondition, measured on the awk the shim uses: gawk
+    writes one backslash for the replacement "\\\\" when POSIXLY_CORRECT is
+    in its environment. An awk that does not is not exposed, and a test
+    against it would pass whether or not the shim clears the variable."""
+    program = 'BEGIN{s=ENVIRON["S"]; gsub(/\\\\/, "\\\\\\\\", s); print s}'
+    out = subprocess.run([awk, program], stdout=subprocess.PIPE, check=True,
+                         env={"S": "a\\q", "POSIXLY_CORRECT": "1"}).stdout
+    return out == b"a\\q\n"
+
+
+@pytest.mark.parametrize("posixly_correct", ["1", ""])
+@pytest.mark.parametrize("shell", ("dash", "bash"))
+def test_a_callers_posixly_correct_does_not_unescape_the_record(
+        shim_env, rendered_shim, tmp_path, shell, posixly_correct):
+    """The record's awk runs in the caller's environment, so the caller
+    controls POSIXLY_CORRECT -- present-and-empty included, which gawk
+    honours too. With it set, a backslash in a root reached the record
+    bare and the line did not parse. The shim unsets it inside the
+    substitution; the record must parse and give the root back exactly."""
+    from conftest import shim_invocation
+
+    awk = _shim_awk(rendered_shim["guard_text"])
+    if not _awk_halves_the_escape_under_posix(awk):
+        pytest.skip("%s keeps both backslashes under POSIXLY_CORRECT (not "
+                    "gawk), so it cannot show the defect" % awk)
+    real = shutil.which(shell)
+    if real is None:
+        pytest.skip("%s is not installed" % shell)
+    # Under the name `sh`: bash enters POSIX mode from its basename.
+    as_sh = tmp_path / ("as-sh-" + shell)
+    as_sh.mkdir()
+    os.symlink(real, str(as_sh / "sh"))
+
+    root = "/scratch/a\\q"
+    audit = tmp_path / "audit.jsonl"
+    command, environ, cwd = shim_invocation(
+        shim_env, ["find", root, "-name", "x"],
+        env={"WALK_BLOCKER_UNSCOPED": "1", "WALK_BLOCKER_AUDIT": str(audit),
+             "POSIXLY_CORRECT": posixly_correct})
+    result = subprocess.run([str(as_sh / "sh")] + command, env=environ,
+                            cwd=cwd, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    lines = [line for line in audit.read_text().splitlines() if line.strip()]
+    assert len(lines) == 1, (
+        "expected one escape-hatch record for %r, got %r" % (root, lines))
+    record = json.loads(lines[0])
+    assert record["root"] == root, record
