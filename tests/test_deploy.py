@@ -1254,6 +1254,14 @@ def test_a_systemctl_failure_after_a_hook_proof_failure_says_both(
     # can enable the timer and fail only to start it.
     assert "Layer 2 is running" not in err, err
     assert "NOT armed" not in err, err
+    # Every claim the notice makes, whitespace flattened so a re-wrap is free.
+    flat = " ".join(err.split())
+    for claim in ("could not prove a required hook fires",
+                  "%s is not known to be enabled or running" % deploy.TIMER_UNIT,
+                  "neither layer can be relied on",
+                  "The required hook is written but unproven",
+                  "no best-effort hook was written"):
+        assert claim in flat, (claim, err)
     # The notice follows run()'s own report of the command, not the reverse.
     assert err.index("failed: " + " ".join(failing)) \
         < err.index("NOT proven"), err
