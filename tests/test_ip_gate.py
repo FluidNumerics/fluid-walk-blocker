@@ -74,9 +74,9 @@ def test_files_from_without_root_reads_names_against_the_repository(tmp_path):
     (tmp_path / "list").write_text("README.md\n")
     (tmp_path / "a.md").write_text("plain\n")
     r = run(["--terms", os.devnull, "--files-from", "list", "a.md"], cwd=str(tmp_path))
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stderr.strip() == "1 file(s) under %s, 0 finding(s), terms=off" % (
-        os.path.realpath(ROOT))
+    # Only the root is asserted: README.md's content is the tree test's job.
+    assert r.stderr.strip().startswith("1 file(s) under %s, " % os.path.realpath(ROOT)), (
+        r.stdout + r.stderr)
 
 
 def test_the_summary_names_the_root_it_scanned(tmp_path):
