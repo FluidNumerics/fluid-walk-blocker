@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -3197,3 +3198,75 @@ def test_a_root_run_does_not_create_a_missing_spool(tmp_path, procfs,
                     out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None)
     assert rc == reaper.EXIT_UNRECORDED
     assert not spool.exists()
+
+
+# --------------------------------------------------------------------------
+# a mount table that is not UTF-8 (issue #163)
+# --------------------------------------------------------------------------
+
+def _poll_locales():
+    """The C locale, and a UTF-8 one when this machine has one."""
+    names = ["C"]
+    try:
+        listed = subprocess.run(["locale", "-a"], capture_output=True,
+                                text=True, errors="replace").stdout.split()
+    except OSError:
+        listed = []
+    names += [name for name in listed
+              if name.lower().endswith((".utf8", ".utf-8"))][:1]
+    return names
+
+
+@pytest.mark.parametrize("output", ("text", "json"))
+@pytest.mark.parametrize("locale", _poll_locales())
+def test_a_non_utf8_mount_table_is_an_ordinary_poll(tmp_path, procfs, locale,
+                                                    output):
+    """Issue #163. One byte that is not UTF-8 in a mount source raised in
+    read_mounts(), and main() has no handler, so every poll ended in a
+    traceback with no finding, no blind record and no audit line. Run the
+    stamped payload the way the unit does, a separate interpreter under the
+    node's locale, over a table with a byte in a source and a byte in a mount
+    point: the poll exits as a poll that found something, names both walks,
+    and every record it writes parses as JSON, the mount point carried as the
+    surrogate os.fsdecode() gives it."""
+    mounts = tmp_path / "mounts"
+    mounts.write_bytes(b"/dev/sda1 / ext4 rw,relatime 0 0\n"
+                       b"\377h:/e /mnt/b xfs rw 0 0\n"
+                       b"fast /mnt/\377c wekafs rw 0 0\n")
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_A, io_full_total=0.0)
+    # Remote by its source alone: xfs is not a listed type.
+    write_proc(procfs, 4106, "find", ["find", "/mnt/b", "-name", "x"],
+               ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400)
+    # The byte mount point, reached through a cwd: os.readlink() decodes the
+    # link as read_mounts() decodes the table, so the two compare equal.
+    write_proc(procfs, 4107, "find", ["find", ".", "-name", "x"],
+               ppid=500, state="D", cpu_s=600.0, age_s=4 * 86400,
+               cwd="/mnt/\udcffc")
+    audit = tmp_path / "audit.jsonl"
+    command = [sys.executable, reaper.__file__,
+               "--spool", str(tmp_path / "spool"), "--audit", str(audit),
+               "--cgroup-root", str(cg), "--proc-root", str(procfs),
+               "--mounts", str(mounts), "--min-interval", "0",
+               "--settle", "0"]
+    if output == "json":
+        command.append("--json")
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    environ["LC_ALL"] = locale
+    result = subprocess.run(command, capture_output=True, env=environ,
+                            timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert "Traceback" not in stderr, stderr
+    assert result.returncode == reaper.EXIT_ACTIONABLE, (result.returncode,
+                                                         stderr)
+    entries = _read_audit(str(audit))
+    assert sorted((e["pid"], e["verdict"], e["mount"]) for e in entries) == [
+        (4106, "runaway_traversal", "/mnt/b"),
+        (4107, "runaway_traversal", "/mnt/\udcffc")], entries
+    if output == "json":
+        # The PSI table is printed first; the record list follows it.
+        listing = result.stdout[result.stdout.index(b"\n[") + 1:]
+        assert sorted(e["pid"] for e in json.loads(listing)) == [4106, 4107]
+    else:
+        assert b"pid=4106" in result.stdout and b"pid=4107" in result.stdout

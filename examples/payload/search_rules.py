@@ -1109,11 +1109,23 @@ def read_mounts(path, policy):
 
     Longest-first is what makes the containing-mount lookup correct: `/big`
     must win over `/` for a path under it.
+
+    Read as bytes and decoded with os.fsdecode(), never as text. The kernel
+    escapes only whitespace and backslash in a source or a mount point, and
+    whoever mounts a filesystem chooses both -- a FUSE source is a user's
+    string -- so a field may hold any other byte, valid UTF-8 or not. A
+    strict decode raised on such a row and ended the reaper's poll with no
+    record at all (issue #163). fsdecode cannot raise: an undecodable byte
+    becomes a lone surrogate, the row's other fields still classify, a
+    `host:` source still reads as remote, as it does to the shim's byte
+    readers, and a mount point decodes exactly as os.readlink() decodes a
+    process's cwd, so the two still compare equal.
     """
     found = []
     try:
-        with open(path, "r") as fh:
-            for line in fh:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                line = os.fsdecode(raw)
                 parts = line.split()
                 if len(parts) < 4:
                     continue
