@@ -1,6 +1,7 @@
 # ADR-0031: Coverage drift is a standing condition, remembered as a high-water linked set
 
 **Status:** accepted, 2026-10-05
+The Consequences clause "The priority is the change record's." is narrowed by ADR-0033: `coverage_change` `unknown` is logged at `user.err`, its re-assertions included, and the superseded wording is recorded under "Superseded wording" below.
 **Narrows:** ADR-0030, "**`coverage_change` is deferred to issue #152.** It records that coverage shrank — an event, with a count and no names — and it has no standing form until a memory of the linked set exists to say what is still missing. Issue #152 designs that memory; until it lands, this record leaves `coverage_change` as ADR-0019's sibling records are: once, on the change."
 **Narrows:** ADR-0030, "A standing condition is one that persists and is otherwise reported only when it changes; today that is `uncovered_mount` with `state: expensive`, and nothing else."
 **Evidence:** n/a, structural — see `docs/evidence.md`
@@ -100,7 +101,9 @@ is read, written or reported.
   never silence. The relink deletes nothing it did not write.
 - **`sg_report` takes the marker in its short form.** A third argument
   must be the literal `reasserted`; anything else writes `caller-bug`,
-  where it used to be ignored. The priority is the change record's.
+  where it used to be ignored. A re-assertion is at its change record's
+  priority: `unknown` at `user.err` and `unwrapped-N` at `user.warning`
+  (ADR-0033).
 - **No heartbeat.** An empty standing set on a due poll writes nothing and
   still moves the clock (ADR-0008). Tests pin each case in
   `tests/test_install.py`, under both shells.
@@ -117,3 +120,14 @@ memory adds a measurement of its own.
 - `[timer].reassert_interval_s` — the cadence, shared with ADR-0030; each
   memory keeps its own clock.
 - `[install].spool_dir` — where `linked-names.state` lives.
+
+## Superseded wording
+
+Narrowed by ADR-0033. The Consequences above read:
+
+> The priority is the change record's.
+
+A re-assertion still carries its change record's priority, but that
+priority is now one per state: `coverage_change` `unknown` is at
+`user.err`, the change record and each re-assertion alike, and
+`unwrapped-N` stays at `user.warning`.

@@ -1315,7 +1315,8 @@ sg_report() {
     _rep_marker=''
     if [ $# -eq 3 ]; then
         # The short form's marker. Priority unchanged: the re-assertion is
-        # the same fact as the change record, at the same level.
+        # the same fact as the change record, at the same level -- including
+        # the one record raised to user.err below.
         if [ "$3" = reasserted ]; then
             _rep_extra=',"reasserted":true'
         else
@@ -1380,6 +1381,15 @@ sg_report() {
         _rep_action=caller-bug
         _rep_state=caller-bug
         _rep_extra=''
+    elif [ $# -le 3 ]; then
+        # The linked-set memory was missing, damaged or a link, so the relink
+        # cannot tell whether coverage drifted at all: above the warning that
+        # real drift (`unwrapped-N`) carries, so `journalctl -p err` isolates
+        # it and `-p warning` still shows it. The change record and each
+        # re-assertion alike (ADR-0033). A caller-bug record never gets here.
+        case "$_rep_action:$_rep_state" in
+            coverage_change:unknown) _rep_prio=user.err ;;
+        esac
     fi
     _rep_json='{"layer":"shim","action":"'$_rep_action'","state":"'$_rep_state'"'$_rep_extra'}'
     # The absolute path first, and the PATH lookup only as a fallback for a
