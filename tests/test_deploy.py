@@ -2729,6 +2729,13 @@ def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
         named = [f.strip() for f in strip.split(",")]
         assert named == [f for f, on in ((args.bashrc_file, bash),
                                          (args.zshenv_file, zsh)) if on], err
+    # Each hook path ends its own line, so a stamped path cannot push its
+    # step past 80 columns.
+    lines = err.splitlines()
+    if zsh or bash:
+        assert "  %s;" % ", ".join(named) in lines, err
+    if fish:
+        assert "  remove the fish drop-in %s" % args.fish_conf_file in lines, err
 
 
 def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
