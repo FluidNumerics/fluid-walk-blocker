@@ -53,27 +53,65 @@ def default_statvfs_command():
     return [sys.executable or "python3", "-c", STATVFS_SNIPPET]
 
 
+# The set the schema's `sink_path` admits in a `[[filesystems.mounts]]`
+# path. A mount point outside it cannot be named in site.toml yet: the
+# survey still measures it, shows it escaped, and proposes no entry.
+NAMEABLE_BYTES = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/")
+SINK_PATH = re.compile(rb"^/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$")
+
+
 def _unescape(field):
-    """/proc/mounts writes space, tab, newline and backslash as octal."""
-    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+    """/proc/mounts writes space, tab, newline and backslash as `\\ooo`.
+    Bytes in, bytes out: a mount point is a byte string, and a byte that is
+    not UTF-8 must reach statvfs as itself (issue #173)."""
+    return re.sub(rb"\\([0-3][0-7]{2})",
+                  lambda m: bytes([int(m.group(1), 8)]), field)
 
 
-def parse_mount_table(text):
-    """Rows of a mount table. Lines end at newline only and fields split on
-    runs of space and tab only, as the shim's readers and read_mounts() split
-    them: splitlines() and str.split() also break on \\v, \\f, \\r, U+0085,
-    U+00A0 and more, which the kernel leaves unescaped in a source somebody
-    chose (issue #172)."""
+def display_path(raw):
+    """A mount point as text. A byte outside the sink_path set is written
+    `\\ooo`, three octal digits: the kernel's own escape for space, tab,
+    newline and backslash, extended to every other byte, so the result is
+    ASCII, holds no whitespace, and reads back with one decoder. A path
+    inside the set is shown unchanged."""
+    return "".join(chr(b) if b in NAMEABLE_BYTES else "\\%03o" % b
+                   for b in bytearray(raw))
+
+
+def nameable(raw):
+    """True when site.toml can name this mount point: the schema's
+    `sink_path`, with no `.` or `..` component (the semantic half)."""
+    if not SINK_PATH.match(raw):
+        return False
+    return not any(part in (b".", b"..") for part in raw.split(b"/"))
+
+
+def parse_mount_table(data):
+    """Rows of a mount table, read as bytes. Lines end at newline only and
+    fields split on runs of space and tab only, as the shim's readers and
+    read_mounts() split them: splitlines() and str.split() also break on
+    \\v, \\f, \\r, U+0085, U+00A0 and more, which the kernel leaves
+    unescaped in a source somebody chose (issue #172).
+
+    `mountpoint_raw` holds the real bytes, for statvfs; `mountpoint` is
+    `display_path()` of them. The other fields are decoded with
+    replacement, since nothing reads them back as a path."""
+    if isinstance(data, str):
+        data = data.encode("utf-8", "surrogateescape")
     rows = []
-    for line in text.split("\n"):
-        parts = [field for field in re.split("[ \t]+", line) if field]
+    for line in data.split(b"\n"):
+        parts = [field for field in re.split(b"[ \t]+", line) if field]
         if len(parts) < 4:
             continue
+        raw = _unescape(parts[1])
         rows.append({
-            "source": _unescape(parts[0]),
-            "mountpoint": _unescape(parts[1]),
-            "fstype": parts[2],
-            "options": parts[3],
+            "source": _unescape(parts[0]).decode("utf-8", "replace"),
+            "mountpoint": display_path(raw),
+            "mountpoint_raw": raw,
+            "nameable": nameable(raw),
+            "fstype": parts[2].decode("utf-8", "replace"),
+            "options": parts[3].decode("utf-8", "replace"),
         })
     return rows
 
@@ -143,21 +181,22 @@ def survey(mount_table="/proc/mounts", timeout=2.0, include_all=False,
            statvfs_command=None, remote_fstypes=None, remote_proxy=True):
     """One dict per mount: the table fields, the tier-one verdict and the
     measurement. `statvfs_command` is a test seam and nothing else."""
-    # newline="": a bare \r is a byte of its field, as it is to the shim's
-    # readers; universal newlines would end the row on it.
-    with open(mount_table, encoding="utf-8", errors="replace",
-              newline="") as fh:
+    # Bytes: no decoding to replace a byte, and no universal newlines to
+    # end a row on a bare \r, which the shim's readers keep in its field.
+    with open(mount_table, "rb") as fh:
         entries = parse_mount_table(fh.read())
     rows = []
     for entry in entries:
         if not include_all and entry["fstype"] in PSEUDO_FSTYPES:
             continue
         reason = remote_reason(entry, remote_fstypes, remote_proxy)
+        raw = entry["mountpoint_raw"]
         row = dict(entry)
+        del row["mountpoint_raw"]  # bytes: not for the table or --json
         row["remote"] = reason is not None
         row["remote_reason"] = reason
         row["default_class"] = "expensive" if reason else "cheap"
-        row.update(measure(entry["mountpoint"], timeout, statvfs_command))
+        row.update(measure(raw, timeout, statvfs_command))
         rows.append(row)
     return rows
 
@@ -222,6 +261,9 @@ def render_toml(rows, today=None):
     `capacity_bytes` and `surveyed`, so the record flows survey -> diff -> the users' page
     (`docs/what-to-run-instead.md`) without anyone retyping a number.
     `today` is the survey date; a test passes one, the node uses the clock.
+
+    A mount point site.toml cannot name (`nameable` false) gets its facts in
+    a comment and no entry (issue #173).
     """
     if today is None:
         today = datetime.date.today().isoformat()
@@ -239,6 +281,18 @@ def render_toml(rows, today=None):
             facts += ", unmeasured (%s)" % r["error"]
         out.append("")
         out.append("# %s: %s" % (r["mountpoint"], facts))
+        if not r["nameable"]:
+            # Escaped above, so the comment is one ASCII line. A `path` here
+            # would fail validate, or name a path that is not the mount.
+            out.append("# Not proposed: site.toml cannot name this mount point"
+                       " yet. `path` takes only")
+            out.append("# a canonical absolute path whose components use"
+                       " [A-Za-z0-9._-] (the schema's")
+            out.append("# `sink_path`); a later release adds a field for an"
+                       " escaped path (issue #184).")
+            out.append("# Until then no entry can change how this mount is"
+                       " classed.")
+            continue
         out.append("[[filesystems.mounts]]")
         out.append("path = %s" % json.dumps(r["mountpoint"]))
         out.append('class = "expensive"  # default; delete this entry to keep the '

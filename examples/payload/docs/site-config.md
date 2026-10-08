@@ -99,7 +99,9 @@ the fix for one small export.
 2. Read the table: type, remoteness and why, the compiled default, capacity
    and inode count where measured. Network and parallel filesystems may
    report synthetic totals — a quota, a tiered capacity, a per-client view —
-   so treat the figures as evidence to weigh, not a verdict.
+   so treat the figures as evidence to weigh, not a verdict. A mount point
+   outside `[A-Za-z0-9._/-]` is shown with each such byte as `\ooo` and
+   gets no proposed entry, because `path` cannot name it yet (issue #184).
 3. Decide per mount. A small remote export that is cheap to walk in full
    gets a `class = "cheap"` entry with a comment saying why. A remote mount
    that should keep its default gets no entry — delete the proposed one.
