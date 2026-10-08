@@ -1205,7 +1205,7 @@ def test_a_disabled_hooks_unblocked_file_keeps_its_bytes_mode_and_inode(tmp_path
 
 
 def test_an_enabled_hooks_unblocked_file_is_not_rewritten_either(tmp_path):
-    """strip_block() rewrites only a file that carries the block, and the
+    """The uninstall strips only a file that carries the block, and the
     "removed" line names only a file actually cleaned."""
     layout = Layout(tmp_path)
     layout.zshenv.write_text("# a stock zshenv\n")
