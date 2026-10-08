@@ -3291,23 +3291,64 @@ SHORT_FORM_ACTIONS = ["audit_dir", "coverage_change", "hook_check",
                       "relink_refused"]
 
 
+def _sg_report_calls(text):
+    """Every `sg_report` call in a shell source, wherever it stands on its
+    line -- at the start, behind `||`, `&&`, `;` or `then`, or in a case
+    arm -- as (action, [arguments]). Comment lines and the definition are
+    not calls. The words after the name are split as the shell splits them,
+    so a quoted argument with an arithmetic expansion in it counts once,
+    and they end at the first control operator."""
+    calls = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for m in re.finditer(r"(?<![\w-])sg_report\s+", line):
+            lexer = shlex.shlex(line[m.end():], posix=True,
+                                punctuation_chars=True)
+            lexer.whitespace_split = True
+            words = []
+            for word in lexer:
+                if set(word) <= set(lexer.punctuation_chars):
+                    break
+                words.append(word)
+            calls.append((words[0], words[1:]))
+    return calls
+
+
 def test_the_short_form_actions_are_every_other_action_install_sh_reports():
     """Every `sg_report` call in install.sh names either `uncovered_mount`,
     in the long form, or one of SHORT_FORM_ACTIONS, in the short; no
     caller uses the long form for another action (issue #189)."""
     text = open(INSTALL_SH).read()
-    calls = re.findall(r"^\s*(?:.*\|\| )?sg_report (\S+)(.*)$", text, re.M)
-    assert calls, "no sg_report call found"
-    actions = sorted({action for action, _rest in calls} - {"uncovered_mount"})
+    calls = _sg_report_calls(text)
+    # Every non-comment mention of the name but the definition is a call
+    # the scan parsed, so a call in a position it cannot see fails here.
+    mentions = sum(len(re.findall(r"(?<![\w-])sg_report\b", line))
+                   for line in text.splitlines()
+                   if not line.lstrip().startswith("#"))
+    assert len(calls) == mentions - 1, (len(calls), mentions)
+    actions = sorted({action for action, _args in calls} - {"uncovered_mount"})
     assert actions == SHORT_FORM_ACTIONS, actions
-    for action, rest in calls:
-        # A shell-word split, so a quoted argument with an arithmetic
-        # expansion in it counts once.
-        count = 1 + len(shlex.split(rest))
+    for action, args in calls:
         if action == "uncovered_mount":
-            assert count in (4, 5), (action, rest)
+            assert len(args) in (3, 4), (action, args)
         else:
-            assert count in (2, 3), (action, rest)
+            assert len(args) in (1, 2), (action, args)
+
+
+@pytest.mark.parametrize("line", [
+    "sg_report coverage_change /mnt/x nfs unknown",
+    "true || sg_report coverage_change /mnt/x nfs unknown",
+    "true && sg_report coverage_change /mnt/x nfs unknown",
+    "true; sg_report coverage_change /mnt/x nfs unknown",
+    "if true; then sg_report coverage_change /mnt/x nfs unknown; fi",
+    "    x) sg_report coverage_change /mnt/x nfs unknown ;;",
+])
+def test_the_census_sees_a_long_form_call_in_any_position(line):
+    """The census above is only as good as its scan: a long-form call for
+    another action is seen wherever it stands on its line."""
+    assert _sg_report_calls(line) == [
+        ("coverage_change", ["/mnt/x", "nfs", "unknown"])]
 
 
 @pytest.mark.parametrize("shell", SHELLS)
