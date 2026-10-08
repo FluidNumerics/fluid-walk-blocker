@@ -2964,24 +2964,34 @@ def _rwx(bits):
 
 SEARCH_YES = "yes"
 SEARCH_NO = "no"
-SEARCH_MAYBE = "maybe"
+# The conditions _spool_search() answers with when membership decides, each
+# worded for the report line that follows "can read N file(s) in the spool".
+IF_A_GROUP_SEARCHES = "only if a group it is in can search the spool"
+UNLESS_ONLY_DENYING_GROUPS = ("unless it is in a group named on the spool "
+                              "and in none that can search it")
+BUT_A_DENIED_MEMBER = ("for every member but one whose own entry on the "
+                       "spool denies it search")
+IF_ANOTHER_WAY = "only for a member that can search the spool another way"
 
 
 def _spool_search(info, got, kind, ident):
     """Whether `kind` `ident` can search the spool directory: SEARCH_YES,
-    SEARCH_NO, or SEARCH_MAYBE when it turns on group membership.
+    SEARCH_NO, or, when it turns on group membership, the condition it turns
+    on (IF_A_GROUP_SEARCHES and the rest above).
 
     `info` is the directory's lstat, `got` its access ACL as _acl_entries()
     returns it, or None for mode bits alone. POSIX ACL evaluation: the owner
     entry, then a named user entry, decide outright; otherwise every
     group-class entry the process matches is tried and one with search is
     enough; a match with none denies; only no match falls to `other`. The
-    mask caps every named entry and the owning group.
+    mask caps every named entry and the owning group. A named entry for the
+    owning group's own gid is a second group-class entry for the same
+    members, so either one with search is enough.
 
     Membership is never resolved. NSS answers it only partly, and a wrong
-    "no" would hide a reader who can read; SEARCH_MAYBE is the answer
-    instead, and the caller reports it with that condition said (issue
-    #143). SEARCH_NO is returned only where no membership changes it.
+    "no" would hide a reader who can read; the condition is the answer
+    instead, and the caller reports it said (issue #143). SEARCH_NO is
+    returned only where no membership changes it.
     """
     mode = info.st_mode
     owner_x = bool(mode & 0o100)
@@ -2993,12 +3003,13 @@ def _spool_search(info, got, kind, ident):
         entries, mask = got
         for tag, bits, entry_id in entries:
             effective = bits if mask is None else bits & mask
+            search = bool(effective & _ACL_EXECUTE)
             if tag == _ACL_USER:
-                users[entry_id] = bool(effective & _ACL_EXECUTE)
+                users[entry_id] = search
             elif tag == _ACL_GROUP:
-                groups[entry_id] = bool(effective & _ACL_EXECUTE)
+                groups[entry_id] = groups.get(entry_id, False) or search
             elif tag == _ACL_GROUP_OBJ:
-                groups[info.st_gid] = bool(effective & _ACL_EXECUTE)
+                groups[info.st_gid] = groups.get(info.st_gid, False) or search
     if kind == "user":
         if ident == 0:
             return SEARCH_YES
@@ -3011,19 +3022,19 @@ def _spool_search(info, got, kind, ident):
             return SEARCH_YES
         if not any(groups.values()) and not other_x:
             return SEARCH_NO
-        return SEARCH_MAYBE
+        return UNLESS_ONLY_DENYING_GROUPS if other_x else IF_A_GROUP_SEARCHES
     # A named group: any member that is not the owner and has no named user
     # entry is in the group class, so its entry decides for that member --
     # unless the member also matches another group-class entry, or is
-    # itself a named user with search. Membership again.
+    # itself a named user, whose own entry decides first. Membership again.
     if groups.get(ident):
-        return SEARCH_YES
+        return SEARCH_YES if all(users.values()) else BUT_A_DENIED_MEMBER
     if (ident not in groups and other_x and all(groups.values())
             and all(users.values())):
         return SEARCH_YES
     others = [x for g, x in groups.items() if g != ident] + list(users.values())
     if any(others) or (ident not in groups and other_x):
-        return SEARCH_MAYBE
+        return IF_ANOTHER_WAY
     return SEARCH_NO
 
 
@@ -3042,9 +3053,9 @@ def spool_read_grants(spool, spool_gid):
     #143). A file entry counts only where the same principal can search the
     spool (_spool_search()). Where it plainly cannot, the entry is no reader
     and is left out. Where it turns on group membership, it goes in
-    conditional instead: [(path, "user"|"group", id)], said with that
-    condition rather than as a grant or as nothing. The inherited route -- a
-    parent's default ACL landing on the spool and on its files alike --
+    conditional instead: [(path, "user"|"group", id, condition)], said with
+    that condition rather than as a grant or as nothing. The inherited route
+    -- a parent's default ACL landing on the spool and on its files alike --
     gives the spool the search entry too, and reads as a grant as before.
 
     unread: [(path, why)] for a path whose ACL this process could not read --
@@ -3099,8 +3110,8 @@ def spool_read_grants(spool, spool_gid):
                     search = _spool_search(spool_info, spool_acl, kind, ident)
                 if search == SEARCH_YES:
                     grants.append((path, which, kind, ident))
-                elif search == SEARCH_MAYBE:
-                    conditional.append((path, kind, ident))
+                elif search != SEARCH_NO:
+                    conditional.append((path, kind, ident, search))
     return grants, unread, conditional
 
 
@@ -3142,14 +3153,12 @@ def spool_read_grant_lines(spool, spool_gid):
         lines.append("%s %s can read %s"
                      % (kind, _account_name(kind, ident), ", ".join(parts)))
     maybe = collections.OrderedDict()
-    for path, kind, ident in conditional:
-        maybe.setdefault((kind, ident), set()).add(path)
-    for (kind, ident), files in maybe.items():
-        lines.append("%s %s can read %d file(s) in the spool only %s"
+    for path, kind, ident, condition in conditional:
+        maybe.setdefault((kind, ident, condition), set()).add(path)
+    for (kind, ident, condition), files in maybe.items():
+        lines.append("%s %s can read %d file(s) in the spool %s"
                      % (kind, _account_name(kind, ident), len(files),
-                        "if a group it is in can search the spool"
-                        if kind == "user" else
-                        "for a member that can search the spool another way"))
+                        condition))
     for path, why in unread:
         lines.append("could not read the ACL on %s: %s" % (path, why))
     return lines

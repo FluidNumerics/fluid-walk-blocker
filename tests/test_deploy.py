@@ -6167,7 +6167,8 @@ def test_a_file_entry_without_search_on_the_spool_is_said_with_its_condition(
     _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
     grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
     assert (grants, unread) == ([], []), (grants, unread)
-    assert conditional == [(trail, "user", OTHER_UID)], conditional
+    assert conditional == [(trail, "user", OTHER_UID,
+                            deploy.IF_A_GROUP_SEARCHES)], conditional
     lines = deploy.spool_read_grant_lines(spool, os.getgid())
     assert lines == ["user uid %d can read 1 file(s) in the spool only if a "
                      "group it is in can search the spool" % OTHER_UID], lines
@@ -6234,8 +6235,65 @@ def test_a_named_group_on_a_file_counts_by_the_spools_search(
     grants, _unread, conditional = deploy.spool_read_grants(spool, os.getgid())
     entry = (trail, "access", "group", OTHER_GID)
     assert (entry in grants) == (expect == "grant"), grants
-    assert (((trail, "group", OTHER_GID) in conditional)
-            == (expect == "conditional")), conditional
+    assert ([c for c in conditional if c[:3] == (trail, "group", OTHER_GID)]
+            != []) == (expect == "conditional"), conditional
+
+
+def test_a_user_that_searches_by_other_is_said_with_that_condition(
+        tmp_path):
+    """A spool that `other` can search and the owning group cannot: the
+    account reads the file unless it is in that group, the reverse of the
+    usual condition, and the line says so. Mutation: word every user
+    condition as IF_A_GROUP_SEARCHES and the line is wrong."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    os.chmod(spool, 0o2701)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    _grants, _unread, conditional = deploy.spool_read_grants(
+        spool, os.getgid())
+    assert conditional == [(trail, "user", OTHER_UID,
+                            deploy.UNLESS_ONLY_DENYING_GROUPS)], conditional
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert lines == ["user uid %d can read 1 file(s) in the spool unless it "
+                     "is in a group named on the spool and in none that can "
+                     "search it" % OTHER_UID], lines
+
+
+def test_a_named_entry_for_the_owning_gid_does_not_hide_its_group_entry(
+        tmp_path):
+    """`group::r-x` and `group:<owning gid>:---` both match a member of the
+    owning group, and either one with search is enough (acl(5)). Mutation:
+    let the later entry replace the earlier one and the account is dropped
+    as no reader."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    _acl_or_skip("-m", "g::r-x,g:%d:---,m::r-x" % os.getgid(), spool)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    _grants, _unread, conditional = deploy.spool_read_grants(
+        spool, os.getgid())
+    assert conditional == [(trail, "user", OTHER_UID,
+                            deploy.IF_A_GROUP_SEARCHES)], conditional
+
+
+def test_a_named_group_with_search_is_conditional_beside_a_denied_user(
+        tmp_path):
+    """The group's own entry searches, but a member with a named user entry
+    on the spool that lacks search is decided by that entry first. Mutation:
+    answer SEARCH_YES whenever the group's entry searches and it is a plain
+    grant."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    _acl_or_skip("-m", "g:%d:r-x,u:%d:---" % (OTHER_GID, OTHER_UID), spool)
+    _acl_or_skip("-m", "g:%d:r--" % OTHER_GID, trail)
+    grants, _unread, conditional = deploy.spool_read_grants(
+        spool, os.getgid())
+    assert [g for g in grants if g[0] == trail] == [], grants
+    assert conditional == [(trail, "group", OTHER_GID,
+                            deploy.BUT_A_DENIED_MEMBER)], conditional
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert ("group gid %d can read 1 file(s) in the spool for every member "
+            "but one whose own entry on the spool denies it search"
+            % OTHER_GID) in lines, lines
 
 
 def test_the_inherited_route_is_reported_as_before(tmp_path):
