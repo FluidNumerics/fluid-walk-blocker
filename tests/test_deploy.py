@@ -6110,7 +6110,7 @@ def test_a_named_reader_on_the_spool_is_reported_in_access_and_default(
     me, gid = os.getuid(), os.getgid()
     _acl_or_skip("-m", "u:%d:r-x,g:%d:r-x" % (me, gid), spool)
     _acl_or_skip("-d", "-m", "u:%d:r-x" % me, spool)
-    grants, unread = deploy.spool_read_grants(spool, gid)
+    grants, unread, _conditional = deploy.spool_read_grants(spool, gid)
     assert unread == []
     assert sorted(grants) == [(spool, "access", "user", me),
                               (spool, "default", "user", me)], grants
@@ -6122,7 +6122,8 @@ def test_a_named_entry_the_mask_holds_to_nothing_is_not_a_reader(tmp_path):
     cannot read."""
     spool = _acl_spool(tmp_path)
     _acl_or_skip("-n", "-m", "u:%d:r-x,m::---" % os.getuid(), spool)
-    grants, _unread = deploy.spool_read_grants(spool, os.getgid())
+    grants, _unread, _conditional = deploy.spool_read_grants(
+        spool, os.getgid())
     assert grants == [], grants
 
 
@@ -6133,10 +6134,126 @@ def test_a_named_reader_on_the_trail_file_is_reported(tmp_path):
         fh.write("{}\n")
     os.chmod(trail, 0o640)
     _acl_or_skip("-m", "u:%d:r--" % os.getuid(), trail)
-    grants, _unread = deploy.spool_read_grants(spool, os.getgid())
+    grants, _unread, _conditional = deploy.spool_read_grants(
+        spool, os.getgid())
     assert (trail, "access", "user", os.getuid()) in grants, grants
     lines = deploy.spool_read_grant_lines(spool, os.getgid())
     assert len(lines) == 1 and "1 file(s) in it" in lines[0], lines
+
+
+# Ids nobody on a test host holds: setfacl takes a number as it stands, and
+# the principal must be neither the owner of the spool nor its group.
+OTHER_UID = 4242424
+OTHER_GID = 4242425
+
+
+def _trail(spool):
+    trail = os.path.join(spool, "reaper-audit.jsonl")
+    with open(trail, "w") as fh:
+        fh.write("{}\n")
+    os.chmod(trail, 0o640)
+    return trail
+
+
+def test_a_file_entry_without_search_on_the_spool_is_said_with_its_condition(
+        tmp_path):
+    """Issue #143: a named read entry on the trail, and none on the spool.
+    The spool has no `other` search bit, so the account reads the file only
+    if a group it is in can search the spool -- which this cannot know
+    without resolving membership. Not a plain grant, and not nothing either.
+    Mutation: drop the _spool_search() call and it is reported as a reader."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    assert (grants, unread) == ([], []), (grants, unread)
+    assert conditional == [(trail, "user", OTHER_UID)], conditional
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert lines == ["user uid %d can read 1 file(s) in the spool only if a "
+                     "group it is in can search the spool" % OTHER_UID], lines
+
+
+def test_a_file_entry_with_search_on_the_spool_is_a_reader(tmp_path):
+    """The same entry, with a named search entry on the spool for the same
+    account: the kernel lets it through, so the report names it plainly."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    _acl_or_skip("-m", "u:%d:--x" % OTHER_UID, spool)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    grants, _unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    assert grants == [(trail, "access", "user", OTHER_UID)], grants
+    assert conditional == [], conditional
+    lines = deploy.spool_read_grant_lines(spool, os.getgid())
+    assert lines == ["user uid %d can read 1 file(s) in it" % OTHER_UID], lines
+
+
+@pytest.mark.parametrize("spool_acl, mode", [
+    ("u:%d:r--" % OTHER_UID, 0o2750),  # a named user entry decides outright
+    (None, 0o2700),                    # nobody but the owner searches
+])
+def test_a_file_entry_that_cannot_reach_its_file_is_no_reader(
+        tmp_path, spool_acl, mode):
+    """A named user entry on the spool without search denies that account
+    whatever its groups; a spool nobody else can search denies everyone. In
+    both, the file entry reads nothing and the report leaves it out.
+    Mutation: return SEARCH_MAYBE for every case and it is said instead."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    os.chmod(spool, mode)
+    if spool_acl:
+        _acl_or_skip("-m", spool_acl, spool)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    assert unread == [] and conditional == [], (unread, conditional)
+    # The spool's own read entry is a grant on the spool, as before.
+    assert [g for g in grants if g[0] == trail] == [], grants
+
+
+@pytest.mark.parametrize("spool_acl, mode, expect", [
+    ("g:%d:r-x" % OTHER_GID, 0o2750, "grant"),
+    ("g:%d:r--" % OTHER_GID, 0o2750, "conditional"),  # via the owning group
+    ("g:%d:r--" % OTHER_GID, 0o2700, "none"),
+    (None, 0o2751, "grant"),        # owning group and `other` both search
+    (None, 0o2701, "conditional"),  # `other` only: a member of the owning
+                                    # group is denied
+])
+def test_a_named_group_on_a_file_counts_by_the_spools_search(
+        tmp_path, spool_acl, mode, expect):
+    """A named group's members reach the file through the group's own entry
+    on the spool, or through another entry that membership decides, or not
+    at all. Mutation: treat a group entry without search as SEARCH_NO
+    whatever else is on the spool and the second case drops out."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    os.chmod(spool, mode)
+    if spool_acl:
+        _acl_or_skip("-m", spool_acl, spool)
+        if mode == 0o2700:
+            _acl_or_skip("-m", "m::r--", spool)
+    _acl_or_skip("-m", "g:%d:r--" % OTHER_GID, trail)
+    grants, _unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    entry = (trail, "access", "group", OTHER_GID)
+    assert (entry in grants) == (expect == "grant"), grants
+    assert (((trail, "group", OTHER_GID) in conditional)
+            == (expect == "conditional")), conditional
+
+
+def test_the_inherited_route_is_reported_as_before(tmp_path):
+    """The usual shape: a parent's default ACL lands on the spool and on the
+    trail alike, so the account that reads the trail can search the spool
+    too, and both are grants. The fix for issue #143 must not move this."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    _acl_or_skip("-d", "-m", "u:%d:r-x" % OTHER_UID, str(parent))
+    spool = str(parent / "spool")
+    os.mkdir(spool)
+    os.chmod(spool, 0o2750)
+    trail = _trail(spool)
+    grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    assert unread == [] and conditional == [], (unread, conditional)
+    assert (spool, "access", "user", OTHER_UID) in grants, grants
+    assert (spool, "default", "user", OTHER_UID) in grants, grants
+    assert (trail, "access", "user", OTHER_UID) in grants, grants
 
 
 def test_an_acl_the_report_cannot_parse_is_named_not_skipped(
