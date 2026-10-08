@@ -901,6 +901,45 @@ def test_halves_exactly_the_floor_allowance_apart_are_kept(ratio_clock):
     assert "DISCARDED" not in r.stdout, r.stdout
 
 
+# The reference half's `python3 -S` floor reads exactly 0.00 on every pair, and
+# everything else reads as in REF_PAIRS, so each pair survives the positivity
+# and drift checks and reaches the floor line with a zero denominator.
+ZERO_FLOOR_REF_PAIRS = [(1000, 1000, 0)] * 3
+
+
+def test_a_zero_reference_floor_reports_the_sentinel(ratio_clock):
+    """Issue #197. The floor comparison divides by the reference half's
+    floor, and it runs before the positivity check, so a reference floor of
+    0.00 reaches it on a pair that is otherwise kept. The guard prints the
+    999 sentinel in place of the division. Mutation: `r > 0` to `r >= 0` on
+    that line, and awk divides by zero -- the percentage comes back empty
+    (gawk stops with an error) or `inf` (mawk), not 999.0."""
+    ref, cand, env = ratio_clock(ZERO_FLOOR_REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"], env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [ln.rsplit(", halves ", 1)[1] for ln in _lines(r.stdout, "pair ")] \
+        == ["999.0% apart on the machine"] * 3, r.stdout
+
+
+def test_a_zero_reference_floor_is_discarded_by_the_floor_check(ratio_clock):
+    """Issue #197, the consumer of the same sentinel: with a floor allowance
+    set, 999.0 % is over it and every pair is discarded, naming the sentinel
+    and the zero floor. Under the `r >= 0` mutant the percentage is empty or
+    `inf`, and the discard either never fires or names a different figure."""
+    ref, cand, env = ratio_clock(ZERO_FLOOR_REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
+                    env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="20"))
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert _lines(r.stdout, "pair 1 DISCARDED") == [
+        "pair 1 DISCARDED: the two halves disagree by 999.0 % about how fast"
+        " the machine is (floors 0.00 vs 10.00 ms), over the 20 % allowed"
+        " -- a ratio between them would be measuring the machine"], r.stdout
+    assert len(_lines(r.stdout, "pair ")) == 3, r.stdout
+    assert all("disagree by 999.0 %" in ln for ln in _lines(r.stdout, "pair ")), \
+        r.stdout
+    assert "only 0 pairs survived" in r.stderr
+
+
 def test_exactly_the_minimum_of_usable_pairs_is_compared(ratio_clock):
     """Issue #134. `test_the_floor_discard_fires_when_it_is_asked_for` pins
     that two survivors, one fewer than MIN_USABLE_PAIRS, are refused. This is
