@@ -1,6 +1,7 @@
 # ADR-0023: A record states what holds now, and narrowed wording moves below it
 
 **Status:** accepted, 2026-09-18
+The Decision's paragraph on where superseded wording moves was amended when issue #139 was decided: an issue's decision may now amend an accepted record without a record of its own. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -62,10 +63,16 @@ per-record problem this record exists to fix.
 ## Decision
 
 A record's `## Decision` and `## Consequences` state what holds now. Where a
-later record narrowed a clause there, the superseded wording moves verbatim into
-a `## Superseded wording` section, placed after `## Site config touched` and
+later record narrowed a clause there, or an issue's decision amended one with no
+record of its own, the superseded wording moves verbatim into a
+`## Superseded wording` section, placed after `## Site config touched` and
 before the closing paragraph where a record has one, and tagged with the record
-that narrowed it. The clause does not stay behind in the section it came from.
+that narrowed it or with the issue whose decision amended it ("Amended when
+issue #N was decided."). An amendment on an issue decision has no `Narrows:`
+line to point back at it, so the amended record's Status block carries one line
+in its place, naming the clause, the issue, and that the wording it replaced is
+recorded under "Superseded wording" below. The clause does not stay behind in
+the section it came from.
 
 `## Context` is exempt. It is defined as what was true when the decision was
 necessary, and its value is precisely that it was not updated; a Context a
@@ -139,3 +146,16 @@ n/a: structural. No property of a site bears on how this corpus is arranged.
 ## Site config touched
 
 none
+
+## Superseded wording
+
+Amended when issue #139 was decided. The Decision above read:
+
+> A record's `## Decision` and `## Consequences` state what holds now. Where a
+> later record narrowed a clause there, the superseded wording moves verbatim into
+> a `## Superseded wording` section, placed after `## Site config touched` and
+> before the closing paragraph where a record has one, and tagged with the record
+> that narrowed it. The clause does not stay behind in the section it came from.
+
+An issue's decision may now amend a clause too, with the Status note in place
+of the `Narrows:` line it does not have.
