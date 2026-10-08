@@ -43,7 +43,10 @@ audit log tell a traversal Layer 1 was in front of from one it never applied
 to (ADR-0003).
 
 Default is --report. Promoting to --kill is a decision someone makes after
-reading real findings against real traffic, not a default that drifts.
+reading real findings against real traffic, not a default that drifts. A site
+records it as `[reaper].action = "kill"`, and the unit the deployer writes
+passes the flag (ADR-0034). Acting on another user's process needs no second
+flag: this tool's one caller is that root-run unit.
 """
 
 import argparse
@@ -1416,13 +1419,10 @@ def build_parser():
     mode.add_argument("--report", action="store_true", default=True,
                       help="find and report; take no action (the default)")
     mode.add_argument("--kill", action="store_true",
-                      help="act on findings. Off until the classifier has "
-                           "been read against real traffic.")
-    parser.add_argument("--kill-others", action="store_true",
-                        help="permit acting on processes owned by other "
-                             "users. Without this, --kill only touches your "
-                             "own; killing someone else's month-old work is a "
-                             "per-incident human decision, not a flag default.")
+                      help="act on findings outside NEVER_KILL, whoever owns "
+                           "the process. Off until the classifier has been "
+                           "read against real traffic; the unit passes it "
+                           "when [reaper].action is \"kill\" (ADR-0034).")
     parser.add_argument("--max-kills", type=int, default=MAX_KILLS,
                         help="stop acting after this many findings in one "
                              "poll and report the rest as skipped_kill_cap. "
@@ -1649,7 +1649,6 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
     # land"). Reported-only findings repeat the same action every poll, so
     # this is exactly where the redundant re-append stops.
 
-    me = os.getuid()
     entries = []
     acted = 0
     failed_kills = 0
@@ -1665,18 +1664,19 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         # sent, only the first ever shown on disk.
         real_kill_attempt = False
         if args.kill and not unrecorded and finding.verdict not in NEVER_KILL:
-            if finding.proc.uid != me and not args.kill_others:
-                # No signal sent -- a standing POLICY decision, same
-                # dedup-eligible shape as plain "reported". A finding capped
-                # by --kill-others every poll for the same reason is not a
-                # new fact each time; only a real signal is.
-                finding.action = "skipped_other_user"
-            elif acted >= args.max_kills:
-                # Same reasoning: --max-kills binding on the same finding
-                # every poll is a standing cap, not a new attempt. If it
-                # recurs it recurs identically, which is exactly what
-                # dedup exists to collapse -- unlike a wedged process,
-                # nothing was sent this poll to under-report.
+            # Whoever owns the process. This tool has one caller, the
+            # root-run unit, and that unit passes --kill only when the site
+            # set [reaper].action = "kill" after reading its own trail
+            # (ADR-0034). A per-uid gate here had no second caller to serve
+            # and hid that one decision behind a second flag.
+            if acted >= args.max_kills:
+                # No signal sent -- a standing POLICY decision, the same
+                # dedup-eligible shape as plain "reported": --max-kills
+                # binding on the same finding every poll is a standing cap,
+                # not a new attempt. If it recurs it recurs identically,
+                # which is exactly what dedup exists to collapse -- unlike
+                # a wedged process, nothing was sent this poll to
+                # under-report.
                 finding.action = "skipped_kill_cap"
             else:
                 acted += 1
