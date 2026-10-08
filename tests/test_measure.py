@@ -670,13 +670,19 @@ def scripted_clock(tmp_path):
     overheads, a gate reading the other gate's overhead would pass; with
     equal baselines, an overhead taken from the wrong baseline would too.
     """
+    return _scripted_date(tmp_path, "1000 2250 1000 1000 1080 1500 2850 3750")
+
+
+def _scripted_date(tmp_path, durations):
+    """The `date` stub behind `scripted_clock`, reading `durations` (bench
+    readings in microseconds, space-separated, in bench order)."""
     binned = tmp_path / "clockbin"
     binned.mkdir()
     counter = tmp_path / "calls"
     stub = binned / "date"
     stub.write_text(
         "#!/bin/sh\n"
-        "set -- 1000 2250 1000 1000 1080 1500 2850 3750\n"
+        "set -- %s\n"
         'read -r k t < %s 2>/dev/null || { k=0; t=0; }\n'
         "if [ $((k %% 2)) -eq 1 ]; then\n"
         '    eval "d=\\${$((k / 2 + 1)):-1000}"\n'
@@ -685,7 +691,7 @@ def scripted_clock(tmp_path):
         "    t=$((t + 1000 * 1000))\n"
         "fi\n"
         'echo "$((k + 1)) $t" > %s\n'
-        'echo "$t"\n' % (counter, counter)
+        'echo "$t"\n' % (durations, counter, counter)
     )
     stub.chmod(0o755)
     return str(binned)
@@ -696,7 +702,9 @@ def scripted_clock(tmp_path):
                        "guarded path within the 1.4 ms budget"]),
     ("1.2", "1000", 1, ["measure.sh: shim overhead 1.25 ms exceeds the"]),
     ("1000", "1.3", 1, ["measure.sh: guarded overhead 1.35 ms exceeds the"]),
-], ids=["both-clear", "fast-refuses", "guarded-refuses"])
+    ("1.25", "1.35", 0, ["within the 1.25 ms budget",
+                         "guarded path within the 1.35 ms budget"]),
+], ids=["both-clear", "fast-refuses", "guarded-refuses", "at-both-budgets"])
 def test_a_decimal_budget_is_compared_as_a_decimal(
         guard, scripted_clock, budget, guarded_budget, rc, says):
     """`test_a_decimal_ceiling_is_accepted` proves the validator lets a
@@ -706,6 +714,10 @@ def test_a_decimal_budget_is_compared_as_a_decimal(
     guarded: each clears its 1.3 or 1.4 budget only if the budget keeps its
     fraction (1 would refuse), and exceeds 1.2 or 1.3 only if the overhead
     keeps its own (1 would pass). Each gate gets both directions.
+
+    `at-both-budgets` sits on each gate's boundary (issue #148): a refusal
+    says the overhead "exceeds" the budget, so an overhead equal to it is
+    within it, and a `>=` in either gate refuses this case.
 
     The two 1.3 budgets -- fast in `both-clear`, guarded in
     `guarded-refuses` -- sit between the two overheads, so a gate that read
@@ -724,6 +736,43 @@ def test_a_decimal_budget_is_compared_as_a_decimal(
     lines = (r.stderr if rc else r.stdout).splitlines()
     for line in says:
         assert line in lines, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("durations, row, other", [
+    ("1000 1000 1000 1000 1080 1500 2850 3750",
+     ("shim overhead", r"0\.00"), ("guarded overhead", r"1\.35")),
+    ("1000 2250 1000 1000 1080 1500 1500 3750",
+     ("guarded overhead", r"0\.00"), ("shim overhead", r"1\.25")),
+], ids=["shim-at-zero", "guarded-at-zero"])
+def test_an_overhead_of_exactly_zero_is_refused(
+        guard, tmp_path, durations, row, other):
+    """Issue #148. The positivity discard refuses "an overhead at or below
+    zero", so an overhead of exactly 0.00 ms is refused, with the other
+    overhead positive so that only the one comparison decides. Mutation:
+    `f > 0` or `g > 0` to `>=`, and the zero overhead clears its budget and
+    the run exits 0."""
+    env = {"PATH": _scripted_date(tmp_path, durations) + os.pathsep
+           + os.environ["PATH"], "WALK_BLOCKER_MEASURE_DRIFT_PCT": "12"}
+    r = run_measure([guard, "1", "1000", "1000"], env=env)
+    for name, value in (row, other):
+        assert re.search(r"^%s +%s ms/call$" % (name, value), r.stdout,
+                         re.M), r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "at or below zero" in r.stderr, r.stderr
+    assert "within the" not in r.stdout, "it reported a pass"
+
+
+def test_drift_exactly_at_its_ceiling_is_not_over_it(guard, scripted_clock):
+    """Issue #148. The drift discard is strict: the refusal says the two
+    baseline readings disagree by "over" the ceiling. The scripted drift is
+    exactly 8.0 %, and an 8 % ceiling lets the run through to its budgets.
+    Mutation: `(d>m)` to `(d>=m)`, and the run is refused with exit 2."""
+    env = {"PATH": scripted_clock + os.pathsep + os.environ["PATH"],
+           "WALK_BLOCKER_MEASURE_DRIFT_PCT": "8"}
+    r = run_measure([guard, "1", "1000", "1000"], env=env)
+    assert re.search(r"^baseline drift +8\.0 %$", r.stdout, re.M), r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "disagree" not in r.stderr, r.stderr
 
 
 def test_a_guard_that_does_not_exist_says_so_rather_than_blaming_the_mode(
@@ -820,6 +869,57 @@ def test_the_floor_discard_fires_when_it_is_asked_for(ratio_clock):
     assert len(_lines(r.stdout, "pair 1 ratio:")) == 1, r.stdout
     assert len(_lines(r.stdout, "pair 3 ratio:")) == 1, r.stdout
     assert "only 2 pairs survived" in r.stderr
+
+
+def test_a_ratio_equal_to_its_ceiling_is_within_it(ratio_clock):
+    """Issue #148. Both ratio gates are strict: a refusal says the median
+    "exceeds" the ceiling, so a median equal to it passes. The medians are
+    exactly 1.200 and 1.300 here, and the ceilings are those same numbers.
+    Mutation: `o > b` to `o >= b` in either gate, and that gate refuses."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "1.2", "1.3"], env=env)
+    assert re.search(r"^fast-path ratio \(median\) +1\.200 x$", r.stdout,
+                     re.M), r.stdout
+    assert re.search(r"^guarded ratio \(median\) +1\.300 x$", r.stdout,
+                     re.M), r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "fast path within the 1.2x ceiling" in r.stdout.splitlines()
+    assert "guarded path within the 1.3x ceiling" in r.stdout.splitlines()
+
+
+def test_halves_exactly_the_floor_allowance_apart_are_kept(ratio_clock):
+    """Issue #148. The floor discard is strict: a pair is discarded when its
+    halves are "over" the allowance. Pair 2's halves are exactly 25.0 % apart,
+    so a 25 % allowance keeps all three pairs. Mutation: `d > m` to `d >= m`,
+    and pair 2 is discarded, leaving two pairs and exit 3."""
+    ref, cand, env = ratio_clock(REF_PAIRS, CAND_PAIRS)
+    r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
+                    env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="25"))
+    assert "halves 25.0% apart on the machine" in r.stdout, r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "=== 3/3 usable pairs ===" in r.stdout.splitlines()
+    assert "DISCARDED" not in r.stdout, r.stdout
+
+
+def test_exactly_the_minimum_of_usable_pairs_is_compared(ratio_clock):
+    """Issue #134. `test_the_floor_discard_fires_when_it_is_asked_for` pins
+    that two survivors, one fewer than MIN_USABLE_PAIRS, are refused. This is
+    the other side: four pairs, pair 2 discarded by a 20 % allowance, and the
+    three that survive -- exactly the minimum -- are compared, their median
+    taken over the survivors only (1.100, 1.200, 1.300: median 1.200; pair
+    2's 1.500 would move it). Mutation: refuse at `-le` instead of `-lt`, or
+    raise the minimum to four, and this run is refused with exit 3."""
+    ref, cand, env = ratio_clock(REF_PAIRS + REF_PAIRS[:1],
+                                 CAND_PAIRS + [(1300, 1350, 10000)])
+    r = run_measure(["--against", ref, cand, "1", "4", "100", "100"],
+                    env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="20"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "=== 3/4 usable pairs ===" in r.stdout.splitlines()
+    assert len(_lines(r.stdout, "pair 2 DISCARDED")) == 1, r.stdout
+    assert _lines(r.stdout, "per-pair fast ratios:") == \
+        ["per-pair fast ratios: 1.100 1.200 1.300"], r.stdout
+    assert re.search(r"^fast-path ratio \(median\) +1\.200 x$", r.stdout,
+                     re.M), r.stdout
 
 
 def test_against_without_a_reference_is_a_usage_error():
