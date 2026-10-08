@@ -779,8 +779,10 @@ def system_preview(args, env=None):
         # (ADR-0029) -- a refusal, not a traceback.
         print("# units are NOT rendered: the stamped reaper.action %r is not a"
               % (REAPER_ACTION,))
-        print("# value this build maps (%s). The payload check below refuses it."
+        print("# value this build maps (%s). The payload was edited past its"
               % ", ".join(sorted(REAPER_FLAGS)))
+        print("# build: the payload check below refuses it, unless its lock was")
+        print("# rewritten with it, the case ADR-0029 does not claim to catch.")
     else:
         print("# units below are rendered from the same constants the install writes:")
         service, timer = render_units(prefix, spool)
