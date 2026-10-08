@@ -3795,6 +3795,39 @@ def test_the_relay_filter_strips_a_command_but_not_prose(tmp_path, capsys,
     assert "# trailer" in out
 
 
+def test_the_preview_does_not_claim_the_timer_stays_unarmed(tmp_path, capsys,
+                                                           monkeypatch):
+    """install.sh's dry run says it will NOT enable the timer, which is true
+    of install.sh alone and false of deploy.py, which enables it after.
+    Relayed verbatim it told the operator Layer 2 stays unarmed (issue #201).
+
+    The fixture line is checked against install.sh's own template first, so
+    a reworded bullet there fails here rather than leaving the filter
+    matching a line the child no longer prints.
+    """
+    template = "#   - NOT enable $SG_TIMER_UNIT: install.sh --system leaves it"
+    with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
+        assert template in fh.read()
+    pass_prefix_checks(monkeypatch)
+    child = (
+        "# preamble\n"
+        "#   - NOT enable %s: install.sh --system leaves it as it found it\n"
+        "# NOT enable anything else, prose that must survive\n"
+        "# trailer\n" % deploy.TIMER_UNIT)
+    monkeypatch.setattr(
+        deploy, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, child, ""))
+    deploy.system_preview(_args(tmp_path))
+    out = capsys.readouterr().out
+
+    assert "NOT enable %s" % deploy.TIMER_UNIT not in out, out
+    assert "install.sh --system leaves it" not in out, out
+    assert ("#   - enable and start %s: deploy.py does this after"
+            % deploy.TIMER_UNIT) in out, out
+    assert "# NOT enable anything else, prose that must survive" in out
+    assert "# trailer" in out
+
+
 def test_a_refusing_child_preview_is_relayed_not_swallowed(tmp_path, capsys,
                                                            monkeypatch):
     """install.sh checks filesystem state a literal cannot make true, so its

@@ -723,6 +723,20 @@ def system_preview(args, env=None):
             print("#   directly it skips the copy, the chown and Layer 2, and")
             print("#   points the shims at this directory. Use deploy.py.)")
             continue
+        # The same case for the timer: install.sh's "NOT enable" bullet is
+        # true of install.sh alone and false of the run previewed here,
+        # which enables the timer after install.sh unless it stops before
+        # that (an install.sh failure, the ownership check). Relayed, it tells
+        # the operator Layer 2 stays unarmed. Reworded in place, not dropped,
+        # so the bullet list still says what happens to the timer. Keyed on
+        # the unit name as well, so a prose line opening with "NOT enable"
+        # about something else is not rewritten.
+        if stripped.startswith("- NOT enable " + TIMER_UNIT):
+            print("#   - enable and start %s: deploy.py does this after"
+                  % TIMER_UNIT)
+            print("#     install.sh, unless the deploy stops before then")
+            print("#     (install.sh alone leaves it as it found it)")
+            continue
         print(line)
     spool = canonical_prefix(args.spool_dir)
     print("# The payload is copied to %s, then reasserted as root-owned --" % prefix)
