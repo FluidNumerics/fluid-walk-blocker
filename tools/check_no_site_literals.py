@@ -244,7 +244,9 @@ def main(argv=None):
 
     findings, scanned = [], 0
     for f in files:
-        if os.path.isfile(f):
+        # A symlink is skipped by policy and read by nothing, so it is not
+        # counted: a tree holding only links read no file and must not pass.
+        if os.path.isfile(f) and not os.path.islink(f):
             scanned += 1
             findings.extend(scan_file(f, os.path.relpath(f, root), rules, allow,
                                       terms, a.quiet))

@@ -43,8 +43,11 @@ def test_the_default_root_is_the_scripts_repository_not_the_cwd(tmp_path):
     # this repository, and say so.
     r = run(["--terms", os.devnull], cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
-    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
-                             capture_output=True, check=True).stdout.count(b"\0")
+    # The summary counts files read: tracked regular files, not links.
+    names = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
+                           capture_output=True, check=True).stdout.split(b"\0")
+    tracked = sum(1 for n in names if n and os.path.isfile(os.path.join(ROOT, n.decode()))
+                  and not os.path.islink(os.path.join(ROOT, n.decode())))
     assert r.stderr.strip() == "%d file(s) under %s, 0 finding(s), terms=off" % (
         tracked, os.path.realpath(ROOT))
 
@@ -113,20 +116,32 @@ def test_a_named_dangling_symlink_exists_and_is_skipped(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("case", ["untracked-tree", "empty-dir"])
+@pytest.mark.parametrize("case", ["untracked-tree", "empty-dir", "tracked-symlink-only",
+                                  "named-symlink-only"])
 def test_a_scan_that_finds_no_files_is_not_a_pass(tmp_path, case):
     # Issue #192: a copy of tools/ in a repository that tracks nothing under
-    # the root reported "0 file(s)" and exited 0.
+    # the root reported "0 file(s)" and exited 0. A symlink is skipped unread,
+    # so a tree or a name list holding only links read nothing either.
+    (tmp_path / "target.md").write_text("plain\n")
     if case == "untracked-tree":
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-        (tmp_path / "a.md").write_text("plain\n")
         args = ["--root", str(tmp_path)]
-    else:
+    elif case == "empty-dir":
         (tmp_path / "empty").mkdir()
         args = ["--root", str(tmp_path), "empty"]
+    else:
+        os.symlink("target.md", str(tmp_path / "link.md"))
+        if case == "tracked-symlink-only":
+            subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+            subprocess.run(["git", "-C", str(tmp_path), "add", "link.md"], check=True)
+            args = ["--root", str(tmp_path)]
+        else:
+            args = ["--root", str(tmp_path), "link.md"]
     r = run(args + ["--terms", os.devnull])
     assert r.returncode == gate.EXIT_CONFIG, r.stdout + r.stderr
     assert "no files to scan" in r.stderr
+    # The refusal is not also a pass line: no "0 file(s) ... 0 finding(s)".
+    assert "file(s) under" not in r.stderr
 
 
 @pytest.mark.parametrize("names", ["", "sub\n", "link.md\n"],
