@@ -715,7 +715,16 @@ def test_the_preview_refuses_an_unmapped_action_without_a_traceback(
     assert "KeyError" not in proc.stderr, proc.stderr
     out = proc.stdout
     assert "System-wide install of walk-blocker Layer 1" in out
-    assert "units are NOT rendered: the stamped reaper.action 'maim'" in out, out
+    # The whole note, not its first line: review round 2 narrowed what it
+    # claims (the payload check refuses the edit unless the lock was
+    # rewritten with it, ADR-0029), and the top-up round found that change
+    # had no oracle -- the first line alone pinned nothing it said.
+    assert (
+        "# units are NOT rendered: the stamped reaper.action 'maim' is not a\n"
+        "# value this build maps (kill, report). The payload was edited past its\n"
+        "# build: the payload check below refuses it, unless its lock was\n"
+        "# rewritten with it, the case ADR-0029 does not claim to catch.\n"
+    ) in out, out
     assert "ExecStart=" not in out and "OnCalendar=" not in out, out
     assert _previewed_lines(out, script) == [], out
 
