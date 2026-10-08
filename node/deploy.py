@@ -651,12 +651,39 @@ def unowned_by(root, uid=0):
     return sorted(set(bad))
 
 
+def _not_started(cmd, err, capture, check):
+    """The result of a command `subprocess.run` could not start, numbered
+    by the POSIX shell's convention (issue #194): 127 when it was not
+    found, 126 when it was found but could not be run. Every start failure
+    other than ENOENT is the second kind -- EACCES, a directory, ENOEXEC.
+    Unlike bash, run() does not retry an ENOEXEC file as a shell script, so
+    a shebang-less file is 126 here where bash would have run it.
+
+    Under check=True with capture, the reason is the result's stderr, and
+    run() prints it after `failed: <cmd>` as it would a failed command's.
+    Everywhere else it goes to the terminal now: a check=False caller
+    judges the status, as a shell script judges $?, and several (the
+    uninstall's teardown, the units-down probe) do not relay a captured
+    stderr, so a reason left in the result would be lost.
+    """
+    status = 127 if isinstance(err, FileNotFoundError) else 126
+    reason = "%s: %s\n" % (cmd[0], err.strerror or err)
+    if check and capture:
+        return subprocess.CompletedProcess(cmd, status, "", reason)
+    sys.stderr.write(reason)
+    return subprocess.CompletedProcess(cmd, status, "" if capture else None,
+                                       "" if capture else None)
+
+
 def run(cmd, check=True, capture=True, dry_run=False, env=None):
     printable = " ".join(shlex.quote(c) for c in cmd)
     if dry_run:
         print("would run: %s" % printable)
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    result = subprocess.run(cmd, capture_output=capture, text=True, env=env)
+    try:
+        result = subprocess.run(cmd, capture_output=capture, text=True, env=env)
+    except OSError as err:
+        result = _not_started(cmd, err, capture, check)
     if check and result.returncode != 0:
         sys.stderr.write("failed: %s\n" % printable)
         # Only what was captured: uncaptured, the command already wrote its
