@@ -375,7 +375,9 @@ CORRECTED_NOTE = re.compile(
     r'was corrected in place for issue #(\d+)\b')
 NOTHING_MOVED = "nothing moved"
 # In a Status line the word "corrected" is reserved for this note; a line that
-# uses it otherwise is refused, and loudly, so its author rewords it. A note
+# uses it otherwise is refused, and loudly, so its author rewords it -- unless
+# it is an issue amendment's note, which `_amendment_problems` checks, or a
+# `Narrows:` line, whose quote cannot be reworded (`OTHER_NOTE`). A note
 # worded without the word is not seen here, and only review and the pin below
 # catch it (ADR-0023). This is how a reworded or wrapped note -- either half
 # keeps the word -- is reported rather than skipped, as `NARROWS_LOOSE` does

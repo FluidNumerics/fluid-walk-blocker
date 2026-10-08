@@ -107,8 +107,9 @@ holds instead of a quote is in the present tense, so it is live, and when it
 stops being true it is corrected in place, by the same minimal correction. The
 quotes above it are never touched, and the Status block gains one line naming
 the entry, the issue the correction answers, and that nothing moved. The test
-reads that line, not the edit, so a correction made without one is caught by
-review alone.
+reads that line, not the edit, so review alone catches a correction made
+without one, or with one the test cannot read: worded without "corrected", or
+placed outside the Status block.
 
 ## Consequences
 
