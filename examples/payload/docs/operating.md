@@ -1024,8 +1024,11 @@ clean (ADR-0021). It stops and disables the timer and service and removes
 their unit files; removes the journal drop-in under
 `[install].tmpfiles_dir` and revokes, under each journal directory that
 exists, the read it granted to the gids it records (ADR-0026); strips every hook block
-and removes the fish drop-in whether or not that shell still resolves
-(ADR-0008); and removes `<prefix>/bin` and the relink's two memories in
+and removes the fish drop-in, for every hook the build knows, enabled or
+not, and whether or not that shell still resolves (ADR-0008, issue #196) —
+for a hook the site does not enable, only a block or a drop-in that is
+walk-blocker's, so anything else at that path is left as it was found; and
+removes `<prefix>/bin` and the relink's two memories in
 the spool, `uncovered-mounts.state` and `linked-names.state`. It does not
 remove the prefix: the payload stays under it. The
 `<file>.walk-blocker.orig` backups and the audit trail under
@@ -1043,8 +1046,9 @@ copy is. It stops and disables the timer and stops the service first, and
 refuses with exit 3, having stripped nothing, unless systemd then reports
 both units inactive and the timer not enabled. The one timer drives the
 relink and the reaper both, so this stops Layer 2 too, and the output says
-so. It then strips every hook block, removes the fish drop-in, and removes
-`<prefix>/bin` and the relink's two memories in the spool. It leaves in
+so. It then strips every hook block and removes the fish drop-in, enabled
+or not, and for a disabled hook only a block or drop-in that is
+walk-blocker's; and it removes `<prefix>/bin` and the relink's two memories in the spool. It leaves in
 place the payload under the prefix, the disabled unit files, the journal
 drop-in and the grant it records, the `<file>.walk-blocker.orig` backups,
 and the spool with its audit trail. The only restore is

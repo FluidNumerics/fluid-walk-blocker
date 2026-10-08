@@ -2851,8 +2851,8 @@ def test_uninstall_runs_the_deployed_helper_not_the_payload_directory(
 def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
         tmp_path, monkeypatch, capsys):
     """A fallback would reopen exactly the path being closed, so a missing
-    deployed helper is a refusal -- with the manual steps, naming the
-    enabled hook files."""
+    deployed helper is a refusal -- with the manual steps, naming every
+    hook file the build knows (issue #196)."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     args = _args(tmp_path)
     pass_uninstall_checks(monkeypatch, args.prefix)
@@ -2863,7 +2863,7 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
     assert deploy.system_uninstall(args) == 5
     assert not [arg for c in calls for arg in c if "install.sh" in arg]
     err = capsys.readouterr().err
-    for path in deploy.enabled_hook_files(args):
+    for path in deploy.all_hook_files(args):
         assert path in err, (path, err)
     assert os.path.join(args.prefix, "bin") in err
 
@@ -2875,13 +2875,13 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
     (False, True, False),
     (False, False, False),
 ])
-def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
+def test_a_refused_uninstall_helper_names_every_hook_the_build_knows(
         tmp_path, monkeypatch, capsys, fish, zsh, bash):
-    """Issue #142: the hand route said "remove the fish drop-in outright"
-    whatever the hook table enabled, and with every hook off it said that
-    beside "the hook files are none on this site". The fish step appears
-    only with the fish hook, the marker step only with a shared hook file,
-    and a site with neither says it has no hook file to clean."""
+    """Issue #196, reversing issue #142's narrowing for this message: the
+    hand route follows install.sh --uninstall, which visits every hook file
+    the build knows, enabled or not. So both steps appear whatever the table
+    enables, and each is worded to hold for a file that was never ours: the
+    marker step "where present", the drop-in only with its header."""
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", fish)
     monkeypatch.setattr(deploy, "HOOK_ENABLED_ZSH", zsh)
@@ -2893,26 +2893,27 @@ def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
 
     assert deploy.system_uninstall(args) == 5
     err = capsys.readouterr().err
-    assert ("fish drop-in" in err) == fish, err
-    assert (args.fish_conf_file in err) == fish, err
-    assert ("walk-blocker markers" in err) == (zsh or bash), err
-    assert ("enables none" in err) == (not (fish or zsh or bash)), err
+    assert "fish drop-in" in err, err
+    assert args.fish_conf_file in err, err
+    # The drop-in's condition is install.sh's: outright when the hook is
+    # enabled, only with its generated header when it is not.
+    assert ("generated header" in err) == (not fish), err
+    assert ("outright" in err) == fish, err
+    assert "walk-blocker markers" in err, err
+    assert "enables none" not in err, err
     assert "none on this site" not in err, err
-    # The marker step names exactly the enabled shared files, never the
-    # fish drop-in, which is removed whole rather than stripped.
-    if zsh or bash:
-        strip = " ".join(err.split("walk-blocker markers in", 1)[1]
-                         .split(";", 1)[0].split())
-        named = [f.strip() for f in strip.split(",")]
-        assert named == [f for f, on in ((args.bashrc_file, bash),
-                                         (args.zshenv_file, zsh)) if on], err
+    # The marker step names exactly the shared files, never the fish
+    # drop-in, which is removed whole rather than stripped.
+    strip = " ".join(err.split("walk-blocker markers in", 1)[1]
+                     .split(";", 1)[0].split())
+    named = [f.strip() for f in strip.rsplit(", where present", 1)[0]
+             .split(",")]
+    assert named == [args.bashrc_file, args.zshenv_file], err
     # Each hook path ends its own line, so a stamped path cannot push its
     # step past 80 columns.
     lines = err.splitlines()
-    if zsh or bash:
-        assert "  %s;" % ", ".join(named) in lines, err
-    if fish:
-        assert "  remove the fish drop-in %s" % args.fish_conf_file in lines, err
+    assert "  %s, where present;" % ", ".join(named) in lines, err
+    assert "  remove the fish drop-in %s" % args.fish_conf_file in lines, err
 
 
 def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
@@ -3104,9 +3105,9 @@ def test_uninstall_validates_every_hook_file_it_writes_not_only_the_prefix(
 
 
 def test_a_disabled_hooks_file_is_still_validated_as_a_path(tmp_path, monkeypatch):
-    """Disabled means never written or stripped; it does not mean unchecked.
-    The cost is a stat, and a hand-edited copy that re-enables the hook
-    would otherwise reach strip_block() through an unvalidated path."""
+    """Disabled means never written; it does not mean unchecked. The
+    uninstall still visits a disabled hook's file and strips a block of ours
+    from it (issue #196), so its path gets the same checks as any other."""
     monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", False)
     assert [shell for _a, shell, enabled in deploy.hook_table() if enabled] == \
         ["bash", "zsh"]
@@ -3124,22 +3125,53 @@ def test_a_disabled_hooks_file_is_still_validated_as_a_path(tmp_path, monkeypatc
         _args(tmp_path, fish_conf_file=str(fifo)), attrs=("fish_conf_file",)) == 6
 
 
-def test_a_disabled_hook_is_not_named_where_the_operator_is_told_to_look(
+def test_a_disabled_hook_is_named_where_the_operator_is_told_to_look(
         tmp_path, monkeypatch, capsys):
-    """The manual-steps and the "check the hook files" messages list the
-    files install.sh actually writes on this site; naming a disabled hook's
-    file would send an operator to strip a block that was never there."""
+    """Issue #196: install.sh --uninstall visits every hook file the build
+    knows, enabled or not, so the manual steps name a disabled hook's file
+    too -- a block an earlier install wrote there is still there to strip.
+    The install-side list, enabled_hook_files(), stays enabled-only."""
     monkeypatch.setattr(deploy, "HOOK_ENABLED_ZSH", False)
     monkeypatch.setattr(deploy, "_is_root", lambda: True)
     args = _args(tmp_path)
     assert deploy.enabled_hook_files(args) == [args.bashrc_file, args.fish_conf_file]
+    assert deploy.all_hook_files(args) == [
+        args.bashrc_file, args.zshenv_file, args.fish_conf_file]
     pass_uninstall_checks(monkeypatch, args.prefix)
     os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
     monkeypatch.setattr(deploy, "run", recording_run([]))
     assert deploy.system_uninstall(args) == 5
     err = capsys.readouterr().err
-    assert args.bashrc_file in err and args.fish_conf_file in err
-    assert args.zshenv_file not in err
+    for path in deploy.all_hook_files(args):
+        assert path in err, (path, err)
+
+
+def test_a_failed_uninstall_helper_names_every_hook_file(
+        tmp_path, monkeypatch, capsys):
+    """Exit 8's "check the hook files" names all three, enabled or not:
+    a partial install.sh --uninstall may have left a block in any file it
+    visits (issue #196)."""
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_ZSH", False)
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", False)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    def helper_fails(cmd, check=True, capture=True, dry_run=False, env=None):
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return subprocess.CompletedProcess(cmd, 3, "inactive\n", "")
+        if cmd[:2] == ["systemctl", "show"]:
+            return subprocess.CompletedProcess(cmd, 0, "disabled\n", "")
+        if any("install.sh" in arg for arg in cmd):
+            return subprocess.CompletedProcess(cmd, 3, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(deploy, "run", helper_fails)
+    assert deploy.system_uninstall(args) == 8
+    err = capsys.readouterr().err
+    assert "Layer 1 may still be installed" in err, err
+    for path in deploy.all_hook_files(args):
+        assert path in err, (path, err)
 
 
 def test_uninstall_reports_a_teardown_it_did_not_achieve(tmp_path,
