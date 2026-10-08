@@ -363,6 +363,108 @@ def test_the_issue_decision_amendments_are_seen():
     assert {"0021", "0023", "0029"} <= amended, amended
 
 
+# ADR-0023 (issue #199): the text under `## Superseded wording` that says what
+# holds instead of a quote is live, so it is corrected in place, moving
+# nothing, and the Status block names the entry and the issue. This reads that
+# note, not the edit: with no history here, a correction made without a note
+# is invisible to the per-record check, and only the pin below and review catch
+# it. `tests/test_trail_readers_prose.py` is the other test that reads this
+# text as live.
+CORRECTED_NOTE = re.compile(
+    r'under the (ADR-\d{4}|issue #\d+) entry in "Superseded wording", '
+    r'was corrected in place for issue #(\d+)\b')
+NOTHING_MOVED = "nothing moved"
+# In a Status line the word "corrected" is reserved for this note; a line that
+# uses it otherwise is refused, and loudly, so its author rewords it -- unless
+# it is an issue amendment's note, which `_amendment_problems` checks, or a
+# `Narrows:` line, whose quote cannot be reworded (`OTHER_NOTE`). A note
+# worded without the word is not seen here, and only review and the pin below
+# catch it (ADR-0023). This is how a reworded or wrapped note -- either half
+# keeps the word -- is reported rather than skipped, as `NARROWS_LOOSE` does
+# for `Narrows:`. "in place" alone is not enough: a narrowing may say a clause
+# stays in place.
+CORRECTION_LOOSE = re.compile(r"\bcorrected\b", re.I)
+# The one line that may say "corrected" without being a correction note: a
+# `Narrows:` line quotes its target verbatim and cannot be reworded. Anything
+# else can be, and exempting it by a phrase it contains ("narrowed by ADR-N")
+# would also exempt a malformed note that names its entry that way.
+OTHER_NOTE = re.compile(r"^\*\*Narrows:\*\*")
+
+
+def _corrections(text):
+    """{issue: [(entry, line, rest), ...]} for each in-place correction noted
+    under Status; `rest` is the line after the note's own words. A note outside
+    the Status block is not read; the pin below is what catches a note that
+    has wandered."""
+    found = {}
+    for line in _status_block(text).splitlines():
+        for match in CORRECTED_NOTE.finditer(line):
+            entry, issue = match.groups()
+            found.setdefault(issue, []).append(
+                (entry, line, line[match.end():]))
+    return found
+
+
+def _correction_problems(text):
+    """What is wrong with a record's in-place correction notes, as strings.
+
+    A function for the same reason as `_amendment_problems`: the synthetic
+    records below run the check the corpus is held to."""
+    problems = []
+    section = _superseded_section(text)
+    tagged = set(AMENDED_TAG.findall(section or ""))
+    for line in _status_block(text).splitlines():
+        if (CORRECTION_LOOSE.search(line) and not CORRECTED_NOTE.search(line)
+                and not AMENDED_NOTE.search(line)
+                and not OTHER_NOTE.search(line)):
+            problems.append("a Status line reads as an in-place correction "
+                            "note but not in the form this check reads: %r"
+                            % line)
+    for issue, notes in sorted(_corrections(text).items()):
+        for entry, line, rest in notes:
+            if section is None:
+                problems.append("the note for issue #%s names a correction, "
+                                "but there is no `## Superseded wording` "
+                                "section to correct" % issue)
+                continue
+            # After the note's own words: a "Nothing moved." earlier on the
+            # line belongs to something else.
+            if NOTHING_MOVED not in rest.lower():
+                problems.append("the note for issue #%s does not say %r"
+                                % (issue, NOTHING_MOVED))
+            # A correction moves nothing, so a tag for the same issue says
+            # the opposite of the note.
+            if issue in tagged:
+                problems.append("issue #%s is noted as an in-place "
+                                "correction but also tags moved wording"
+                                % issue)
+            if AMENDED_NOTE.search(line):
+                problems.append("the note for issue #%s also reads as an "
+                                "amendment" % issue)
+            if entry.startswith("ADR-"):
+                opening = "Narrowed by %s." % entry
+            else:
+                opening = "Amended when %s was decided." % entry
+            if not re.search(r"^" + re.escape(opening), section, re.M):
+                problems.append("the note for issue #%s names the %s entry, "
+                                "which `## Superseded wording` does not have"
+                                % (issue, entry))
+    return problems
+
+
+@pytest.mark.parametrize("path", ADRS, ids=_number)
+def test_an_in_place_correction_is_noted_under_status(path):
+    assert _correction_problems(_read(path)) == [], path
+
+
+def test_the_in_place_corrections_are_seen():
+    """Anti-vacuity, and the case that raised issue #199: issue #95 corrected
+    both records' text in place, and neither said so under Status."""
+    corrected = {_number(p): set(_corrections(_read(p))) for p in ADRS}
+    for number, issues in {"0012": {"95"}, "0019": {"95"}}.items():
+        assert issues <= corrected[number], (number, corrected[number])
+
+
 def _section_problems(number, text):
     """What is wrong with how record `number` tags its superseded wording.
 
@@ -473,3 +575,64 @@ def test_the_section_check_on_synthetic_records(number, tag, extra, expected):
     assert len(problems) == len(expected), problems
     for fragment, problem in zip(expected, problems):
         assert fragment in problem, problems
+
+
+_CORRECTION = ('The text saying what holds instead, under the {entry} entry in '
+               '"Superseded wording", was corrected in place for issue #{issue}:'
+               ' it now says so. Nothing moved (ADR-0023).\n')
+
+
+def _without_section(text):
+    return text.split(SUPERSEDED, 1)[0]
+
+
+@pytest.mark.parametrize("note, move, expected", [
+    (_CORRECTION.format(entry="issue #7", issue=9), None, []),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        " Nothing moved (ADR-0023).", ""), None, ["does not say"]),
+    (_CORRECTION.format(entry="issue #7", issue=7), None,
+     ["also tags moved wording"]),
+    (_CORRECTION.format(entry="ADR-0025", issue=9), None, ["does not have"]),
+    (_CORRECTION.format(entry="issue #7", issue=9), _without_section,
+     ["no `## Superseded"]),
+    ("Nothing moved. " + _CORRECTION.format(entry="issue #7", issue=9).replace(
+        " Nothing moved (ADR-0023).", ""), None, ["does not say"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        " Nothing moved", " It was amended when issue #9 was decided."
+        " Nothing moved"), None, ["also reads as an amendment"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        "corrected in place", "corrected place"), None, ["not in the form"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        "was corrected in place", "was corrected\nin place"), None,
+     ["not in the form"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        "entry in \"Superseded wording\", was corrected",
+        "entry in \"Superseded wording\", was\ncorrected"), None,
+     ["not in the form"]),
+    ("The clause stays in place; it is narrowed by ADR-0009.\n", None, []),
+    ('**Narrows:** ADR-0005, "the mode is corrected on every relink"\n',
+     None, []),
+    ("Under the entry narrowed by ADR-0025, corrected in place for issue #9;"
+     " nothing moved.\n", None, ["not in the form"]),
+], ids=["consistent", "nothing-moved-missing", "same-issue-tagged",
+        "entry-missing", "no-section", "nothing-moved-before-the-note",
+        "also-an-amendment", "reworded", "wrapped", "wrapped-before-the-word",
+        "narrowing-note-says-in-place", "narrows-line-says-corrected",
+        "reworded-naming-a-narrowing"])
+def test_the_correction_check_on_synthetic_records(note, move, expected):
+    text = _SYNTHETIC.format(note=note, tag=_TAG7)
+    problems = _correction_problems(move(text) if move else text)
+    assert len(problems) == len(expected), problems
+    for fragment, problem in zip(expected, problems):
+        assert fragment in problem, problems
+
+
+def test_a_correction_reworded_as_a_decision_is_held_to_the_amendment_form():
+    """"was decided" makes the note an amendment's, which the amendment check
+    then holds to a tag the section does not have."""
+    note = _CORRECTION.format(entry="issue #7", issue=9).replace(
+        "was corrected in place for issue #9",
+        "was amended when issue #9 was decided")
+    text = _SYNTHETIC.format(note=note, tag=_TAG7)
+    assert _correction_problems(text) == []
+    assert any("cites issue #9" in p for p in _amendment_problems(text))
