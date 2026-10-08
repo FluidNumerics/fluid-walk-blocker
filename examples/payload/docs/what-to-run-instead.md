@@ -162,5 +162,5 @@ Documentation: <https://docs.example.org/hpc/walk-blocker>
 
 Contact: hpc-help@example.org
 
-Rendered by walk-blocker 0.3.2 from this node's `site.toml`; the mount table
+Rendered by walk-blocker 0.3.3 from this node's `site.toml`; the mount table
 above is that file's `[[filesystems.mounts]]`, as built.
