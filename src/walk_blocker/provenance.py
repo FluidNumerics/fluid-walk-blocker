@@ -35,6 +35,7 @@ The build must never acquire a dependency on git.
 import hashlib
 import json
 import os
+import re
 import subprocess
 
 from .render import manifest
@@ -131,6 +132,19 @@ def resolve_ref(repo, ref, timeout=DEFAULT_TIMEOUT):
 
 BRANCHES_SHOWN = 5
 
+# git's short-name rules, in the order `git rev-parse` tries them
+# (gitrevisions(7), "<refname>"): the name itself, then under refs/,
+# refs/tags/, refs/heads/, refs/remotes/, and refs/remotes/<name>/HEAD. The
+# first that exists wins, so a name listed from refs/heads/ or refs/remotes/
+# pastes back to its own ref only when no earlier candidate exists.
+SHORT_NAME_RULES = ("%s", "refs/%s", "refs/tags/%s", "refs/heads/%s",
+                    "refs/remotes/%s")
+
+# A top-level name git can read as a root ref: HEAD, FETCH_HEAD, ORIG_HEAD
+# and the like. Which of them exist is not something `for-each-ref` lists, so
+# a short name of this shape is treated as taken whether or not one does.
+ROOT_REF_SHAPE = re.compile(r"^[A-Z_-]+$")
+
 
 def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
     """([up to `count` branch names], whether there are more), for a hint.
@@ -139,31 +153,60 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
     A remote's `HEAD` symref is skipped: it names a branch already listed.
     It is told by being a symref, not by its name, so a real branch whose
     name ends in `/HEAD` is still listed.
-    The listing is two `for-each-ref` calls, each under the per-call
-    `timeout`. Best effort: if either fails or times out, the hint is dropped
-    rather than replacing the error it decorates.
+
+    Each name is one the caller can paste back as `--ref` and get the ref it
+    was listed for (issue #135). It is the short name when git resolves that
+    to this ref, and the full refname otherwise: a local branch that shadows
+    a remote-tracking one of the same short name, a tag that shadows a
+    branch, a branch called `HEAD`. The test applies git's documented rules
+    to the refs listed here instead of asking git to shorten the name, so the
+    hint does not depend on how a given git version abbreviates.
+
+    The listing is one `for-each-ref` call under the per-call `timeout`.
+    Best effort: if it fails or times out, the hint is dropped rather than
+    replacing the error it decorates.
     """
+    # The whole listing, not a `--count` window: every remote may carry a
+    # `HEAD` symref, so no fixed window can say whether more branches exist,
+    # and `--count` bounds only git's output, not its work. Every ref, not
+    # just the branches, because a tag or any other ref can shadow a name.
+    try:
+        # A refname cannot contain a space, so one separates the fields.
+        done = _git(repo, ["for-each-ref", "--format=%(refname) %(symref)"],
+                    timeout)
+    except ProvenanceError:
+        return [], False
+    if done.returncode != 0:
+        return [], False
+    refs = []
+    for line in done.stdout.decode("utf-8", "replace").splitlines():
+        full, _sep, symref = line.partition(" ")
+        refs.append((full, symref))
+    existing = set(full for full, _symref in refs)
     names = []
-    for prefix in ("refs/remotes", "refs/heads"):
-        # The whole listing, not a `--count` window: every remote may carry a
-        # `HEAD` symref, so no fixed window can say whether more branches
-        # exist, and `--count` bounds only git's output, not its work.
-        try:
-            # A refname cannot contain a space, so one separates the fields.
-            done = _git(repo, ["for-each-ref",
-                               "--format=%(refname) %(symref)", prefix],
-                        timeout)
-        except ProvenanceError:
-            return [], False
-        if done.returncode != 0:
-            return [], False
-        for line in done.stdout.decode("utf-8", "replace").splitlines():
-            full, _sep, symref = line.partition(" ")
-            if (prefix == "refs/remotes" and symref
+    for prefix in ("refs/remotes/", "refs/heads/"):
+        for full, symref in refs:
+            if not full.startswith(prefix):
+                continue
+            if (prefix == "refs/remotes/" and symref
                     and full.endswith("/HEAD")):
                 continue
-            names.append(full[len(prefix) + 1:])
+            names.append(_pasteable(full[len(prefix):], full, existing))
     return names[:count], len(names) > count
+
+
+def _pasteable(short, full, existing):
+    """`short` if git resolves it to `full`, else `full` itself, which always
+    resolves to itself: the first rule tries the name as given."""
+    if ROOT_REF_SHAPE.match(short):
+        return full
+    for rule in SHORT_NAME_RULES:
+        candidate = rule % short
+        if candidate == full:
+            return short
+        if candidate in existing:
+            return full
+    return full
 
 
 def reachable_commits(repo, ref, timeout=DEFAULT_TIMEOUT):
