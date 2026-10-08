@@ -3902,6 +3902,13 @@ def system_uninstall(args, env=None):
         return 8
 
     write_not_checked(unknown, before="uninstalling")
+    if args.dry_run:
+        # Issue #109: a dry run removed nothing, and since issue #53 any
+        # account can reach this line, so it must not say otherwise.
+        print("\ndry run: nothing was changed. The commands above would "
+              "uninstall walk-blocker;\nthe audit trail under %s would be "
+              "left in place." % args.spool_dir)
+        return 0
     print("\nremoved. the audit trail under %s is left in place." % args.spool_dir)
     return 0
 
