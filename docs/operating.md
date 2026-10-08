@@ -598,7 +598,7 @@ cannot append to a root-owned file.)
 tail -F <spool_dir>/reaper-audit.jsonl
 ```
 
-Three habits when reading it:
+Four habits when reading it:
 
 - **Count keys, not rows.** A standing process is re-logged every poll, so
   rows run several times findings. Derive the finding count by counting
@@ -607,6 +607,20 @@ Three habits when reading it:
   `true` means PSI corroborated, `false` means measured and quiet, and the
   key being absent means the uid had no differenced reading at all this
   poll. Do not read absent as false (ADR-0009).
+- **`action` is what was done, not what was judged.** `reported`: a
+  finding recorded and nothing signalled, which is every finding outside
+  `NEVER_KILL` under `--report`; `reported_never_killed`: a finding whose
+  verdict is in `NEVER_KILL`, under either flag; `blind`: the poll saw no
+  user slice or no process at all. The rest appear under `--kill` only:
+  `skipped_kill_cap`, past `[reaper].max_kills` this poll and not
+  signalled; `already_gone`, the process had left before `SIGTERM` was
+  sent; `terminated`, it was gone within `[reaper].kill_grace_s` of
+  `SIGTERM`, before any `SIGKILL` reached it; `killed`, it needed `SIGKILL`
+  and was gone at the re-check one second later; `signalled_but_wedged`, it
+  was still there at that re-check; `signal_failed`, a signal could not be
+  sent for a reason other than the process being gone; `kill_error`, the
+  attempt raised an unexpected error in the reaper itself, named in the
+  record's `kill_error` field.
 - **Sort by `NEVER_KILL`.** `orphan_idle`, `opaque_traversal` and
   `unparsed_traversal` can never be acted on and exit the unit 0; a new
   `runaway_traversal`, `orphan_traversal` or `fanout_traversal` exits 1; a
@@ -913,10 +927,10 @@ counts that justified it beside `site.toml`, outside this tree.
 
 The kill budget is `[reaper].kill_grace_s` between `SIGTERM` and `SIGKILL`,
 at most `[reaper].max_kills` per poll (the rest are recorded
-`skipped_kill_cap`), and a re-check after `[reaper].settle_s`. A process
-blocked in a filesystem syscall does not die until the syscall returns; if
-it is still there after the re-check the record says `signalled_but_wedged`,
-never `killed`. An audit log that reports success it did not achieve is
+`skipped_kill_cap`), and a re-check one second after `SIGKILL`. A
+process blocked in a filesystem syscall does not die until the syscall
+returns; if it is still there at the re-check the record says
+`signalled_but_wedged`, never `killed`. An audit log that reports success it did not achieve is
 worse than no audit log.
 
 ## 13. Changing a site value

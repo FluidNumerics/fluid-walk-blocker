@@ -14,6 +14,11 @@ Two lists, one scanner:
 
 exit 0 clean | 1 findings | 2 config/usage error | 3 --require-terms unmet
 
+A named path that does not exist, a scan that finds no file to read (except
+with --files-from, whose list may legitimately name no regular file), and
+--files-from combined with positional paths are all exit 2: none of them is a
+scan of what the caller meant.
+
 Stdlib only, Python 3.9, so it runs on a bare runner and on a node.
 """
 import argparse
@@ -182,6 +187,14 @@ def main(argv=None):
     ap.add_argument("--files-from", help="NUL- or newline-separated list, - for stdin")
     ap.add_argument("--quiet", action="store_true", help="never print matched text")
     a = ap.parse_args(argv)
+    if a.files_from and a.paths:
+        # Issue #193: --files-from used to win and the positional paths were
+        # never read, so a file the caller named passed unscanned. Scanning
+        # both would mix two roots (git's repo-relative names and the shell's
+        # cwd-relative ones); refusing is the smaller surprise. argparse's
+        # error() exits 2, which is EXIT_CONFIG.
+        ap.error("--files-from and positional paths cannot be combined; "
+                 "put every name in the list, or name them all as arguments")
     # Paths named on the command line mean what they mean to the caller's
     # shell, so without --root they resolve against the current directory.
     # A whole-tree scan and --files-from (git's repo-relative names) use REPO.
@@ -210,22 +223,47 @@ def main(argv=None):
                     data = fh.read()
             except OSError as exc:
                 die("cannot read --files-from %s: %s" % (a.files_from, exc.__class__.__name__))
-        files = [os.path.join(root, p) for p in re.split(r"[\0\n]", data) if p]
+        named = [os.path.join(root, p) for p in re.split(r"[\0\n]", data) if p]
+        files = named
     elif a.paths:
-        files = list(expand([os.path.join(root, p) for p in a.paths]))
+        named = [os.path.join(root, p) for p in a.paths]
+        files = None
     else:
+        named = []
         files = tracked_files(root)
 
-    findings = []
+    # Issue #192: a name the caller gave that is not there used to be counted
+    # as scanned and pass, so a typo read as a clean bill. lexists, not
+    # exists: a named symlink is there, and scan_file skips it by policy.
+    missing = [p for p in named if not os.path.lexists(p)]
+    if missing:
+        die("%d named path(s) do not exist under %s, first: %s"
+            % (len(missing), root, os.path.relpath(missing[0], root)))
+    if files is None:
+        files = list(expand(named))
+
+    findings, scanned = [], 0
     for f in files:
-        if os.path.isfile(f):
+        # A symlink is skipped by policy and read by nothing, so it is not
+        # counted: a tree holding only links read no file and must not pass.
+        if os.path.isfile(f) and not os.path.islink(f):
+            scanned += 1
             findings.extend(scan_file(f, os.path.relpath(f, root), rules, allow,
                                       terms, a.quiet))
+    if scanned == 0 and not a.files_from:
+        # A whole-tree scan, or named directories, that found nothing to read
+        # is a scan of the wrong tree (a copy of tools/ inside another
+        # repository, an empty payload directory), not a pass. Any
+        # --files-from list is exempt, empty or not: the pre-commit hook's
+        # list for a commit that only deletes is empty, and for one that only
+        # changes symlinks or a submodule pointer it names no regular file.
+        die("no files to scan under %s; pass paths explicitly or fix --root" % root)
     for line in findings:
         print(line)
-    # The root is named so a pass says which tree it passed.
+    # The root is named so a pass says which tree it passed. The count is of
+    # files actually read, not of names offered.
     sys.stderr.write("%d file(s) under %s, %d finding(s), terms=%s\n"
-                     % (len(files), root, len(findings), "on" if terms else "off"))
+                     % (scanned, root, len(findings), "on" if terms else "off"))
     return EXIT_FINDINGS if findings else EXIT_CLEAN
 
 
