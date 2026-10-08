@@ -255,14 +255,22 @@ def _action_habit():
 def test_every_action_the_reaper_writes_is_defined_in_the_runbook():
     """Issue #204: the runbook named some of the trail's actions, and a
     reader meeting a row with one it did not name had nothing to check it
-    against. The trail-reading habit defines every one, each followed by
-    its clause."""
-    habit = _action_habit()
-    missing = sorted(a for a in trail_actions()
-                     if not re.search(r"`%s`[:,]" % re.escape(a), habit))
+    against. The trail-reading habit defines every one, each once, as the
+    name that OPENS its own clause: a name mentioned inside another action's
+    clause is not its definition (review round 1 on PR #210)."""
+    defined = []
+    for clause in re.split(r"[;:.]\s+", _action_habit().replace("**", "")):
+        opener = re.match(r"`([a-z_]+)`(?:,|$)", clause)
+        if opener:
+            defined.append(opener.group(1))
+    twice = sorted(set(a for a in defined if defined.count(a) > 1))
+    assert not twice, "the habit defines these more than once: %s" % twice
+    missing = sorted(trail_actions() - set(defined))
     assert not missing, (
         "reaper.py writes actions the runbook's trail-reading habit does not "
         "define: %s" % ", ".join(missing))
+    extra = sorted(set(defined) - trail_actions())
+    assert not extra, "the habit defines actions reaper.py never writes: %s" % extra
 
 
 def test_the_runbook_times_the_kill_recheck_as_the_code_does():
