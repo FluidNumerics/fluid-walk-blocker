@@ -922,10 +922,12 @@ def test_a_zero_reference_floor_reports_the_sentinel(ratio_clock):
 
 
 def test_a_zero_reference_floor_is_discarded_by_the_floor_check(ratio_clock):
-    """Issue #197, the consumer of the same sentinel: with a floor allowance
-    set, 999.0 % is over it and every pair is discarded, naming the sentinel
-    and the zero floor. Under the `r >= 0` mutant gawk leaves the percentage
-    empty, the discard never fires, and the run exits 0."""
+    """Issue #197, the consumer of the same sentinel: with a 20 % floor
+    allowance, 999.0 % is over it and every pair is discarded, naming the
+    sentinel and the zero floor. The sentinel is a finite number, not an
+    infinity: an allowance of 999 or more keeps these pairs. Under the
+    `r >= 0` mutant gawk leaves the percentage empty, the discard never
+    fires, and the run exits 0."""
     ref, cand, env = ratio_clock(ZERO_FLOOR_REF_PAIRS, CAND_PAIRS)
     r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
                     env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="20"))
