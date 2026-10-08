@@ -2691,6 +2691,36 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
     assert os.path.join(args.prefix, "bin") in err
 
 
+@pytest.mark.parametrize("fish, zsh, bash", [
+    (True, True, True),
+    (False, True, True),
+    (False, False, False),
+])
+def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
+        tmp_path, monkeypatch, capsys, fish, zsh, bash):
+    """Issue #142: the hand route said "remove the fish drop-in outright"
+    whatever the hook table enabled, and with every hook off it said that
+    beside "the hook files are none on this site". The fish step appears
+    only with the fish hook, the marker step only with a shared hook file,
+    and a site with neither says it has no hook file to clean."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", fish)
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_ZSH", zsh)
+    monkeypatch.setattr(deploy, "HOOK_ENABLED_BASH", bash)
+    args = _args(tmp_path)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    os.unlink(os.path.join(args.prefix, "shim", "install.sh"))
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+
+    assert deploy.system_uninstall(args) == 5
+    err = capsys.readouterr().err
+    assert ("fish drop-in" in err) == fish, err
+    assert (args.fish_conf_file in err) == fish, err
+    assert ("walk-blocker markers" in err) == (zsh or bash), err
+    assert ("enables none" in err) == (not (fish or zsh or bash)), err
+    assert "none on this site" not in err, err
+
+
 def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
         tmp_path, monkeypatch, capsys):
     """Issue #110. The helper was checked after `systemctl disable --now`
