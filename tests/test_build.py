@@ -340,6 +340,38 @@ def test_a_failed_build_leaves_no_staging_litter_and_the_old_payload(scratch_pay
     assert os.listdir(str(scratch_payload.parent)) == ["payload"]
 
 
+def test_a_promoted_site_stamps_kill_into_deploy_and_nowhere_else(tmp_path):
+    """`[reaper].action` reaches deploy.py as REAPER_ACTION and no other
+    file: the reaper reads its argv, never the key (ADR-0034). A writing
+    build prints the notice; `--check` of the result is silent, because its
+    stdout is the difference list; the example's build says nothing, since
+    the notice is for the other value. And the payload's own dry run,
+    unprivileged, previews the promoted line."""
+    site = tmp_path / "site.toml"
+    site.write_text(open(EXAMPLE).read().replace(
+        'action = "report"', 'action = "kill"'), encoding="utf-8")
+    out = tmp_path / "payload"
+    code, stdout, err = _build(site, out)
+    assert code == 0 and err == "", err
+    assert 'reaper.action = "kill"' in stdout and "--kill" in stdout, stdout
+    deploy_text = (out / "deploy.py").read_text()
+    assert ("REAPER_ACTION = 'kill'  # GENERATED from site.toml:reaper.action"
+            in deploy_text)
+    for name in ("reaper.py", "search_rules.py", "survey.py", "walk-job",
+                 "shim/guard.sh", "shim/install.sh", "shim/wrapped_names.sh"):
+        assert "reaper.action" not in (out / name).read_text(), name
+    assert _build(site, out, check=True)[:2] == (0, "")
+    code, stdout, _e = _build(EXAMPLE, tmp_path / "example")
+    assert code == 0 and "reaper.action" not in stdout, stdout
+
+    r = subprocess.run([sys.executable, str(out / "deploy.py"),
+                        "--system", "--dry-run"],
+                       capture_output=True, text=True, timeout=60)
+    lines = [l for l in r.stdout.splitlines() if l.startswith("ExecStart=")]
+    assert len(lines) == 1, r.stdout + r.stderr
+    assert "/reaper.py --kill --spool " in lines[0], lines
+
+
 # ------------------------------------------------------------ config errors --
 
 def test_a_config_error_exits_2_with_the_validate_wording(tmp_path):

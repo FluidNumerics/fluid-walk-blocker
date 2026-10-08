@@ -3276,13 +3276,72 @@ def test_a_unit_path_that_is_a_symlink_is_not_followed(tmp_path):
     assert target.read_text() == "do not truncate me\n"
 
 
-def test_the_reaper_ships_report_only():
+def test_the_reaper_ships_report_only_by_default():
     """Promoting to --kill is a decision someone makes after reading real
-    findings. Checked against ExecStart specifically: `--kill-after` on the
-    unrelated ExecStartPre legitimately puts `--kill` elsewhere in the unit."""
+    findings, recorded as `[reaper].action = "kill"`; the example, and so
+    this suite's payload, leaves it at the default. Checked against
+    ExecStart specifically: `--kill-after` on the unrelated ExecStartPre
+    legitimately puts `--kill` elsewhere in the unit."""
+    assert deploy.REAPER_ACTION == "report"
     _directive, command = exec_lines("ExecStart=")[0]
     assert "--report" in command
     assert "--kill" not in command
+
+
+@pytest.mark.parametrize("action, flags, verb", [
+    ("report", ["--report"], "report"),
+    ("kill", ["--kill"], "report and stop"),
+])
+def test_the_compiled_action_is_all_that_puts_kill_in_execstart(
+        monkeypatch, action, flags, verb):
+    """`[reaper].action` is stamped as REAPER_ACTION and is the whole of
+    what decides the reaper's flags: `kill` renders `--kill` and nothing
+    else, `report` renders no `--kill` at all, and the retired
+    `--kill-others` is rendered by neither (ADR-0034). The Description says
+    the same thing in words, so `systemctl status` reads right too."""
+    monkeypatch.setattr(deploy, "REAPER_ACTION", action)
+    _directive, command = exec_lines("ExecStart=")[0]
+    words = command.split()
+    assert words[2:] == flags + ["--spool", "/SPOOL"], command
+    assert ("--kill" in words) == (action == "kill")
+    assert "--kill-others" not in command
+    _d, description = exec_lines("Description=")[0]
+    assert description.endswith(": %s unbounded filesystem walks" % verb), description
+
+
+def test_the_action_tables_are_exactly_the_schema_enum():
+    """deploy.py's two tables and the schema's enum are one closed set: a
+    value the schema accepts cannot reach render_units() unmapped, and no
+    mapping exists for a value the schema refuses."""
+    from walk_blocker import config
+    props = config.load_schema()["properties"]["reaper"]["properties"]
+    enum = set(props["action"]["enum"])
+    assert set(deploy.REAPER_FLAGS) == enum == set(deploy.REAPER_VERBS)
+    assert props["action"]["default"] == "report"
+
+
+def test_the_preview_and_the_install_agree_on_a_promoted_unit(
+        tmp_path, monkeypatch, capsys):
+    """The dry run is where an operator reads the ExecStart a promotion
+    writes, before it is written; both come from render_units() (ADR-0034),
+    and the post-install message says which mode landed."""
+    monkeypatch.setattr(deploy, "REAPER_ACTION", "kill")
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    args = _args(tmp_path)
+    assert deploy.system_preview(args) == 0
+    previewed = capsys.readouterr().out
+    line = "ExecStart=%s %s/reaper.py --kill --spool %s" % (
+        deploy.TRUSTED_PYTHON3, args.prefix, args.spool_dir)
+    assert line in previewed.splitlines(), previewed
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    assert deploy.system_execute(args) == 0
+    out = capsys.readouterr().out
+    written = open(os.path.join(args.unit_dir, deploy.SERVICE_UNIT)).read()
+    assert line in written.splitlines(), written
+    assert "reaper.action = kill" in out, out
+    assert "report-only" not in out
 
 
 def test_layer_2_does_not_depend_on_layer_1_housekeeping():
