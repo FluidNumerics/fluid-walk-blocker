@@ -43,8 +43,9 @@ def journal(shim_variant):
     if real is None:
         pytest.skip("logger(1) is not on PATH; the transport cannot be measured")
     # AF_UNIX paths are capped near 108 bytes and pytest's tmp_path can be
-    # longer, so the socket lives in a short directory of its own.
-    sockdir = tempfile.mkdtemp(prefix="wb-log-")
+    # longer, so the socket lives in a short directory of its own. Pinned to
+    # /tmp: a bare mkdtemp() honours TMPDIR, which can be just as long.
+    sockdir = tempfile.mkdtemp(prefix="wb-log-", dir="/tmp")
     path = os.path.join(sockdir, "s")
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     sock.bind(path)
