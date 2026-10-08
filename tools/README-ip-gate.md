@@ -33,10 +33,28 @@ current directory: to check a worktree, run that worktree's copy of the script.
 Paths named on the command line are the exception: without `--root` they are
 read relative to the current directory, as the shell named them.
 
-Exit codes: 0 clean, 1 findings, 2 configuration error, 3 `--require-terms`
-given and no term list found. The stderr summary always names the root it
-scanned and says `terms=on` or `terms=off`, so a pass on the wrong tree and a
-structural-only pass are both visible as such.
+Exit codes: 0 clean, 1 findings, 2 configuration or usage error, 3
+`--require-terms` given and no term list found. The stderr summary always
+names the root it scanned, counts the files it actually read, and says
+`terms=on` or `terms=off`, so a pass on the wrong tree and a structural-only
+pass are both visible as such.
+
+Three cases that used to pass are exit 2, because none of them scans what the
+caller meant:
+
+- a path named on the command line or in `--files-from` that does not exist
+  (a typo is not a clean file);
+- a scan that finds no file to read: a whole-tree scan of a root that tracks
+  nothing, such as a copy of `tools/` inside another repository, or named
+  directories that hold no files. An empty `--files-from` list is the
+  exception and still passes, since a commit that only deletes stages no names
+  for the pre-commit hook;
+- `--files-from` together with positional paths. Put every name in the list,
+  or name them all as arguments.
+
+The pre-commit hook reads the working-tree copy of each staged name, so a file
+staged and then deleted from the working tree before the commit now stops the
+hook with exit 2 rather than passing unread.
 
 ## Rotating the secret
 

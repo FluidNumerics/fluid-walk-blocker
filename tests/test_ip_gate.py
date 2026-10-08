@@ -70,13 +70,81 @@ def test_named_paths_without_root_are_read_from_the_cwd(tmp_path):
 
 def test_files_from_without_root_reads_names_against_the_repository(tmp_path):
     # --files-from carries git's repo-relative names, so it keeps REPO as the
-    # root even when a path is named too (that path is ignored today, #193).
+    # root, whatever the current directory.
     (tmp_path / "list").write_text("README.md\n")
-    (tmp_path / "a.md").write_text("plain\n")
-    r = run(["--terms", os.devnull, "--files-from", "list", "a.md"], cwd=str(tmp_path))
+    r = run(["--terms", os.devnull, "--files-from", "list"], cwd=str(tmp_path))
     # Only the root is asserted: README.md's content is the tree test's job.
     assert r.stderr.strip().startswith("1 file(s) under %s, " % os.path.realpath(ROOT)), (
         r.stdout + r.stderr)
+
+
+def test_files_from_with_positional_paths_is_a_usage_error(tmp_path):
+    # Issue #193: the positional path used to be dropped without a word, so a
+    # file the caller named passed unscanned.
+    (tmp_path / "list").write_text("a.md\n")
+    (tmp_path / "a.md").write_text("plain\n")
+    (tmp_path / "b.md").write_text("10.0.0.1\n")
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "--files-from", "list", "b.md"])
+    assert r.returncode == gate.EXIT_CONFIG, r.stdout + r.stderr
+    assert "cannot be combined" in r.stderr
+    assert r.stdout == ""
+
+
+@pytest.mark.parametrize("how", ["positional", "files-from"])
+def test_a_named_path_that_does_not_exist_is_a_config_error(tmp_path, how):
+    # Issue #192: a mistyped name was counted as scanned and passed.
+    (tmp_path / "a.md").write_text("plain\n")
+    if how == "positional":
+        args = ["a.md", "no-such-file.md"]
+    else:
+        (tmp_path / "list").write_text("a.md\nno-such-file.md\n")
+        args = ["--files-from", str(tmp_path / "list")]
+    r = run(["--root", str(tmp_path), "--terms", os.devnull] + args)
+    assert r.returncode == gate.EXIT_CONFIG, r.stdout + r.stderr
+    assert "do not exist" in r.stderr and "no-such-file.md" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_a_named_dangling_symlink_exists_and_is_skipped(tmp_path):
+    # lexists, not exists: a link is there, and links are skipped by policy.
+    (tmp_path / "a.md").write_text("plain\n")
+    os.symlink(tmp_path / "gone.md", tmp_path / "link.md")
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "a.md", "link.md"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("case", ["untracked-tree", "empty-dir"])
+def test_a_scan_that_finds_no_files_is_not_a_pass(tmp_path, case):
+    # Issue #192: a copy of tools/ in a repository that tracks nothing under
+    # the root reported "0 file(s)" and exited 0.
+    if case == "untracked-tree":
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "a.md").write_text("plain\n")
+        args = ["--root", str(tmp_path)]
+    else:
+        (tmp_path / "empty").mkdir()
+        args = ["--root", str(tmp_path), "empty"]
+    r = run(args + ["--terms", os.devnull])
+    assert r.returncode == gate.EXIT_CONFIG, r.stdout + r.stderr
+    assert "no files to scan" in r.stderr
+
+
+def test_an_empty_files_from_list_is_still_a_pass(tmp_path):
+    # A commit that only deletes stages no names for the pre-commit hook.
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "--files-from", "-"], input="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.strip() == "0 file(s) under %s, 0 finding(s), terms=off" % tmp_path
+
+
+def test_the_summary_counts_files_read_not_names_offered(tmp_path):
+    # A directory named in --files-from (a submodule's gitlink, say) is not a
+    # file read.
+    (tmp_path / "a.md").write_text("plain\n")
+    (tmp_path / "sub").mkdir()
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "--files-from", "-"],
+            input="a.md\nsub\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.strip().startswith("1 file(s) under ")
 
 
 def test_the_summary_names_the_root_it_scanned(tmp_path):
