@@ -6197,7 +6197,7 @@ def test_a_file_entry_that_cannot_reach_its_file_is_no_reader(
     """A named user entry on the spool without search denies that account
     whatever its groups; a spool nobody else can search denies everyone. In
     both, the file entry reads nothing and the report leaves it out.
-    Mutation: return SEARCH_MAYBE for every case and it is said instead."""
+    Mutation: return a condition for every case and it is said instead."""
     spool = _acl_spool(tmp_path)
     trail = _trail(spool)
     os.chmod(spool, mode)
