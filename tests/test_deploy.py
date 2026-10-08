@@ -3822,7 +3822,7 @@ def test_the_preview_does_not_claim_the_timer_stays_unarmed(tmp_path, capsys,
 
     assert "NOT enable %s" % deploy.TIMER_UNIT not in out, out
     assert "install.sh --system leaves it" not in out, out
-    assert ("#   - enable and start %s: deploy.py does this once"
+    assert ("#   - enable and start %s: deploy.py does this after"
             % deploy.TIMER_UNIT) in out, out
     assert "# NOT enable anything else, prose that must survive" in out
     assert "# trailer" in out
