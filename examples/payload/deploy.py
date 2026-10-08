@@ -218,8 +218,9 @@ STAGING_PREFIX = "walk-blocker-stage."
 # root-write sink -- install.sh reads it, rewrites it 0644, and has the real
 # shell source it AS ROOT to prove the hook fires -- so every one of them
 # gets the same filesystem-state checks whether or not it is enabled: a
-# disabled hook's file is still validated as a path, and never written or
-# stripped. Which shells are enabled, and which are required, is a census
+# disabled hook's file is still validated as a path, never written, and
+# stripped only by the uninstall, only of a block that is walk-blocker's
+# (issue #196). Which shells are enabled, and which are required, is a census
 # result at the site, compiled in here and not decided by this file.
 DEFAULT_BASHRC_FILE = '/etc/bash.bashrc'  # GENERATED from site.toml:hooks.bash.file
 HOOK_ENABLED_BASH = True  # GENERATED from site.toml:hooks.bash.enabled
@@ -356,6 +357,14 @@ def enabled_hook_files(args):
     for messages that tell an operator where to look."""
     return [getattr(args, attr) for attr, _shell, enabled in hook_table()
             if enabled]
+
+
+def all_hook_files(args, fish=None):
+    """Every hook file this build knows, enabled or not: what install.sh
+    --uninstall visits (issue #196). `fish` True or False keeps only the
+    drop-in, or only the shared files; None keeps all three."""
+    return [getattr(args, attr) for attr, shell, _enabled in hook_table()
+            if fish is None or (shell == "fish") == fish]
 
 
 def default_paths():
@@ -3870,8 +3879,8 @@ def system_uninstall(args, env=None):
     # Every hook file too, not just the prefix: this teardown reads or
     # removes all three and deletes unit files, so each needs the same
     # checks the install path applies. A disabled hook's file is validated
-    # all the same -- the cost is a stat, and a hand-edited copy that
-    # re-enables it would otherwise reach strip_block() unchecked. The spool
+    # all the same: install.sh --uninstall visits it too, and strips a block
+    # it finds there (issue #196). The spool
     # is excluded because uninstall does not touch it. Scoped to the paths
     # this process may inspect, as preflight() scopes the install's.
     inspectable = []
@@ -3988,22 +3997,18 @@ def system_uninstall(args, env=None):
     else:
         helper, why = uninstall_helper(args.prefix)
     if helper is None:
-        # Name only the hook steps this site has (issue #142): the fish
-        # drop-in exists only when the fish hook is enabled, and a site with
-        # no hook enabled has no hook step at all.
-        shared = [getattr(args, attr) for attr, shell, enabled in hook_table()
-                  if enabled and shell != "fish"]
-        fish = [getattr(args, attr) for attr, shell, enabled in hook_table()
-                if enabled and shell == "fish"]
-        hook_steps = ""
-        if shared:
-            hook_steps += ("  strip the block between the walk-blocker markers"
-                           " in\n  %s;\n" % ", ".join(shared))
-        if fish:
-            hook_steps += ("  remove the fish drop-in %s\n  outright (the"
-                           " whole file is walk-blocker's);\n" % fish[0])
-        if not hook_steps:
-            hook_steps = "  no hook file to clean, since this site enables none;\n"
+        # Every hook file this build knows, enabled or not, because that is
+        # what install.sh --uninstall visits (issue #196): a hook the site
+        # disabled after an install wrote it still carries that install's
+        # block. Worded so that it holds for a file that was never ours.
+        shared = all_hook_files(args, fish=False)
+        fish = all_hook_files(args, fish=True)
+        hook_steps = (
+            "  strip the block between the walk-blocker markers in\n"
+            "  %s, where present;\n"
+            "  remove the fish drop-in %s\n"
+            "  if its first line is walk-blocker's generated header;\n"
+            % (", ".join(shared), fish[0]))
         sys.stderr.write(
             "deploy.py: refusing to run the teardown helper: %s\n" % why)
         sys.stderr.write(
@@ -4089,8 +4094,7 @@ def system_uninstall(args, env=None):
         sys.stderr.write(
             "  Layer 1 may still be installed: check the hook files (%s)\n"
             "  and for shims under %s/bin, before assuming the guard is gone.\n"
-            % (", ".join(enabled_hook_files(args)) or "none on this site",
-               args.prefix))
+            % (", ".join(all_hook_files(args)), args.prefix))
         return 8
 
     if failures:

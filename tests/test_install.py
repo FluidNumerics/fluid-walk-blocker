@@ -1155,14 +1155,135 @@ def test_a_disabled_hook_is_never_written_verified_or_reported(tmp_path):
 
 
 def test_a_disabled_hook_is_left_alone_by_uninstall(tmp_path):
-    """An uninstall removes what this build could have written; a file a
-    disabled hook names is not that, and its contents stay untouched."""
+    """A file a disabled hook names, with no block of ours in it, is not
+    something walk-blocker wrote, and its contents stay untouched."""
     layout = Layout(tmp_path)
     layout.zshenv.write_text("# not ours\n")
     result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
                                  **{"hooks.zsh.enabled": False})
     assert result.returncode == 0, result.stderr
     assert layout.zshenv.read_text() == "# not ours\n"
+
+
+# Issue #196: `--uninstall` visits every hook file the build knows, enabled
+# or not. A disabled hook's file has to prove it is walk-blocker's.
+
+def test_a_hook_enabled_at_install_then_disabled_is_cleaned_by_uninstall(tmp_path):
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(STOCK_BASHRC)
+    layout.zshenv.write_text("# a stock zshenv\n")
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert BEGIN in layout.zshenv.read_text()
+    assert layout.fishconf.exists()
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.zsh.enabled": False,
+                                    "hooks.fish.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert layout.zshenv.read_text() == "# a stock zshenv\n"
+    assert layout.bashrc.read_text() == STOCK_BASHRC
+    assert not layout.fishconf.exists()
+    removed = [ln for ln in result.stdout.splitlines() if "removed from" in ln]
+    assert len(removed) == 1, result.stdout
+    for path in (layout.bashrc, layout.zshenv, layout.fishconf):
+        assert str(path) in removed[0], result.stdout
+
+
+def test_a_disabled_hooks_unblocked_file_keeps_its_bytes_mode_and_inode(tmp_path):
+    """Never rewritten: not re-moded 0644, not replaced by a rename."""
+    layout = Layout(tmp_path)
+    layout.zshenv.write_bytes(b"# not ours\nexport X=1\n")
+    os.chmod(str(layout.zshenv), 0o600)
+    before = os.stat(str(layout.zshenv))
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    after = os.stat(str(layout.zshenv))
+    assert layout.zshenv.read_bytes() == b"# not ours\nexport X=1\n"
+    assert (after.st_ino, after.st_mode) == (before.st_ino, before.st_mode)
+    assert str(layout.zshenv) not in result.stdout + result.stderr
+
+
+def test_an_enabled_hooks_unblocked_file_is_not_rewritten_either(tmp_path):
+    """strip_block() rewrites only a file that carries the block, and the
+    "removed" line names only a file actually cleaned."""
+    layout = Layout(tmp_path)
+    layout.zshenv.write_text("# a stock zshenv\n")
+    os.chmod(str(layout.zshenv), 0o600)
+    before = os.stat(str(layout.zshenv))
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    after = os.stat(str(layout.zshenv))
+    assert (after.st_ino, after.st_mode) == (before.st_ino, before.st_mode)
+    assert str(layout.zshenv) not in result.stdout
+    assert "no hook file carried walk-blocker's block or drop-in" in result.stdout
+
+
+def test_a_disabled_hook_in_a_missing_directory_does_not_refuse(tmp_path):
+    """A node without that shell has no directory for its file at all. The
+    stand-in `stat` calls that directory someone else's, so a chain walk
+    over it would refuse: exit 0 shows the absent file was never walked."""
+    layout = Layout(tmp_path, zshenv=tmp_path / "no-such-dir" / "zshenv")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 stat_body=stat_stub_uid_for(
+                                     str(tmp_path / "no-such-dir"), "1000 755"),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not layout.zshenv.parent.exists()
+
+
+def test_a_disabled_hooks_symlink_is_left_unread_and_unrefused(tmp_path):
+    layout = Layout(tmp_path)
+    target = tmp_path / "target"
+    target.write_text(BEGIN + "\nsecret\n" + "# <<< walk-blocker <<<\n")
+    os.chmod(str(target), 0o600)
+    os.symlink(str(target), str(layout.zshenv))
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert os.path.islink(str(layout.zshenv))
+    assert "secret" in target.read_text()
+    assert oct(target.stat().st_mode & 0o777) == oct(0o600)
+    assert "left in place" in result.stdout
+
+
+def test_a_disabled_hooks_block_in_a_file_someone_else_owns_is_refused(tmp_path):
+    """A block of ours makes it a file the uninstall rewrites, so the
+    install's leaf refusal applies -- before anything is torn down."""
+    layout = Layout(tmp_path)
+    layout.zshenv.write_text(BEGIN + "\nx\n# <<< walk-blocker <<<\n# rest\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 stat_body=stat_stub_uid_for(str(layout.zshenv), "1000 644"),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "uid 1000" in result.stderr
+    assert BEGIN in layout.zshenv.read_text()
+
+
+def test_a_disabled_fish_drop_in_goes_only_with_its_generated_header(tmp_path):
+    layout = Layout(tmp_path)
+    layout.fishconf.write_text("set -gx SOMETHING else\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.fish.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert layout.fishconf.read_text() == "set -gx SOMETHING else\n"
+    assert "generated header" in result.stdout
+
+    layout.fishconf.write_text(
+        "# walk-blocker -- generated by install.sh, do not edit by hand.\nx\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.fish.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not layout.fishconf.exists()
+
+
+def test_the_drop_in_header_is_the_one_the_installer_writes(tmp_path):
+    """The uninstall's proof of ownership is the first line write_fish_conf()
+    produces; the two cannot drift."""
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0)
+    assert result.returncode == 0, result.stdout + result.stderr
+    first = layout.fishconf.read_text().splitlines()[0]
+    assert first == "# walk-blocker -- generated by install.sh, do not edit by hand."
 
 
 def test_the_preview_lists_each_class_by_file(tmp_path):

@@ -2,6 +2,8 @@
 
 **Status:** accepted, 2026-09-16
 The Decision's install command below reads `--system`, which is current; the spelling it replaced is recorded under "Superseded wording" below.
+The Decision's exit status for a required hook that fails its proof, with the Consequences bullet on Layer 2, was amended when issue #195 was decided: a failed `systemctl daemon-reload` or `enable --now` after the hook step exits with that command's own status, not 4. The wording it replaced is recorded under "Superseded wording" below.
+The Consequences bullet on uninstall was amended when issue #196 was decided: the uninstall visits every hook file the build knows, enabled or not, and removes only walk-blocker's own block or drop-in. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`
 
 ## Context
@@ -80,7 +82,9 @@ a `gate` of `"required"` or `"best-effort"`.**
 
 A **required** shell fails the install (`install.sh --system` exits 4, and
 `deploy.py` exits 4 after it, unless its own post-install ownership check
-refuses first and exits 9) if `verify_<shell>_hook` cannot prove the file fires under
+refuses first and exits 9, or a `systemctl daemon-reload` or `enable --now`
+after it fails and `deploy.py` exits with that command's own status) if
+`verify_<shell>_hook` cannot prove the file fires under
 remote-command conditions with the shim directory stripped from `PATH` — the
 probe must not pass merely because the caller's own `PATH` already carries it.
 For bash that is `SHLVL=0`, `SSH_CLIENT` set, stdin `/dev/null`, requiring a
@@ -138,9 +142,14 @@ absence is ordinary. Do not soften one to match the other.
   intermediates included, unlike `os.makedirs`.
 - **The verify runs every hook without short-circuiting**, so a single failed
   install reports every problem it has rather than one-fix-one-discover.
-- **Uninstall removes every hook file unconditionally**, whether or not the
-  shell that would have read it still resolves. An uninstall cleans up what
-  was written; it does not condition that on the reader still being around.
+- **Uninstall cleans every hook file the build knows, enabled or not**,
+  whether or not the shell that would have read it still resolves. It strips
+  walk-blocker's marked block from a shared file and removes the fish drop-in;
+  for a hook the site does not enable it touches only a file carrying
+  walk-blocker's own block or the drop-in's generated header, and leaves
+  anything else there as it found it. An uninstall cleans up what was
+  written; it does not condition that on the reader still being around, or on
+  the site still enabling the hook that wrote it.
 - **The `SSH_CLIENT` export is a third-party detail the bash hook rests on.**
   Where a site runs a second ssh transport beside OpenSSH, one bash hook covers
   both only because both export `SSH_CLIENT`. That is load-bearing and appears
@@ -156,8 +165,11 @@ absence is ordinary. Do not soften one to match the other.
   same way.
 - **A failed required-hook proof does not take Layer 2 down.** The deploy
   writes the reaper's units and re-enables its timer over a payload that
-  passed every trust check, then exits 4 naming Layer 1 as unproven. Only a
-  refusal, where root must not keep running what it rejected, leaves the
+  passed every trust check, then exits 4 naming Layer 1 as unproven. If
+  `systemctl daemon-reload` or `enable --now` fails there, it exits with that
+  command's own status instead, because 4 promises that Layer 2 is running,
+  and says that neither layer can be relied on. Apart from that failure, only
+  a refusal, where root must not keep running what it rejected, leaves the
   timer disabled, and the deploy says that it has.
 
 ## Re-measure when
@@ -190,3 +202,38 @@ A shell that moves from nested-only to registered moves from `best-effort` to
 Superseded by ADR-0021. The Decision's install command was written as
 `--system --i-have-approval`; the flag is gone, and the spelling was corrected
 in place so that a reader meets the command they would actually run.
+
+Amended when issue #195 was decided. The Decision above read:
+
+> A **required** shell fails the install (`install.sh --system` exits 4, and
+> `deploy.py` exits 4 after it, unless its own post-install ownership check
+> refuses first and exits 9) if `verify_<shell>_hook` cannot prove the file fires under
+> remote-command conditions with the shim directory stripped from `PATH` — the
+> probe must not pass merely because the caller's own `PATH` already carries it.
+
+The Consequences above read:
+
+> - **A failed required-hook proof does not take Layer 2 down.** The deploy
+>   writes the reaper's units and re-enables its timer over a payload that
+>   passed every trust check, then exits 4 naming Layer 1 as unproven. Only a
+>   refusal, where root must not keep running what it rejected, leaves the
+>   timer disabled, and the deploy says that it has.
+
+A failed `systemctl daemon-reload` or `enable --now` after the hook step was
+already a second exception, recorded in `docs/operating.md` but not here;
+issue #145 chose the command's own status over 4. Exit 4 promises that
+Layer 2 is running, and after that failure it is not known to be.
+
+Amended when issue #196 was decided. The Consequences above read:
+
+> - **Uninstall removes every hook file unconditionally**, whether or not the
+>   shell that would have read it still resolves. An uninstall cleans up what
+>   was written; it does not condition that on the reader still being around.
+
+The uninstall visited only the hooks the site enables, so a hook written
+while a shell was enabled stayed behind once the site disabled it. It now
+visits every hook file the build knows. A disabled hook's file may never have
+been walk-blocker's, so there it removes only what carries walk-blocker's own
+block or header. Nor did "removes every hook file" ever mean deleting a shared
+rc file: the uninstall strips a block from one, and removes only the fish
+drop-in.
