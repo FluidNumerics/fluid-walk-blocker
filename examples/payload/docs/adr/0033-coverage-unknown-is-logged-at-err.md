@@ -1,6 +1,7 @@
 # ADR-0033: A coverage change the relink cannot judge is logged at err, above real drift
 
 **Status:** accepted, 2026-10-05
+The clause on a caller-bug record's priority, in the Decision and in two Consequences bullets, was amended when issue #189 was decided: every caller-bug record is at `user.warning`, and a long-form call naming any action but `uncovered_mount` is one. The wording it replaced is recorded under "Superseded wording" below.
 **Narrows:** ADR-0031, "The priority is the change record's."
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
@@ -44,11 +45,11 @@ the only form the relink reports it in. Every other record keeps its
 priority: `coverage_change` `unwrapped-N` at `user.warning`, marked or
 not, `uncovered_mount` at `user.notice`, and the `hook_check`,
 `audit_dir` and `relink_refused` records at `user.warning`. A caller-bug
-record is never raised, whatever state the bad call named: it keeps its
-form's priority, `user.warning` in the short form and `user.notice` in
-the long. The record's grammar is unchanged, so a long-form call naming
-`coverage_change` keeps the long form's `user.notice`; no caller makes
-one, and issue #189 asks whether it should be a caller bug instead.
+record is never raised, whatever state the bad call named: every
+caller-bug record is at `user.warning`, whatever its form, so a bug report
+always shows under `journalctl -p warning`. The long form belongs to
+`uncovered_mount` alone: a four- or five-argument call naming any other
+action, `coverage_change` included, is a caller bug.
 
 ## Consequences
 
@@ -62,10 +63,11 @@ one, and issue #189 asks whether it should be a caller bug instead.
   does.
 - **The raise is for the fact, not the name.** It lives after
   `sg_report`'s caller-bug check, so a malformed call that happens to
-  name `unknown` stays a bug report at its form's priority.
+  name `unknown` stays a bug report at `user.warning`.
 - Tests in `tests/test_install.py` pin `unknown` at err with and without
-  `reasserted`, `unwrapped-1` at warning, a short-form caller-bug call
-  at warning, and a long-form `unknown` at notice, under both shells.
+  `reasserted`, `unwrapped-1` at warning, a caller-bug call at warning in
+  each form, and a long-form `coverage_change` as a caller bug at
+  warning, under both shells.
 
 ## Re-measure when
 
@@ -74,3 +76,28 @@ n/a: structural.
 ## Site config touched
 
 none
+
+## Superseded wording
+
+Amended when issue #189 was decided. The Decision above read, in its last
+two sentences:
+
+> A caller-bug record is never raised, whatever state the bad call named:
+> it keeps its form's priority, `user.warning` in the short form and
+> `user.notice` in the long. The record's grammar is unchanged, so a
+> long-form call naming `coverage_change` keeps the long form's
+> `user.notice`; no caller makes one, and issue #189 asks whether it
+> should be a caller bug instead.
+
+The Consequences above read:
+
+> - **The raise is for the fact, not the name.** It lives after
+>   `sg_report`'s caller-bug check, so a malformed call that happens to
+>   name `unknown` stays a bug report at its form's priority.
+> - Tests in `tests/test_install.py` pin `unknown` at err with and without
+>   `reasserted`, `unwrapped-1` at warning, a short-form caller-bug call
+>   at warning, and a long-form `unknown` at notice, under both shells.
+
+A long-form bug report at `user.notice` was hidden from
+`journalctl -p warning`, so every caller-bug record is now at warning,
+and the long form is `uncovered_mount`'s alone.

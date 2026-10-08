@@ -1286,6 +1286,15 @@ sg_report() {
     # is a caller bug and the record says so. A third argument used to be
     # ignored, which made a misspelt marker an unmarked change record.
     #
+    # The long form is `uncovered_mount`'s alone: a four- or five-argument
+    # call naming any other action is a caller bug (issue #189). It used to
+    # be accepted, and wrote a record no reader of that action expects.
+    #
+    # Every `caller-bug` record is at user.warning, whatever its form, so a
+    # bug report always shows under `journalctl -p warning` (ADR-0033). The
+    # long form's notice is for the fact an `uncovered_mount` reports, and a
+    # long-form call that is a bug reports no such fact.
+    #
     # One line into `journalctl -t walk-blocker`, the tag the shim's
     # escape-hatch records already use. So one query answers what overrode
     # Layer 1, when Layer 1 stopped being installed, when its upkeep last
@@ -1331,6 +1340,7 @@ sg_report() {
         fi
     fi
     if [ $# -eq 4 ] || [ $# -eq 5 ]; then
+        [ "$_rep_action" = uncovered_mount ] || _rep_bug=1
         _rep_mount=$2
         _rep_fs=$3
         _rep_state=$4
@@ -1381,6 +1391,7 @@ sg_report() {
         _rep_action=caller-bug
         _rep_state=caller-bug
         _rep_extra=''
+        _rep_prio=user.warning
     elif [ $# -le 3 ]; then
         # The linked-set memory was missing, damaged or a link, so the relink
         # cannot tell whether coverage drifted at all: above the warning that
