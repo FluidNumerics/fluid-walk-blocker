@@ -374,16 +374,19 @@ CORRECTED_NOTE = re.compile(
     r'under the (ADR-\d{4}|issue #\d+) entry in "Superseded wording", '
     r'was corrected in place for issue #(\d+)\b')
 NOTHING_MOVED = "nothing moved"
-# What a correction note says in any wording. A Status line that says it and
-# is not in the strict form is a note the check above would never read, so it
-# is reported rather than skipped -- as `NARROWS_LOOSE` does for `Narrows:`.
-# A note wrapped across two lines keeps the word on one half or the other.
-# "in place" alone is not enough: a narrowing may say a clause stays in place.
+# In a Status line the word "corrected" is reserved for this note; a line that
+# uses it otherwise is refused, and loudly, so its author rewords it. A note
+# worded without the word is not seen here, and only review and the pin below
+# catch it (ADR-0023). This is how a reworded or wrapped note -- either half
+# keeps the word -- is reported rather than skipped, as `NARROWS_LOOSE` does
+# for `Narrows:`. "in place" alone is not enough: a narrowing may say a clause
+# stays in place.
 CORRECTION_LOOSE = re.compile(r"\bcorrected\b", re.I)
-# Lines that are some other note's and may say "corrected" in their own
-# right: a `Narrows:` line quotes its target verbatim, and a narrowing's
-# reciprocal note is checked by the narrows test.
-OTHER_NOTE = re.compile(r"^\*\*Narrows:\*\*|narrowed by ADR-\d{4}")
+# The one line that may say "corrected" without being a correction note: a
+# `Narrows:` line quotes its target verbatim and cannot be reworded. Anything
+# else can be, and exempting it by a phrase it contains ("narrowed by ADR-N")
+# would also exempt a malformed note that names its entry that way.
+OTHER_NOTE = re.compile(r"^\*\*Narrows:\*\*")
 
 
 def _corrections(text):
@@ -607,10 +610,13 @@ def _without_section(text):
     ("The clause stays in place; it is narrowed by ADR-0009.\n", None, []),
     ('**Narrows:** ADR-0005, "the mode is corrected on every relink"\n',
      None, []),
+    ("Under the entry narrowed by ADR-0025, corrected in place for issue #9;"
+     " nothing moved.\n", None, ["not in the form"]),
 ], ids=["consistent", "nothing-moved-missing", "same-issue-tagged",
         "entry-missing", "no-section", "nothing-moved-before-the-note",
         "also-an-amendment", "reworded", "wrapped", "wrapped-before-the-word",
-        "narrowing-note-says-in-place", "narrows-line-says-corrected"])
+        "narrowing-note-says-in-place", "narrows-line-says-corrected",
+        "reworded-naming-a-narrowing"])
 def test_the_correction_check_on_synthetic_records(note, move, expected):
     text = _SYNTHETIC.format(note=note, tag=_TAG7)
     problems = _correction_problems(move(text) if move else text)
