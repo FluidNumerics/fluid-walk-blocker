@@ -14,9 +14,10 @@ Two lists, one scanner:
 
 exit 0 clean | 1 findings | 2 config/usage error | 3 --require-terms unmet
 
-A named path that does not exist, a scan that finds no file to read (other
-than an empty --files-from list), and --files-from combined with positional
-paths are all exit 2: none of them is a scan of what the caller meant.
+A named path that does not exist, a scan that finds no file to read (except
+with --files-from, whose list may legitimately name no regular file), and
+--files-from combined with positional paths are all exit 2: none of them is a
+scan of what the caller meant.
 
 Stdlib only, Python 3.9, so it runs on a bare runner and on a node.
 """
@@ -250,9 +251,10 @@ def main(argv=None):
     if scanned == 0 and not a.files_from:
         # A whole-tree scan, or named directories, that found nothing to read
         # is a scan of the wrong tree (a copy of tools/ inside another
-        # repository, an empty payload directory), not a pass. An empty
-        # --files-from list is legitimate: a commit that only deletes stages
-        # no names for the pre-commit hook.
+        # repository, an empty payload directory), not a pass. Any
+        # --files-from list is exempt, empty or not: the pre-commit hook's
+        # list for a commit that only deletes is empty, and for one that only
+        # changes symlinks or a submodule pointer it names no regular file.
         die("no files to scan under %s; pass paths explicitly or fix --root" % root)
     for line in findings:
         print(line)

@@ -129,9 +129,15 @@ def test_a_scan_that_finds_no_files_is_not_a_pass(tmp_path, case):
     assert "no files to scan" in r.stderr
 
 
-def test_an_empty_files_from_list_is_still_a_pass(tmp_path):
-    # A commit that only deletes stages no names for the pre-commit hook.
-    r = run(["--root", str(tmp_path), "--terms", os.devnull, "--files-from", "-"], input="")
+@pytest.mark.parametrize("names", ["", "sub\n", "link.md\n"],
+                         ids=["empty", "only-a-directory", "only-a-symlink"])
+def test_a_files_from_list_that_reads_no_file_is_still_a_pass(tmp_path, names):
+    # The pre-commit hook's list is empty for a commit that only deletes, and
+    # names no regular file for one that only changes a submodule pointer or a
+    # symlink. Unlike a whole-tree scan, reading nothing here is not a refusal.
+    (tmp_path / "sub").mkdir()
+    os.symlink(tmp_path / "gone.md", tmp_path / "link.md")
+    r = run(["--root", str(tmp_path), "--terms", os.devnull, "--files-from", "-"], input=names)
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stderr.strip() == "0 file(s) under %s, 0 finding(s), terms=off" % tmp_path
 

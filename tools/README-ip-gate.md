@@ -46,9 +46,10 @@ caller meant:
   (a typo is not a clean file);
 - a scan that finds no file to read: a whole-tree scan of a root that tracks
   nothing, such as a copy of `tools/` inside another repository, or named
-  directories that hold no files. An empty `--files-from` list is the
-  exception and still passes, since a commit that only deletes stages no names
-  for the pre-commit hook;
+  directories that hold no files. A `--files-from` list is the exception and
+  still passes when it reads no file, empty or not: the pre-commit hook's list
+  is empty for a commit that only deletes, and names no regular file for one
+  that only changes symlinks or a submodule pointer;
 - `--files-from` together with positional paths. Put every name in the list,
   or name them all as arguments.
 
