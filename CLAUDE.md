@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0033` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0034` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed and `docs/node-requirements.md` for what the node must provide.
 This file is the part that is easy to get wrong.
@@ -176,7 +176,11 @@ ADR-0008.
 
 **Report before you kill.** The reaper's default is `--report`. Promoting
 to `--kill` happens after reading real findings against real traffic at
-the site, and it is a decision someone makes, not a default that drifts.
+the site, and it is a decision someone makes, not a default that drifts:
+`[reaper].action = "kill"`, reviewed in the site's own repository and
+compiled into the unit, so a redeploy carries it (ADR-0034). `--kill` acts
+on every finding outside `NEVER_KILL`, whoever owns the process; there is
+no second flag, because the reaper's only caller is the root-run unit.
 
 **Node code is stdlib-only Python 3.9 or POSIX `sh`.** Anything under
 `node/`, and `deploy.py`, runs on a login node whose Python we do not
@@ -199,7 +203,8 @@ work. Every design choice here affects people who did not ask for it:
   on what it monitors is unavailable exactly when it is needed.
 - Reading another user's `io.pressure` is unprivileged and fine. Killing
   another user's process is not a thing this repo does without a human
-  deciding it, per incident, at the site.
+  deciding it at the site, as the reviewed `[reaper].action` change: made
+  once per site, standing until reverted, never a default (ADR-0034).
 - Measuring the guardrail must not cause the incident. Depth allowances are
   measured one root at a time, capped, paused, off the login node, with the
   filesystem watched. Never run the deeper walk when the shallower one
@@ -299,7 +304,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0033`, in order — the decisions
+3. `docs/adr/0001` … `0034`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the destination node must provide, and
    the floor below which a fault is unsupported (ADR-0032)

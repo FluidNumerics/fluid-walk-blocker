@@ -263,6 +263,36 @@ and it is a list of service groups, never of people.
 Re-measure when a package upgrade touches a spool ancestor, or a listed
 group's membership changes.
 
+## Decide the reaper's action
+
+Key: `[reaper].action`. Decision records: ADR-0009, ADR-0034.
+
+`report`, the default, records every finding and signals nothing. `kill`
+makes the unit run `reaper.py --kill`: the reaper signals every finding
+outside `NEVER_KILL`, whoever owns the process, inside the budget that
+`kill_grace_s`, `max_kills` and `settle_s` set. The value is compiled into
+the service unit, so a redeploy carries it; there is nothing to edit on the
+node and nothing there to drift back.
+
+Leave it at `report` for the first deployment. Promote only on evidence:
+
+1. Read the trail for several days of real traffic. Count distinct
+   `(verdict, pid, starttime)` keys inside and outside `NEVER_KILL`; rows
+   run several times findings.
+2. The bar is that every finding outside `NEVER_KILL` is one a human would
+   have killed. One that is not is a rule-table or threshold problem to fix
+   first, not a loss to accept.
+3. Recalibrate the stall thresholds under known load first (above), so
+   `stalling_slice` on a kill record means what its reader thinks it means.
+4. Decide how a user whose process was killed finds out, and set
+   `[site].contact` (operating guide, §12).
+5. Set `action = "kill"`, run `validate` and read the line it prints, then
+   build and redeploy.
+
+Keep the trail excerpt and the counts that justified the change beside
+`site.toml`, outside this tree. Re-read them when the rule table or a
+threshold changes, and when the node's traffic class changes.
+
 ## Decide whether the trail's readers read the journal
 
 Keys: `[install].journal_readable`, `[install].tmpfiles_dir`. Decision

@@ -51,8 +51,8 @@ prefix, and every refusal prints its path.
   filesystem with no bound. A kill means the reaper found a traversal tool
   past its time budget on such a mount, whether or not the session that
   started it is still open, or too many running at once under one parent. The reaper kills only when the
-  site has explicitly enabled it with `--kill-others`. By default it reports
-  and signals nothing.
+  site has set `[reaper].action = "kill"`, which puts `--kill` in its unit.
+  By default it reports and signals nothing.
 - **How to check.** `systemctl cat walk-blocker.service | grep ExecStart=`
   shows, to any account, whether killing is on at all. A refusal is recorded
   in your own journal (`journalctl -t walk-blocker`) for as long as the node
@@ -159,7 +159,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0033` |
+| `docs/adr/` | the decisions, `0001` through `0034` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/node-requirements.md` | what the destination node must provide |
@@ -174,8 +174,8 @@ after which nothing is measurable.
 - **Enforcement by Layer 1.** A PATH shim cannot bind; describing it as a
   sandbox invites reliance it cannot support (ADR-0001).
 - **Killing by default.** The reaper reports. `--kill` is a decision made at
-  the site after reading real findings, and `--kill-others` is a second
-  explicit decision (ADR-0009).
+  the site after reading real findings, recorded as `[reaper].action` and
+  compiled into the unit (ADR-0009, ADR-0034).
 - **Processes that predate the deployment.** The reaper will report them;
   nothing here retroactively wraps a shell that already started.
 - **Sudo for agent sessions.** Automated agents working in this repository
@@ -229,7 +229,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0033`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0034`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the node must provide, and the floor
    below which a fault is unsupported

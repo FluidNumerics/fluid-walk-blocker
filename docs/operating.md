@@ -79,8 +79,9 @@ The tables, in the order the schema lists them:
   the default wall clock and memory, and where `sbatch` lives.
 - `[shim]` — tools in the rule table the site chooses not to wrap.
 - `[reaper]` — the cgroup layout, the origin table, the traversal budget
-  and fan-out count, the stall thresholds, the kill budget and the stream
-  filters. Thresholds select which findings carry `stalling_slice: true`;
+  and fan-out count, the stall thresholds, the kill budget, the action the
+  unit runs the reaper with (ADR-0034) and the stream filters. Thresholds
+  select which findings carry `stalling_slice: true`;
   they never suppress a record (ADR-0009).
 - `[timer]` — the reaper's `OnCalendar=` slot and its budgets. The slot is
   chosen against the live schedule of the target node, never copied
@@ -865,8 +866,9 @@ request's own revision, and `build --check` beside it, as required checks.
 
 ## 12. Promoting to `--kill`
 
-The reaper's default is `--report`, and the unit is written that way.
-Promoting it is a decision a person makes after reading real findings
+The reaper's default is `--report`, and the unit is written that way from
+`[reaper].action = "report"`. Promoting it is a decision a person makes
+after reading real findings
 against real traffic, not a default that drifts. The bar, from ADR-0009's
 "Re-measure when": read the trail for several days, count distinct
 `(verdict, pid, starttime)` keys inside and outside `NEVER_KILL`, and
@@ -882,14 +884,29 @@ let them read the trail, and the deploy reports each one (§10, "Who can see
 what"). Set `[site].contact`, so the users' page and every refusal name a
 person, and make sure whoever answers it can read the trail.
 
-Two flags, both explicit:
+The decision is one `site.toml` value, `[reaper].action = "kill"`,
+reviewed like every other (ADR-0034):
 
-- `--kill` acts on findings outside `NEVER_KILL` — but only on processes
-  owned by the invoking user;
-- `--kill-others` permits acting on other users' processes. Killing someone
-  else's long-running work is a per-incident human decision, and this flag
-  is how the decision is made visible in the unit file rather than buried
-  in a default.
+```toml
+[reaper]
+action = "kill"
+```
+
+`walk-blocker validate` accepts it and prints one line saying what the unit
+will run; `build` prints the same line when it writes. Build, copy and
+install as in §13: the unit the install writes carries
+`ExecStart=... reaper.py --kill`, the dry run previews that line before
+anything is written, and every later redeploy carries it too. Demotion is
+the same edit in reverse. Do not edit the unit on the node: the next
+install rewrites it from the payload, which is how a hand-made promotion
+used to vanish without a record.
+
+Under `--kill` the reaper acts on every finding outside `NEVER_KILL`,
+whoever owns the process. There is no second flag: the reaper's only
+caller is this root-run unit, and the decision that someone else's
+long-running work may be ended is the reviewed change above, made once per
+site and standing until it is reverted. Keep the trail excerpt and the
+counts that justified it beside `site.toml`, outside this tree.
 
 The kill budget is `[reaper].kill_grace_s` between `SIGTERM` and `SIGKILL`,
 at most `[reaper].max_kills` per poll (the rest are recorded
@@ -898,10 +915,6 @@ blocked in a filesystem syscall does not die until the syscall returns; if
 it is still there after the re-check the record says `signalled_but_wedged`,
 never `killed`. An audit log that reports success it did not achieve is
 worse than no audit log.
-
-Changing the unit's arguments is not a `site.toml` value; it is an edit to
-the unit the deployer writes, made at the site, and it should be recorded
-beside the evidence that justified it.
 
 ## 13. Changing a site value
 
