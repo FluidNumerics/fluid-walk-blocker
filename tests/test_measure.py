@@ -670,13 +670,19 @@ def scripted_clock(tmp_path):
     overheads, a gate reading the other gate's overhead would pass; with
     equal baselines, an overhead taken from the wrong baseline would too.
     """
+    return _scripted_date(tmp_path, "1000 2250 1000 1000 1080 1500 2850 3750")
+
+
+def _scripted_date(tmp_path, durations):
+    """The `date` stub behind `scripted_clock`, reading `durations` (bench
+    readings in microseconds, space-separated, in bench order)."""
     binned = tmp_path / "clockbin"
     binned.mkdir()
     counter = tmp_path / "calls"
     stub = binned / "date"
     stub.write_text(
         "#!/bin/sh\n"
-        "set -- 1000 2250 1000 1000 1080 1500 2850 3750\n"
+        "set -- %s\n"
         'read -r k t < %s 2>/dev/null || { k=0; t=0; }\n'
         "if [ $((k %% 2)) -eq 1 ]; then\n"
         '    eval "d=\\${$((k / 2 + 1)):-1000}"\n'
@@ -685,7 +691,7 @@ def scripted_clock(tmp_path):
         "    t=$((t + 1000 * 1000))\n"
         "fi\n"
         'echo "$((k + 1)) $t" > %s\n'
-        'echo "$t"\n' % (counter, counter)
+        'echo "$t"\n' % (durations, counter, counter)
     )
     stub.chmod(0o755)
     return str(binned)
@@ -730,6 +736,30 @@ def test_a_decimal_budget_is_compared_as_a_decimal(
     lines = (r.stderr if rc else r.stdout).splitlines()
     for line in says:
         assert line in lines, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("durations, row, other", [
+    ("1000 1000 1000 1000 1080 1500 2850 3750",
+     ("shim overhead", r"0\.00"), ("guarded overhead", r"1\.35")),
+    ("1000 2250 1000 1000 1080 1500 1500 3750",
+     ("guarded overhead", r"0\.00"), ("shim overhead", r"1\.25")),
+], ids=["shim-at-zero", "guarded-at-zero"])
+def test_an_overhead_of_exactly_zero_is_refused(
+        guard, tmp_path, durations, row, other):
+    """Issue #148. The positivity discard refuses "an overhead at or below
+    zero", so an overhead of exactly 0.00 ms is refused, with the other
+    overhead positive so that only the one comparison decides. Mutation:
+    `f > 0` or `g > 0` to `>=`, and the zero overhead clears its budget and
+    the run exits 0."""
+    env = {"PATH": _scripted_date(tmp_path, durations) + os.pathsep
+           + os.environ["PATH"], "WALK_BLOCKER_MEASURE_DRIFT_PCT": "12"}
+    r = run_measure([guard, "1", "1000", "1000"], env=env)
+    for name, value in (row, other):
+        assert re.search(r"^%s +%s ms/call$" % (name, value), r.stdout,
+                         re.M), r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "at or below zero" in r.stderr, r.stderr
+    assert "within the" not in r.stdout, "it reported a pass"
 
 
 def test_drift_exactly_at_its_ceiling_is_not_over_it(guard, scripted_clock):
