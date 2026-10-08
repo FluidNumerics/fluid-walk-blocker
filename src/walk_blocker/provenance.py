@@ -164,12 +164,15 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
     name ends in `/HEAD` is still listed.
 
     Each name is one the caller can paste back as `--ref` and get the ref it
-    was listed for (issue #135). It is the short name when git resolves that
-    to this ref, and the full refname otherwise: a local branch that shadows
-    a remote-tracking one of the same short name, a tag that shadows a
-    branch, a branch called `HEAD`, a branch named like an object id. The test applies git's documented rules
-    to the refs listed here instead of asking git to shorten the name, so the
-    hint does not depend on how a given git version abbreviates.
+    was listed for (issue #135). It is the full refname when the short name
+    resolves to another ref: a local branch that shadows a remote-tracking
+    one of the same short name, a tag that shadows a branch. It is the full
+    refname too when the short name is shaped like something git may read
+    before any ref, a root ref such as `HEAD` or an object id, whether or not
+    that thing exists. Otherwise it is the short name. The test applies git's
+    documented rules to the refs listed here instead of asking git to shorten
+    the name, so the hint does not depend on how a given git version
+    abbreviates.
 
     The listing is one `for-each-ref` call under the per-call `timeout`.
     Best effort: if it fails or times out, the hint is dropped rather than

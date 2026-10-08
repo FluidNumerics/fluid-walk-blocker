@@ -475,8 +475,8 @@ def test_a_branch_shadowed_by_a_local_one_is_listed_by_its_full_name(
     """Issue #135: `refs/heads/origin/main` shadows `refs/remotes/origin/main`
     for the short name `origin/main`, so the hint listed `origin/main` twice
     and both pasted back to the local branch. The shadowed one is now listed
-    by its full name, and each name resolves to the commit it was listed
-    for."""
+    by its full name, and both names resolve to the commits they were
+    listed for."""
     remote = _git(repo, "rev-parse", "refs/remotes/origin/main").strip()
     local = _unrelated(repo, "a commit only the local branch has")
     assert local != remote
