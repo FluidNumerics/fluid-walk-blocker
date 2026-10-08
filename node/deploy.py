@@ -3814,10 +3814,10 @@ def system_uninstall(args, env=None):
         hook_steps = ""
         if shared:
             hook_steps += ("  strip the block between the walk-blocker markers"
-                           " in %s;\n" % ", ".join(shared))
+                           " in\n  %s;\n" % ", ".join(shared))
         if fish:
-            hook_steps += ("  remove the fish drop-in %s outright (the whole"
-                           " file is\n  walk-blocker's);\n" % fish[0])
+            hook_steps += ("  remove the fish drop-in %s\n  outright (the"
+                           " whole file is walk-blocker's);\n" % fish[0])
         if not hook_steps:
             hook_steps = "  no hook file to clean, since this site enables none;\n"
         sys.stderr.write(

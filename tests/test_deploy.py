@@ -2724,7 +2724,7 @@ def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
     # The marker step names exactly the enabled shared files, never the
     # fish drop-in, which is removed whole rather than stripped.
     if zsh or bash:
-        strip = " ".join(err.split("walk-blocker markers in ", 1)[1]
+        strip = " ".join(err.split("walk-blocker markers in", 1)[1]
                          .split(";", 1)[0].split())
         named = [f.strip() for f in strip.split(",")]
         assert named == [f for f, on in ((args.bashrc_file, bash),
