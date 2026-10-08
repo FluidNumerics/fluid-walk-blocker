@@ -499,7 +499,8 @@ def test_deploy_system_refuses_without_root(tmp_path, monkeypatch):
     assert not os.path.exists(args.unit_dir)
 
 
-def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
+def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch,
+                                                    capsys):
     """Reversing a control is the safer direction. The uninstall that WRITES
     needs proof of root, which since ADR-0021 is the whole of the install's
     gate too."""
@@ -515,6 +516,10 @@ def test_deploy_system_uninstall_requires_root_only(tmp_path, monkeypatch):
     assert deploy.system_uninstall(args) == 0
     assert any(c[:3] == ["systemctl", "disable", "--now"] for c in calls)
     assert any("--uninstall" in c for c in calls)
+    # The writing run still says it removed; only the dry run may not
+    # (issue #109).
+    out = capsys.readouterr().out
+    assert "\nremoved. " in out and "dry run" not in out, out
 
 
 def test_the_uninstall_dry_run_needs_no_root_and_writes_nothing(
@@ -537,7 +542,11 @@ def test_the_uninstall_dry_run_needs_no_root_and_writes_nothing(
     assert deploy.system_uninstall(args) == 0
     assert dry and all(dry), dry
     assert sorted(os.walk(str(tmp_path))) == before, "a dry run wrote"
-    assert "NOT CHECKED" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "NOT CHECKED" not in out
+    # Issue #109: it used to end "removed.", over a removal that never ran.
+    assert "removed" not in out, out
+    assert "dry run: nothing was changed" in out, out
 
     assert deploy.system_uninstall(_args(tmp_path)) == 3
 
