@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-18
 The Decision's paragraph on where superseded wording moves, with the Consequences' count of the narrowings, was amended when issue #139 was decided: an issue's decision may now amend an accepted record without a record of its own. The wording it replaced is recorded under "Superseded wording" below.
+The Decision's paragraph licensing edits to accepted records was amended when issue #199 was decided: the text under "Superseded wording" that says what holds instead is live, and is corrected in place with a Status note, moving nothing. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -101,6 +102,13 @@ This record is the licence for editing the bodies of accepted records, and it
 exists before any of them is edited. Each such edit is a verbatim move of the
 superseded wording plus the minimal correction that makes the vacated sentence
 true, and nothing else — no rewording, no re-wrapping, no tidying in passing.
+One edit moves nothing. The text under `## Superseded wording` that says what
+holds instead of a quote is in the present tense, so it is live, and when it
+stops being true it is corrected in place, by the same minimal correction. The
+quotes above it are never touched, and the Status block gains one line naming
+the entry, the issue the correction answers, and that nothing moved. The test
+reads that line, not the edit, so a correction made without one is caught by
+review alone.
 
 ## Consequences
 
@@ -175,3 +183,13 @@ The Consequences above read:
 The counts were true when this record was accepted. Records added since then
 made them false, so the bullet now gives the reasons a count and a list differ
 and leaves the list to the tests.
+
+Amended when issue #199 was decided. The Decision above read:
+
+> This record is the licence for editing the bodies of accepted records, and it
+> exists before any of them is edited. Each such edit is a verbatim move of the
+> superseded wording plus the minimal correction that makes the vacated sentence
+> true, and nothing else — no rewording, no re-wrapping, no tidying in passing.
+
+The text under that section that says what holds instead of a quote is live,
+and is now corrected in place, with a Status note and nothing moved.

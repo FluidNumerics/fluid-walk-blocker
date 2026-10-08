@@ -3,6 +3,7 @@
 **Status:** accepted, 2026-09-17
 The Consequences clause "**One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change." is narrowed by ADR-0025: the memory is `0640`, readable by the spool's one reader group, and the superseded wording is recorded under "Superseded wording" below.
 The Decision clause on a silent steady state and the Consequences clause "**A steady state is silent, and silence means what it did before**" are narrowed by ADR-0030: a standing uncovered mount is re-asserted, marked `reasserted`, once per `[timer].reassert_interval_s`, and the superseded wording is recorded under "Superseded wording" below.
+The text saying what holds instead, under the ADR-0025 entry in "Superseded wording", was corrected in place for issue #95: it now names the mode bits as what limits the memory's reader set, and that a named ACL entry can widen it. Nothing moved (ADR-0023).
 **Narrows:** ADR-0016, "The reconcile logs one journald line per mount in the live table that no override covers"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0019 — see `docs/evidence.md`
 

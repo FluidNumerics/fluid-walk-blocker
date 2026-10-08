@@ -22,6 +22,10 @@ Conventions (delete this comment in a real ADR):
   "Amended when issue #N was decided.", and a line under Status names the
   clause, the issue, and that the replaced wording is recorded there
   (ADR-0023).
+- The sentence under `## Superseded wording` that says what holds instead is
+  live, so when it stops being true it is corrected in place: the quotes are
+  not touched, nothing moves, and a line under Status names the entry and the
+  issue (ADR-0023).
 - Decisions, not evidence (ADR-0014). No hostnames, usernames, uids,
   partition or QoS names, customer or engineer names, neighbour timers,
   inode counts, capacities, percentages, user or core counts, vendor build

@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-16
 The Decision's clause "`[install].spool_dir` is `0755`, root-owned: writable by root alone, readable by everyone." is narrowed by ADR-0025: the spool is `root:<spool_group> 02750`, readable by one site-named group, and the superseded wording is recorded under "Superseded wording" below.
+The text saying what holds instead, under the ADR-0025 entry in "Superseded wording", was corrected in place for issue #95: it now names the mode bits as what limits the reader set, and that a named ACL entry can widen it. Nothing moved (ADR-0023).
 **Narrows:** ADR-0004, "none of it writable by the account being monitored"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0012 — see `docs/evidence.md`
 
