@@ -63,8 +63,10 @@ previews the exact line the install writes and every later redeploy
 carries the site's decision.
 
 `kill` renders `--kill`, and `--kill` is the whole action: the reaper
-signals every finding outside `NEVER_KILL`, whoever owns the process,
-within `[reaper].max_kills` and `[reaper].kill_grace_s`. `--kill-others`
+signals findings outside `NEVER_KILL`, whoever owns the process, up to
+`[reaper].max_kills` per poll and with `[reaper].kill_grace_s` between
+`SIGTERM` and `SIGKILL`; the rest of a poll's findings are recorded
+`skipped_kill_cap`. `--kill-others`
 is removed from the parser and `skipped_other_user` from the action
 vocabulary.
 
@@ -91,9 +93,12 @@ run of `reaper.py --report` on a promoted node reports and signals nothing.
   the value is valid, and the line is for whoever reads the build log.
 - The users' page check, `systemctl cat walk-blocker.service | grep
   ExecStart=`, still answers whether killing is on, and now reads one word.
-- A payload whose stamped action was edited past the schema is refused
-  against its own lock before the first `systemctl` (ADR-0029); the tables
-  in `deploy.py` are the schema's enum and nothing else, and
+- A payload whose stamped action was edited past the schema is caught as
+  ADR-0029 says: the install's snapshot check refuses it before the first
+  `systemctl`, and the dry run prints a note in place of the units and
+  refuses at its own payload check, exit 6 and no traceback
+  (`test_the_preview_refuses_an_unmapped_action_without_a_traceback`). The
+  tables in `deploy.py` are the schema's enum and nothing else, and
   `test_the_action_tables_are_exactly_the_schema_enum` pins that.
 - `test_the_compiled_action_is_all_that_puts_kill_in_execstart`,
   `test_the_preview_and_the_install_agree_on_a_promoted_unit`,

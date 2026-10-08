@@ -268,9 +268,9 @@ group's membership changes.
 Key: `[reaper].action`. Decision records: ADR-0009, ADR-0034.
 
 `report`, the default, records every finding and signals nothing. `kill`
-makes the unit run `reaper.py --kill`: the reaper signals every finding
-outside `NEVER_KILL`, whoever owns the process, inside the budget that
-`kill_grace_s`, `max_kills` and `settle_s` set. The value is compiled into
+makes the unit run `reaper.py --kill`: the reaper signals findings outside
+`NEVER_KILL`, whoever owns the process, up to `max_kills` per poll and with
+`kill_grace_s` between `SIGTERM` and `SIGKILL`. The value is compiled into
 the service unit, so a redeploy carries it; there is nothing to edit on the
 node and nothing there to drift back.
 

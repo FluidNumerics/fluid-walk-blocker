@@ -676,6 +676,50 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
     assert "would refuse too" in proc.stderr, proc.stderr
 
 
+def test_the_preview_refuses_an_unmapped_action_without_a_traceback(
+        traversable_root):
+    """A stamped `REAPER_ACTION` outside the schema's enum can only come
+    from a payload edited by hand past the build. The preview's job is still
+    to print the plan and REFUSE at its payload check (exit 6, ADR-0029),
+    not to die in a KeyError before that check is reached -- review round 1
+    on this PR found it did. The units are not rendered, because there is
+    no honest unit to show for a value this build does not map."""
+    payload = os.path.join(traversable_root, "payload")
+    layout = Layout(traversable_root,
+                    prefix=os.path.join(traversable_root, "prefix"),
+                    bashrc=os.path.join(traversable_root, "bashrc"),
+                    zshenv=os.path.join(traversable_root, "zshenv"),
+                    fishconf=os.path.join(traversable_root, "fish-conf.fish"),
+                    spool=os.path.join(traversable_root, "var-log"),
+                    toolbin=os.path.join(traversable_root, "usrbin"),
+                    mount_table=os.path.join(traversable_root, "mounts"))
+    stamped_install(traversable_root, dest=os.path.join(payload, "shim"),
+                    layout=layout)
+    values = site_values(**{
+        "install.prefix": str(layout.prefix),
+        "install.spool_dir": str(layout.spool),
+        "install.spool_group": SPOOL_GROUP,
+        "install.unit_dir": os.path.join(traversable_root, "unit-dir"),
+        "install.staging_parent": os.path.join(traversable_root, "run"),
+        "hooks.bash.file": str(layout.bashrc),
+        "hooks.zsh.file": str(layout.zshenv),
+        "hooks.fish.file": str(layout.fishconf),
+        "reaper.action": "maim",
+    })
+    script = write_stamped_deploy(values, payload)
+
+    proc = subprocess.run([NODE_PYTHON, script, "--system", "--dry-run"],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "KeyError" not in proc.stderr, proc.stderr
+    out = proc.stdout
+    assert "System-wide install of walk-blocker Layer 1" in out
+    assert "units are NOT rendered: the stamped reaper.action 'maim'" in out, out
+    assert "ExecStart=" not in out and "OnCalendar=" not in out, out
+    assert _previewed_lines(out, script) == [], out
+
+
 def _previewed_lines(out, script):
     return [l for l in out.splitlines()
             if "--system" in l and script in l]
@@ -3340,7 +3384,8 @@ def test_the_preview_and_the_install_agree_on_a_promoted_unit(
     out = capsys.readouterr().out
     written = open(os.path.join(args.unit_dir, deploy.SERVICE_UNIT)).read()
     assert line in written.splitlines(), written
-    assert "reaper.action = kill" in out, out
+    assert ("installed, and the reaper signals findings outside NEVER_KILL,\n"
+            "up to [reaper].max_kills per poll (reaper.action = kill).") in out, out
     assert "report-only" not in out
 
 

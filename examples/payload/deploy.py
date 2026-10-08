@@ -485,9 +485,13 @@ def render_units(prefix, spool):
     """(service text, timer text) from the compiled constants. ONE function
     for both the preview and the install, so the preview cannot describe a
     unit the install then writes differently."""
-    # Indexed here, not at import: the schema's enum is the only thing that
-    # reaches REAPER_ACTION, and a payload edited past it is refused against
-    # its own lock before the first systemctl (ADR-0029).
+    # Indexed here, not at import. The schema's enum is the only thing that
+    # reaches REAPER_ACTION by a build; a payload edited past it is caught
+    # as ADR-0029 says: the install's snapshot check runs before this is
+    # reached and refuses (exit 6, before the first systemctl), and the
+    # preview declines to render and refuses at its own lock check. An
+    # owner who re-hashes the lock as well is the case ADR-0029 does not
+    # claim to catch, and that owner gets a KeyError here.
     service = UNIT_SERVICE.format(
         display_name=DISPLAY_NAME, prefix=prefix, spool=spool,
         reaper_flags=REAPER_FLAGS[REAPER_ACTION], verb=REAPER_VERBS[REAPER_ACTION],
@@ -767,11 +771,22 @@ def system_preview(args, env=None):
                      gid if gid is not None else "<unresolved>", want))
         print()
     print("# And the root-run reaper, as a system timer under %s. The two" % args.unit_dir)
-    print("# units below are rendered from the same constants the install writes:")
-    service, timer = render_units(prefix, spool)
-    for name, text in ((SERVICE_UNIT, service), (TIMER_UNIT, timer)):
-        print("# --- %s ---" % os.path.join(args.unit_dir, name))
-        print(text.rstrip("\n"))
+    if REAPER_ACTION not in REAPER_FLAGS:
+        # Only a payload edited past the schema reaches this: the stamped
+        # action is not one this build maps, so there is no honest unit to
+        # show. The plan still prints in full, and the payload check below
+        # refuses this payload (exit 6) the way it refuses any edited one
+        # (ADR-0029) -- a refusal, not a traceback.
+        print("# units are NOT rendered: the stamped reaper.action %r is not a"
+              % (REAPER_ACTION,))
+        print("# value this build maps (%s). The payload check below refuses it."
+              % ", ".join(sorted(REAPER_FLAGS)))
+    else:
+        print("# units below are rendered from the same constants the install writes:")
+        service, timer = render_units(prefix, spool)
+        for name, text in ((SERVICE_UNIT, service), (TIMER_UNIT, timer)):
+            print("# --- %s ---" % os.path.join(args.unit_dir, name))
+            print(text.rstrip("\n"))
     print()
     dropin = os.path.join(canonical_prefix(args.tmpfiles_dir), JOURNAL_DROPIN)
     if JOURNAL_READABLE:
@@ -3753,9 +3768,9 @@ def system_execute(args, env=None):
         return rc
 
     if REAPER_ACTION == "kill":
-        print("\ninstalled, and the reaper signals the processes it finds")
-        print("(reaper.action = kill). There are TWO audit trails, and the")
-        print("record of every kill needs both:")
+        print("\ninstalled, and the reaper signals findings outside NEVER_KILL,")
+        print("up to [reaper].max_kills per poll (reaper.action = kill). There")
+        print("are TWO audit trails, and the record of every kill needs both:")
     else:
         print("\ninstalled, report-only. There are TWO audit trails, and the")
         print("evidence for --kill needs both:")
