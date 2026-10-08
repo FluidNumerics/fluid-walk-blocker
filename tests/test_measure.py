@@ -912,8 +912,8 @@ def test_a_zero_reference_floor_reports_the_sentinel(ratio_clock):
     floor, and it runs before the positivity check, so a reference floor of
     0.00 reaches it on a pair that is otherwise kept. The guard prints the
     999 sentinel in place of the division. Mutation: `r > 0` to `r >= 0` on
-    that line, and awk divides by zero -- the percentage comes back empty
-    (gawk stops with an error) or `inf` (mawk), not 999.0."""
+    that line, and awk divides by zero instead of printing 999.0 -- gawk
+    stops with an error and the percentage comes back empty."""
     ref, cand, env = ratio_clock(ZERO_FLOOR_REF_PAIRS, CAND_PAIRS)
     r = run_measure(["--against", ref, cand, "1", "3", "100", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -924,8 +924,8 @@ def test_a_zero_reference_floor_reports_the_sentinel(ratio_clock):
 def test_a_zero_reference_floor_is_discarded_by_the_floor_check(ratio_clock):
     """Issue #197, the consumer of the same sentinel: with a floor allowance
     set, 999.0 % is over it and every pair is discarded, naming the sentinel
-    and the zero floor. Under the `r >= 0` mutant the percentage is empty or
-    `inf`, and the discard either never fires or names a different figure."""
+    and the zero floor. Under the `r >= 0` mutant gawk leaves the percentage
+    empty, the discard never fires, and the run exits 0."""
     ref, cand, env = ratio_clock(ZERO_FLOOR_REF_PAIRS, CAND_PAIRS)
     r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
                     env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="20"))
