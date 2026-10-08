@@ -409,8 +409,9 @@ def test_an_unmeasured_mount_point_is_reported_in_ascii(unnameable_table):
 
 
 def test_json_and_text_output_carry_the_escaped_form(unnameable_table):
-    """Valid JSON with no lone surrogate, from the shipped script, in a C
-    locale as well as a UTF-8 one."""
+    """Valid JSON with no lone surrogate, from node/survey.py run as a
+    script, in a C locale as well as a UTF-8 one. The payload's copy is
+    the same file; test_build's payload check fails when it is stale."""
     environ = {k: v for k, v in os.environ.items()
                if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
     for locale in ("C", "C.UTF-8"):
