@@ -6164,13 +6164,18 @@ def test_a_file_entry_without_search_on_the_spool_is_said_with_its_condition(
     Mutation: drop the _spool_search() call and it is reported as a reader."""
     spool = _acl_spool(tmp_path)
     trail = _trail(spool)
+    latch = os.path.join(spool, "reaper-state.json")
+    with open(latch, "w") as fh:
+        fh.write("{}\n")
     _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, latch)
     grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
     assert (grants, unread) == ([], []), (grants, unread)
-    assert conditional == [(trail, "user", OTHER_UID,
-                            deploy.IF_A_GROUP_SEARCHES)], conditional
+    assert sorted(conditional) == sorted(
+        (path, "user", OTHER_UID, deploy.IF_A_GROUP_SEARCHES)
+        for path in (trail, latch)), conditional
     lines = deploy.spool_read_grant_lines(spool, os.getgid())
-    assert lines == ["user uid %d can read 1 file(s) in the spool only if a "
+    assert lines == ["user uid %d can read 2 file(s) in the spool only if a "
                      "group it is in can search the spool" % OTHER_UID], lines
 
 
@@ -6235,8 +6240,13 @@ def test_a_named_group_on_a_file_counts_by_the_spools_search(
     grants, _unread, conditional = deploy.spool_read_grants(spool, os.getgid())
     entry = (trail, "access", "group", OTHER_GID)
     assert (entry in grants) == (expect == "grant"), grants
-    assert ([c for c in conditional if c[:3] == (trail, "group", OTHER_GID)]
-            != []) == (expect == "conditional"), conditional
+    assert (((trail, "group", OTHER_GID, deploy.IF_ANOTHER_WAY) in conditional)
+            == (expect == "conditional")), conditional
+    if expect == "conditional":
+        lines = deploy.spool_read_grant_lines(spool, os.getgid())
+        assert ("group gid %d can read 1 file(s) in the spool only for a "
+                "member that can search the spool another way" % OTHER_GID
+                in lines), lines
 
 
 def test_a_user_that_searches_by_other_is_said_with_that_condition(
@@ -6294,6 +6304,64 @@ def test_a_named_group_with_search_is_conditional_beside_a_denied_user(
     assert ("group gid %d can read 1 file(s) in the spool for every member "
             "but one whose own entry on the spool denies it search"
             % OTHER_GID) in lines, lines
+
+
+def test_an_unread_spool_acl_leaves_a_file_entry_a_grant(
+        tmp_path, monkeypatch):
+    """Nothing can say the account cannot search a spool whose ACL went
+    unread, so its file entry is a grant, beside the unread line. Mutation:
+    answer SEARCH_NO when the spool's ACL is unread and the entry drops."""
+    spool = _acl_spool(tmp_path)
+    trail = _trail(spool)
+    _acl_or_skip("-m", "u:%d:r--" % OTHER_UID, trail)
+    real = os.getxattr
+
+    def odd(path, name, follow_symlinks=True):
+        if path == spool:
+            return b"\x02\x00\x00\x00\x01"
+        return real(path, name, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(deploy.os, "getxattr", odd)
+    grants, unread, conditional = deploy.spool_read_grants(spool, os.getgid())
+    assert [u[0] for u in unread] == [spool], unread
+    assert grants == [(trail, "access", "user", OTHER_UID)], grants
+    assert conditional == [], conditional
+
+
+_SPOOL_GID = 100
+_OTHER_GROUP = 200
+
+
+@pytest.mark.parametrize("mode, entries, mask, kind, ident, expect", [
+    # The mask caps a named user's search.
+    (0o2750, [(0x02, 5, OTHER_UID)], 4, "user", OTHER_UID, "no"),
+    (0o2750, [(0x02, 5, OTHER_UID)], 5, "user", OTHER_UID, "yes"),
+    # root searches whatever the bits say.
+    (0o2600, [], None, "user", 0, "yes"),
+    # One group-class entry searching is not all of them.
+    (0o2751, [(0x04, 5, None), (0x08, 0, _OTHER_GROUP)], None,
+     "user", OTHER_UID, "UNLESS_ONLY_DENYING_GROUPS"),
+    # A group with no entry reaches by `other`, but a member that is a
+    # named user denied search does not.
+    (0o2751, [(0x04, 5, None), (0x02, 0, OTHER_UID)], None,
+     "group", OTHER_GID, "IF_ANOTHER_WAY"),
+    # A group whose own entry denies can still have a member that searches
+    # by its named user entry.
+    (0o2700, [(0x04, 0, None), (0x08, 0, OTHER_GID), (0x02, 1, OTHER_UID)],
+     None, "group", OTHER_GID, "IF_ANOTHER_WAY"),
+])
+def test_spool_search_rules_the_acl_tests_do_not_reach(
+        mode, entries, mask, kind, ident, expect):
+    """Shapes a test spool cannot take as an ordinary user (a root-owned
+    spool, a mode root alone could read) or that pin one rule each:
+    the mask, root, all() over the group class, and named users counted
+    beside a group. Mutation: drop any one of those and its row fails."""
+    info = types.SimpleNamespace(st_mode=0o040000 | mode, st_uid=1,
+                                 st_gid=_SPOOL_GID)
+    got = ([(tag, bits, _SPOOL_GID if tag == 0x04 else ident_)
+            for tag, bits, ident_ in entries], mask)
+    answer = deploy._spool_search(info, got, kind, ident)
+    assert answer == getattr(deploy, expect, expect), answer
 
 
 def test_the_inherited_route_is_reported_as_before(tmp_path):
