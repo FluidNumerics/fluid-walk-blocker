@@ -147,8 +147,11 @@ SHORT_NAME_RULES = ("%s", "refs/%s", "refs/tags/%s", "refs/heads/%s",
 # there by hand under any other name is not seen.
 ROOT_REF_SHAPE = re.compile(r"^[A-Z_-]+$")
 
-# A whole object id, SHA-1 or SHA-256. git reads one as that object before it
-# tries any ref, so a branch named like one never pastes back to itself.
+# A name as long as a whole object id, SHA-1 (40) or SHA-256 (64). git reads
+# a name of the repository's own width as an object id before it tries any
+# ref: as that object if one exists, and as nothing if none does. Either way a
+# branch so named never pastes back to itself. The other width resolves as a
+# ref, so listing it in full only makes the hint longer than it needs to be.
 OBJECT_ID_SHAPE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
