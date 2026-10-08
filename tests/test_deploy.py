@@ -2694,6 +2694,8 @@ def test_uninstall_refuses_rather_than_falling_back_to_the_payload_directory(
 @pytest.mark.parametrize("fish, zsh, bash", [
     (True, True, True),
     (False, True, True),
+    (True, False, False),
+    (False, True, False),
     (False, False, False),
 ])
 def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
@@ -2719,6 +2721,14 @@ def test_a_refused_uninstall_helper_names_only_the_hooks_this_site_has(
     assert ("walk-blocker markers" in err) == (zsh or bash), err
     assert ("enables none" in err) == (not (fish or zsh or bash)), err
     assert "none on this site" not in err, err
+    # The marker step names exactly the enabled shared files, never the
+    # fish drop-in, which is removed whole rather than stripped.
+    if zsh or bash:
+        strip = " ".join(err.split("walk-blocker markers in ", 1)[1]
+                         .split(";", 1)[0].split())
+        named = [f.strip() for f in strip.split(",")]
+        assert named == [f for f, on in ((args.bashrc_file, bash),
+                                         (args.zshenv_file, zsh)) if on], err
 
 
 def test_a_refused_uninstall_helper_leaves_the_units_as_they_were(
