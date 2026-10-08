@@ -1371,6 +1371,22 @@ def test_a_command_that_cannot_start_exits_with_the_shell_s_status(
     assert "Traceback" not in err, err
 
 
+def test_an_uncaptured_command_that_cannot_start_reports_in_the_terminal_order(
+        tmp_path, capsys):
+    """check=True, capture=False: an uncaptured command that fails writes
+    its own stderr to the terminal before run() prints `failed:`, so the
+    reason of one that could not start takes the same place, once.
+    Mutation: carry the reason in the result whenever check=True, and it
+    prints after `failed:` instead."""
+    missing = str(tmp_path / "no-such-command")
+    with pytest.raises(SystemExit) as exc:
+        deploy.run([missing], capture=False)
+    assert exc.value.code == 127
+    err = capsys.readouterr().err
+    assert err == "%s: No such file or directory\nfailed: %s\n" % (
+        missing, missing), err
+
+
 def test_a_command_that_cannot_start_does_not_exit_under_check_false(
         tmp_path, capsys):
     """check=False callers (the uninstall's teardown, the units-down probe,
