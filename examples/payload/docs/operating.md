@@ -379,8 +379,11 @@ What it verifies, and refuses on:
   units are written and its timer re-enabled: the payload passed every
   trust check, and Layer 1's upkeep must never take Layer 2 down. If the
   ownership check below then refuses, the deploy exits 9 instead, writes no
-  unit, and the timer stays disabled. Any other `install.sh` failure leaves
-  the timer disabled and says so. When more than one step fails, the exit
+  unit, and the timer stays disabled. If `systemctl daemon-reload` or
+  `enable --now` then fails, the status is that command's own, not 4, and
+  the deploy says neither layer can be relied on (the exit table below).
+  Any other `install.sh` failure leaves the timer disabled and says so.
+  When more than one step fails, the exit
   status is the most severe and the rest are reported on stderr only: a
   hook-proof failure (4) outranks a journal step that did not land (10, or a
   command's own status). `install.sh` runs while the timer is disabled, so
