@@ -193,18 +193,25 @@ def test_every_status_deploy_py_returns_has_a_row_and_every_row_is_one():
 
 # Issue #146. A code can reach a mode through a helper the entry point calls:
 # a status returned through `rc`, or a SystemExit raised inside the helper.
-# Every helper an entry point calls that the scan finds a code in is named
-# here, either as CARRIED (its codes are that mode's codes too) or under
-# NOT_CARRIED with the reason. A new such helper fails the test below until
-# someone decides which, so the per-mode check cannot quietly miss it.
+# Every helper an entry point reaches, directly or through another helper,
+# that the scan finds a code in is named here, either as CARRIED (its codes
+# are that mode's codes too) or under NOT_CARRIED with the reason. A new such
+# helper fails the test below until someone decides which, so the per-mode
+# check cannot quietly miss it.
 CARRIED = {
     "system_execute": {
         "preflight",        # its refusal is returned as `rc`
+        "validate_root_write_paths",  # through preflight
+        "write_unknown_refusal",      # through preflight
         "stage_payload",    # raises SystemExit(6)
         "journal_step",     # its 10 is returned as `rc`
         "_units_are_down",  # its 7, which the entry point returns as 7
     },
-    "system_preview": {"preflight"},
+    "system_preview": {
+        "preflight",
+        "validate_root_write_paths",
+        "write_unknown_refusal",
+    },
     "system_uninstall": {
         "_units_are_down",
         "validate_root_write_paths",
@@ -215,6 +222,7 @@ CARRIED = {
 NOT_CARRIED = {
     # The dry run of `--system` enters here and hands over to the preview,
     # whose codes are `--system --dry-run`'s and checked under its own entry.
+    # Nothing is reached through it for that mode.
     "system_execute": {"system_preview"},
 }
 
@@ -228,14 +236,33 @@ DRY_GUARDED = {3, 7}
 UNINSTALL_DRY_RUN = "`--uninstall --dry-run`"
 
 
-def _callees(func_name):
-    with open(DEPLOY_PY, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-    funcs = {f.name: f for f in ast.walk(tree)
+def _call_graph(source=None):
+    """{function name: the module's functions it calls by name}."""
+    if source is None:
+        with open(DEPLOY_PY, encoding="utf-8") as fh:
+            source = fh.read()
+    funcs = {f.name: f for f in ast.walk(ast.parse(source))
              if isinstance(f, ast.FunctionDef)}
-    return {n.func.id for n in ast.walk(funcs[func_name])
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-            and n.func.id in funcs}
+    return {name: {n.func.id for n in ast.walk(f)
+                   if isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Name) and n.func.id in funcs}
+            for name, f in funcs.items()}
+
+
+def _reached(func_name, source=None):
+    """Every function `func_name` calls, directly or through another, except
+    through a helper NOT_CARRIED names for it: what is behind that helper
+    belongs to another mode."""
+    graph = _call_graph(source)
+    stop = NOT_CARRIED.get(func_name, set())
+    seen, todo = set(), [func_name]
+    while todo:
+        for callee in graph[todo.pop()]:
+            if callee not in seen and callee != func_name:
+                seen.add(callee)
+                if callee not in stop:
+                    todo.append(callee)
+    return seen
 
 
 def _mode_codes():
@@ -259,17 +286,44 @@ def _listed(rows, code, mode):
                for r in rows)
 
 
-def test_every_helper_carrying_a_code_is_classified():
-    codes, _ = codes_by_function()
+def _unclassified(source=None):
+    """{entry point: (helpers reached with a code but not named, named
+    helpers no longer reached or carrying no code)}, empty when all agree."""
+    codes, _ = codes_by_function(source)
+    out = {}
     for func in MODE_ENTRIES:
-        with_codes = {c for c in _callees(func) if c in codes}
+        with_codes = {c for c in _reached(func, source) if c in codes}
         named = CARRIED[func] | NOT_CARRIED.get(func, set())
-        assert with_codes - named == set(), (
-            "%s calls %s, which can return or exit with a status; add it to "
-            "CARRIED or NOT_CARRIED" % (func, sorted(with_codes - named)))
-        assert named - with_codes == set(), (
-            "%s no longer calls %s, or it carries no status"
-            % (func, sorted(named - with_codes)))
+        if with_codes != named:
+            out[func] = (sorted(with_codes - named),
+                         sorted(named - with_codes))
+    return out
+
+
+def test_every_helper_carrying_a_code_is_classified():
+    for func, (unnamed, stale) in _unclassified().items():
+        assert not unnamed, (
+            "%s reaches %s, which can return or exit with a status; add it "
+            "to CARRIED or NOT_CARRIED" % (func, unnamed))
+        assert not stale, (
+            "%s no longer reaches %s, or it carries no status"
+            % (func, stale))
+
+
+def test_a_helper_reached_only_through_another_must_be_classified():
+    with open(DEPLOY_PY, encoding="utf-8") as fh:
+        source = fh.read()
+    assert _unclassified(source) == {}
+    nested = source.replace(
+        "\ndef preflight(", "\ndef _nested_refusal():\n    return 4\n\n\n"
+        "def preflight(", 1)
+    nested = re.sub(r"(\ndef preflight\([^)]*\):\n)",
+                    r"\1    _nested_refusal()\n", nested, count=1)
+    assert nested.count("_nested_refusal") == 2
+    found = _unclassified(nested)
+    assert set(found) == {"system_execute", "system_preview"}
+    assert all(unnamed == ["_nested_refusal"]
+               for unnamed, _ in found.values())
 
 
 def test_each_mode_has_a_row_for_every_code_that_reaches_it():
