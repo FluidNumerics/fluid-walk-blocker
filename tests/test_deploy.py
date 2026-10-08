@@ -1345,6 +1345,77 @@ def test_a_systemctl_failure_with_the_hooks_proven_names_no_hook(
     assert "NOT proven" not in capsys.readouterr().err
 
 
+def _not_executable(tmp_path):
+    path = tmp_path / "not-executable"
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(0o644)
+    return str(path)
+
+
+@pytest.mark.parametrize("make, status", [
+    (lambda tmp_path: str(tmp_path / "no-such-command"), 127),
+    (_not_executable, 126),
+])
+def test_a_command_that_cannot_start_exits_with_the_shell_s_status(
+        tmp_path, capsys, make, status):
+    """Issue #194, ruled: a command run() cannot start is reported like one
+    that failed, `failed: <cmd>` and the reason on stderr, and exits the
+    shell's status for it: 127 not found, 126 not executable. Mutation:
+    drop the `except OSError`, and the OSError escapes pytest.raises."""
+    cmd = [make(tmp_path), "--flag"]
+    with pytest.raises(SystemExit) as exc:
+        deploy.run(cmd)
+    assert exc.value.code == status
+    err = capsys.readouterr().err
+    assert err.startswith("failed: %s --flag\n%s: " % (cmd[0], cmd[0])), err
+    assert "Traceback" not in err, err
+
+
+def test_a_command_that_cannot_start_does_not_exit_under_check_false(
+        tmp_path, capsys):
+    """check=False callers (the uninstall's teardown, the units-down probe,
+    the snapshot copy) judge the status themselves, as a shell script would
+    judge $?; raising would skip the teardown after it. Captured, the reason
+    is the result's stderr, where a failed command's own would be; uncaptured,
+    it is on the terminal."""
+    missing = str(tmp_path / "no-such-command")
+    captured = deploy.run([missing], check=False)
+    assert captured.returncode == 127
+    assert captured.stderr.startswith(missing + ": "), captured.stderr
+    assert capsys.readouterr().err == ""
+    uncaptured = deploy.run([missing], check=False, capture=False)
+    assert uncaptured.returncode == 127
+    assert capsys.readouterr().err.startswith(missing + ": ")
+
+
+def test_a_systemctl_that_cannot_start_still_gets_the_hook_notice(
+        tmp_path, monkeypatch, capsys):
+    """Issue #194, found by review of issue #145's fix: the `except
+    SystemExit` around daemon-reload prints "Layer 1 NOT proven", and an
+    OSError skipped it. Here the real run() is handed a systemctl that does
+    not exist, and the handler fires on its 127."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    real_run = deploy.run
+    inner = recording_run([], installer_rc=4)
+    missing = str(tmp_path / "no-such-systemctl")
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if cmd == ["systemctl", "daemon-reload"]:
+            return real_run([missing] + cmd[1:], check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return inner(cmd, check=check, capture=capture, dry_run=dry_run,
+                     env=env)
+    monkeypatch.setattr(deploy, "run", fake_run)
+    with contextlib.redirect_stdout(io.StringIO()), \
+            pytest.raises(SystemExit) as exc:
+        deploy.system_execute(_args(tmp_path))
+    assert exc.value.code == 127
+    err = capsys.readouterr().err
+    assert err.index("failed: %s daemon-reload" % missing) \
+        < err.index("Layer 1 NOT proven"), err
+
+
 def test_a_journal_abort_does_not_hide_the_hook_notice(
         tmp_path, monkeypatch, capsys):
     """journal_step() runs run() with check=True, which raises SystemExit

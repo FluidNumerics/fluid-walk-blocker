@@ -402,8 +402,9 @@ What it verifies, and refuses on:
   trust check, and Layer 1's upkeep must never take Layer 2 down. If the
   ownership check below then refuses, the deploy exits 9 instead, writes no
   unit, and the timer stays disabled. If `systemctl daemon-reload` or
-  `enable --now` then fails, the status is that command's own, not 4, and
-  the deploy says neither layer can be relied on (the exit table below).
+  `enable --now` then fails, the status is that command's own (126 or 127
+  if it could not be started), not 4, and the deploy says neither layer
+  can be relied on (the exit table below).
   Any other `install.sh` failure leaves the timer disabled and says so.
   When more than one step fails, the exit status is the most severe and
   the rest are reported on stderr only: a hook-proof failure (4) outranks
@@ -497,7 +498,7 @@ it.
 | 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero, or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
 | 9 | `--system` | the ownership check after `install.sh` | the hook blocks and the shim farm are in place, no unit was written and the timer stays disabled |
 | 10 | `--system` | the journal step, last | the journal grant did not land (ADR-0026). The timer is armed and Layer 2 is reporting. |
-| a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command failed and the run stopped there. While the snapshot is staged (its `install -d`), before the previous units are stopped, they are left as they were. After that and up to `systemctl daemon-reload` — `cp`, `install`, `chown`, a `chmod` of the ownership pass including the exact mode it sets on each directly-executed script, `daemon-reload` itself — the timer stays disabled. A failed `enable --now` leaves the timer as systemctl left it. In the journal step, after the timer is armed — `systemd-tmpfiles`, `rm` or `setfacl` — it stays armed. |
+| a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command failed and the run stopped there. While the snapshot is staged (its `install -d`), before the previous units are stopped, they are left as they were. After that and up to `systemctl daemon-reload` — `cp`, `install`, `chown`, a `chmod` of the ownership pass including the exact mode it sets on each directly-executed script, `daemon-reload` itself — the timer stays disabled. A failed `enable --now` leaves the timer as systemctl left it. In the journal step, after the timer is armed — `systemd-tmpfiles`, `rm` or `setfacl` — it stays armed. A command that could not be started at all is reported the same way, `failed: <cmd>` and the reason, and its status is the shell's: 127 if it was not found, 126 if it could not be executed (issue #194). Where a command's failure does not stop the run, one that could not be started counts as failed: the uninstall's teardown then exits 7 or 8, and the snapshot copy and `install.sh`'s dry run exit 6. |
 
 When more than one step fails, worst case wins, as §8 states under "What it
 verifies": the status is the most severe and the rest are reported on stderr
@@ -517,8 +518,10 @@ the helper is checked first, so a bad helper exits 5 whether or not the
 units would have stopped. A status can mean different things in different
 modes (4 in `--system` and in `--verify`), and a command's own status can
 coincide with one of the codes above (`install.sh`'s 3, or the 1 most
-commands exit with on failure), so read the status with the mode and with
-stderr. An uncaught Python exception exits 1, with a traceback.
+commands exit with on failure), and 126 or 127 may be a command's own exit
+as well as the shell's number for one that could not be started, so read
+the status with the mode and with stderr. An uncaught Python exception exits
+1, with a traceback.
 
 ## 9. Measure the shim
 
