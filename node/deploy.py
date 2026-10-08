@@ -3328,10 +3328,11 @@ def journal_step(args, env=None):
     """Grant, or revoke, the spool group's read on the journal. Returns 0,
     or 10 with the reason written when the grant did not land.
 
-    Runs whether or not the grant is on: a deploy with it off removes the
-    drop-in an earlier one wrote and revokes what it granted, from the gids
-    recorded IN that drop-in, so a changed spool group is revoked too rather
-    than left holding the journal.
+    Runs whether or not the grant is on. Every run revokes the gids recorded
+    IN the drop-in an earlier deploy wrote that this one no longer grants, so
+    a changed spool group's old gid is revoked rather than left holding the
+    journal, with the grant on as well as off. With it off that is every
+    recorded gid, and the drop-in is removed too.
     """
     dropin = journal_dropin_path(args)
     previous = dropin_gids(dropin)

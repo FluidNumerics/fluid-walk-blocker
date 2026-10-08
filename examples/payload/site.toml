@@ -148,6 +148,8 @@ max_kills = 10
 # owns it. Set "kill" only after reading the trail against real traffic
 # (ADR-0009); the decision is compiled into the unit (ADR-0034).
 action = "report"
+# The wait before a second, differenced PSI reading when no usable earlier
+# poll exists. Not a kill timing: the post-SIGKILL re-check is one second.
 settle_s = 10.0
 audit_max_bytes = 10485760
 stream_filters = ["tail"]

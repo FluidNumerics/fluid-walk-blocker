@@ -51,7 +51,8 @@ one stuck in I/O), or an idle orphan. It only reports those.
    A kill lands after the timer fires, while that run lasts. The reaper
    signals one process at a time and waits for each, so with several findings
    that can be minutes. It shows as `Terminated` (exit 143), or as `Killed`
-   (exit 137) if the process ignored `SIGTERM`. The kernel's
+   (exit 137) if the process ignored `SIGTERM`; the reaper's record says
+   `terminated` for the first and `killed` for the second. The kernel's
    out-of-memory killer, a scheduler, and a person running `kill` all look
    the same from your shell, so a matching exit code is not proof.
 
