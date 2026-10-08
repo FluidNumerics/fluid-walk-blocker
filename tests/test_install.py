@@ -12,7 +12,6 @@ audit sink is neutralized in both of its forms.
 import json
 import os
 import re
-import shlex
 import shutil
 import stat
 import subprocess
@@ -3291,41 +3290,125 @@ SHORT_FORM_ACTIONS = ["audit_dir", "coverage_change", "hook_check",
                       "relink_refused"]
 
 
-def _sg_report_calls(text):
-    """Every `sg_report` call in a shell source, wherever it stands on its
-    line -- at the start, behind `||`, `&&`, `;` or `then`, or in a case
-    arm -- as (action, [arguments]). Comment lines and the definition are
-    not calls. The words after the name are split as the shell splits them,
-    so a quoted argument with an arithmetic expansion in it counts once,
-    and they end at the first control operator."""
-    calls = []
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
+def _shell_tokens(line):
+    """Split one logical line of shell into words and control operators,
+    as far as a census needs: quotes, `$( )` and `$(( ))` (nested), and
+    backticks keep their whitespace inside one word; an unquoted `#` at the
+    start of a word ends the line. Operators come back as ("op", text),
+    words as ("word", text)."""
+    tokens, word, started = [], "", False
+    quote, depth, tick = None, 0, False
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote == "'":
+            word += c
+            if c == "'":
+                quote = None
+        elif c == "\\" and quote != "'":
+            word += line[i:i + 2]
+            started = True
+            i += 1
+        elif c == '"':
+            word += c
+            started = True
+            quote = None if quote == '"' else (quote or '"')
+        elif c == "'" and quote is None:
+            word += c
+            started = True
+            quote = "'"
+        elif c == "`":
+            word += c
+            started = True
+            tick = not tick
+        elif c == "$" and line[i + 1:i + 2] == "(":
+            word += "$("
+            started = True
+            depth += 1
+            i += 1
+        elif depth and c == "(":
+            word += c
+            depth += 1
+        elif depth and c == ")":
+            word += c
+            depth -= 1
+        elif quote or depth or tick:
+            word += c
+        elif c in " \t":
+            if started:
+                tokens.append(("word", word))
+            word, started = "", False
+        elif c == "#" and not started:
+            break
+        elif c in ";&|()<>":
+            if started:
+                tokens.append(("word", word))
+            word, started = "", False
+            op = c
+            while i + 1 < n and line[i + 1] == c and c in ";&|":
+                op += c
+                i += 1
+            tokens.append(("op", op))
+        else:
+            word += c
+            started = True
+        i += 1
+    if started:
+        tokens.append(("word", word))
+    return tokens
+
+
+_SG_REPORT_NAME = re.compile(r"(?<![\w-])sg_report(?![\w-])")
+
+
+def _sg_report_scan(text):
+    """Scan a shell source for `sg_report`: return (calls, mentions).
+
+    A call is the word `sg_report` in command position on its line --
+    at the start, behind `||`, `&&`, `;`, `!` or `then`, or in a case arm
+    -- with the words after it up to the first control operator, as
+    (action, [arguments]). A backslash-newline joins two lines first, so
+    a continued call is one call. Quotes, `$( )`, `$(( ))` and backticks
+    keep their whitespace inside one word, so an unquoted expansion is one
+    argument, as the shell counts it. Comments and here-document bodies
+    are not code.
+
+    `mentions` counts every word of code that names `sg_report` anywhere,
+    the definition included. A call the scan cannot parse as one -- inside
+    a command substitution, say -- is still a mention, so the census
+    fails on it loudly rather than miss it."""
+    calls, mentions, heredoc = [], 0, None
+    for line in re.sub(r"\\\n", "", text).splitlines():
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
             continue
-        for m in re.finditer(r"(?<![\w-])sg_report\s+", line):
-            lexer = shlex.shlex(line[m.end():], posix=True,
-                                punctuation_chars=True)
-            lexer.whitespace_split = True
-            words = []
-            for word in lexer:
-                if set(word) <= set(lexer.punctuation_chars):
-                    break
-                words.append(word)
-            calls.append((words[0], words[1:]))
-    return calls
+        tokens = _shell_tokens(line)
+        for k, (kind, text_) in enumerate(tokens):
+            if kind == "word":
+                mentions += len(_SG_REPORT_NAME.findall(text_))
+            if (kind == "op" and text_ == "<" and k + 2 < len(tokens)
+                    and tokens[k + 1] == ("op", "<")
+                    and tokens[k + 2][0] == "word"):
+                heredoc = tokens[k + 2][1].lstrip("-").strip("'\"")
+            if (kind == "word" and text_ == "sg_report"
+                    and tokens[k + 1:k + 2] != [("op", "(")]):
+                words = []
+                for kind2, text2 in tokens[k + 1:]:
+                    if kind2 == "op":
+                        break
+                    words.append(text2)
+                calls.append((words[0], words[1:]))
+    return calls, mentions
 
 
 def test_the_short_form_actions_are_every_other_action_install_sh_reports():
     """Every `sg_report` call in install.sh names either `uncovered_mount`,
     in the long form, or one of SHORT_FORM_ACTIONS, in the short; no
     caller uses the long form for another action (issue #189)."""
-    text = open(INSTALL_SH).read()
-    calls = _sg_report_calls(text)
-    # Every non-comment mention of the name but the definition is a call
-    # the scan parsed, so a call in a position it cannot see fails here.
-    mentions = sum(len(re.findall(r"(?<![\w-])sg_report\b", line))
-                   for line in text.splitlines()
-                   if not line.lstrip().startswith("#"))
+    calls, mentions = _sg_report_scan(open(INSTALL_SH).read())
+    # Every mention of the name in code but the definition is a call the
+    # scan parsed, so a call in a position it cannot parse fails here.
     assert len(calls) == mentions - 1, (len(calls), mentions)
     actions = sorted({action for action, _args in calls} - {"uncovered_mount"})
     assert actions == SHORT_FORM_ACTIONS, actions
@@ -3341,14 +3424,47 @@ def test_the_short_form_actions_are_every_other_action_install_sh_reports():
     "true || sg_report coverage_change /mnt/x nfs unknown",
     "true && sg_report coverage_change /mnt/x nfs unknown",
     "true; sg_report coverage_change /mnt/x nfs unknown",
+    "! sg_report coverage_change /mnt/x nfs unknown",
     "if true; then sg_report coverage_change /mnt/x nfs unknown; fi",
     "    x) sg_report coverage_change /mnt/x nfs unknown ;;",
+    "sg_report coverage_change /mnt/x nfs unknown  # sg_report x y",
+    "sg_report coverage_change \\\n    /mnt/x nfs unknown",
 ])
 def test_the_census_sees_a_long_form_call_in_any_position(line):
     """The census above is only as good as its scan: a long-form call for
-    another action is seen wherever it stands on its line."""
-    assert _sg_report_calls(line) == [
-        ("coverage_change", ["/mnt/x", "nfs", "unknown"])]
+    another action is seen wherever it stands on its line, a continued
+    call is one call, and a comment naming the function is not code."""
+    assert _sg_report_scan(line) == (
+        [("coverage_change", ["/mnt/x", "nfs", "unknown"])], 1)
+
+
+@pytest.mark.parametrize("arg", [
+    "$(echo nfs)", "$((1 + 1))", "$(printf %s $(echo nfs))", "`echo nfs`",
+    '"$_x y"', "'a b'",
+])
+def test_the_census_counts_an_expansion_as_one_argument(arg):
+    """An expansion is one argument to the shell, unquoted or not, so a
+    long-form call that passes one is still four arguments. Splitting at
+    `$(` would read it as a short-form call."""
+    line = "sg_report coverage_change /mnt/x %s unknown" % arg
+    assert _sg_report_scan(line) == (
+        [("coverage_change", ["/mnt/x", arg, "unknown"])], 1)
+
+
+@pytest.mark.parametrize("text", [
+    "x=$(sg_report coverage_change /mnt/x nfs unknown)",
+    "x=`sg_report coverage_change /mnt/x nfs unknown`",
+])
+def test_the_census_fails_loudly_on_a_call_it_cannot_parse(text):
+    """A call inside a command substitution is not parsed as a call, but
+    it is still a mention, so the census's count check fails on it."""
+    calls, mentions = _sg_report_scan(text)
+    assert calls == [] and mentions == 1
+
+
+def test_the_census_skips_a_here_document_body():
+    text = "cat <<BLOCK\nsg_report coverage_change a b c\nBLOCK\nsg_report x y\n"
+    assert _sg_report_scan(text) == ([("x", ["y"])], 1)
 
 
 @pytest.mark.parametrize("shell", SHELLS)
