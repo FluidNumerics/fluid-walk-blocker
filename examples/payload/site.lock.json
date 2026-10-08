@@ -52,7 +52,7 @@
     "shim/measure.sh": "cd23bc5e072bd8b4bc568a0c949aa693fc447c172212e3c6e8023eb6b6671f85",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "6207768970a539dd62fa998900668fa33da02b4ce98f72a06574c3e339e95f2a",
-    "survey.py": "d634e68651398fb6956991baaec06d05a2caa913cfbe0b9c99d4009a9922bc59",
+    "survey.py": "a94fe88a991d71ced3972d91f9257524b868bdb613a4f3ae8f6209df104648ec",
     "walk-job": "59921259c936d6bcfaede4fa32f22e05370365126a2d71399de0888ce518298c"
   },
   "schema_version": 1,

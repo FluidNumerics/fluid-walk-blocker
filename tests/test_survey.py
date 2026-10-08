@@ -388,6 +388,9 @@ def test_a_mount_point_site_toml_cannot_name_is_reported_not_proposed(
         assert "capacity" in header[0]
     assert block.count("Not proposed: site.toml cannot name") == len(UNNAMEABLE)
     assert "issue #184" in block
+    assert block.count("remote_proxy change its class, and they change"
+                       " every mount's.") == len(UNNAMEABLE)
+    assert "no entry can change" not in block
     assert block.isascii()
     minimal = ('schema_version = 1\n[site]\ndisplay_name = "Minimal"\n'
                '[install]\nspool_group = "wbaudit"\ntrusted_groups = []\n'

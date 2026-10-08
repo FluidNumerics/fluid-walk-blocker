@@ -294,8 +294,9 @@ def render_toml(rows, today=None):
                        " [A-Za-z0-9._-] (the schema's")
             out.append("# `sink_path`); a later release adds a field for an"
                        " escaped path (issue #184).")
-            out.append("# Until then no entry can change how this mount is"
-                       " classed.")
+            out.append("# Until then only [filesystems] remote_fstypes and"
+                       " remote_proxy change its class, and they change"
+                       " every mount's.")
             continue
         out.append("[[filesystems.mounts]]")
         out.append("path = %s" % json.dumps(r["mountpoint"]))
