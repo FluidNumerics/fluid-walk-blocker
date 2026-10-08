@@ -25,7 +25,7 @@
     "docs/adr/0020-opaque-traversal-needs-two-polls.md": "fcf5cdddd7b6ff573e45e0845e818ad6abed705041bac271062591e45846e52c",
     "docs/adr/0021-root-is-the-authorization.md": "ba7bfd21528135a71e50dc9061f734997f8d9ff4d0c34eda9673fe78df90cece",
     "docs/adr/0022-the-generic-tree-is-published.md": "31427638789c792cc7a902c4257f11b9ec126321c0ed2719da55308198b1933c",
-    "docs/adr/0023-a-record-states-what-holds-now.md": "90d20ee68af1e1790755b7c3f63138def8906b0d269f847cd6b8e11f81249ece",
+    "docs/adr/0023-a-record-states-what-holds-now.md": "3cbec450e0e4236ef07e7b5e248366430e23bfd1bc40689b17ffefc4330f9cfa",
     "docs/adr/0024-a-refusal-is-legible-to-an-indirect-caller.md": "a98b5af98d8789d8f5a50ef659c49e19e22ca2df31ac9aaa7273b6293bec6f4a",
     "docs/adr/0025-spool-readable-by-a-site-group.md": "3881cda65fe3011adb8db23d1a8b6c7e45d411a1d8f1f295fa7d43f646f4518b",
     "docs/adr/0026-journal-readable-by-the-spool-group.md": "f6ff9b48c6b25f97318981b0a494987cd22c430ee6e6f0d3b8cae6cb7f183c25",

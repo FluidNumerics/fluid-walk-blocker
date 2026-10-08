@@ -1,7 +1,7 @@
 # ADR-0023: A record states what holds now, and narrowed wording moves below it
 
 **Status:** accepted, 2026-09-18
-The Decision's paragraph on where superseded wording moves was amended when issue #139 was decided: an issue's decision may now amend an accepted record without a record of its own. The wording it replaced is recorded under "Superseded wording" below.
+The Decision's paragraph on where superseded wording moves, with the Consequences' count of the narrowings, was amended when issue #139 was decided: an issue's decision may now amend an accepted record without a record of its own. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -120,13 +120,15 @@ true, and nothing else — no rewording, no re-wrapping, no tidying in passing.
   correction.** That is the cost of the exemption above, accepted deliberately.
   It is not a defect awaiting a fix, and a later reviewer who re-raises it
   should be answered with this paragraph.
-- **Six of the eight narrowings move wording; two do not.** The count is worth
-  stating because a reviewer counting `Narrows:` lines against sections will
-  otherwise find a discrepancy and read it as an omission. Seven records carry
-  the new section — one of them, ADR-0008, has no `Narrows:` line pointing at it
-  at all and carries superseded wording anyway, which is why the section is
-  keyed on a record holding superseded wording rather than on something
-  narrowing it.
+- **Not every narrowing moves wording, and not every section answers a
+  narrowing.** This is worth stating because a reviewer counting `Narrows:`
+  lines against sections will otherwise find a discrepancy and read it as an
+  omission. A narrowing exempted above leaves its clause where it stands.
+  ADR-0008 and ADR-0022 carry superseded wording with no `Narrows:` line
+  pointing at them, and an amendment on an issue's decision has none either,
+  which is why the section is keyed on a record holding superseded wording
+  rather than on something narrowing it. The tests, not a count kept here,
+  say which records carry the section.
 - **A "verbatim" move is not checkable by the test.** The comparison normalises
   whitespace and strips emphasis and code spans, so a move that silently
   re-wraps a line or drops a backtick passes. Review is the only thing that
@@ -159,3 +161,17 @@ Amended when issue #139 was decided. The Decision above read:
 
 An issue's decision may now amend a clause too, with the Status note in place
 of the `Narrows:` line it does not have.
+
+The Consequences above read:
+
+> - **Six of the eight narrowings move wording; two do not.** The count is worth
+> stating because a reviewer counting `Narrows:` lines against sections will
+> otherwise find a discrepancy and read it as an omission. Seven records carry
+> the new section — one of them, ADR-0008, has no `Narrows:` line pointing at it
+> at all and carries superseded wording anyway, which is why the section is
+> keyed on a record holding superseded wording rather than on something
+> narrowing it.
+
+The counts were true when this record was accepted. Records added since then
+made them false, so the bullet now gives the reasons a count and a list differ
+and leaves the list to the tests.
