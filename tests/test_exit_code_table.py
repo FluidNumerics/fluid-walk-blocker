@@ -19,6 +19,7 @@ through `SystemExit`; each has a row of its own, pinned below.
 import ast
 import os
 import re
+import sys
 
 import pytest
 
@@ -190,15 +191,146 @@ def test_every_status_deploy_py_returns_has_a_row_and_every_row_is_one():
         % sorted(in_table - in_source))
 
 
-def test_each_mode_has_a_row_for_every_code_its_entry_point_returns():
+# Issue #146. A code can reach a mode through a helper the entry point calls:
+# a status returned through `rc`, or a SystemExit raised inside the helper.
+# Every helper an entry point calls that the scan finds a code in is named
+# here, either as CARRIED (its codes are that mode's codes too) or under
+# NOT_CARRIED with the reason. A new such helper fails the test below until
+# someone decides which, so the per-mode check cannot quietly miss it.
+CARRIED = {
+    "system_execute": {
+        "preflight",        # its refusal is returned as `rc`
+        "stage_payload",    # raises SystemExit(6)
+        "journal_step",     # its 10 is returned as `rc`
+        "_units_are_down",  # its 7, which the entry point returns as 7
+    },
+    "system_preview": {"preflight"},
+    "system_uninstall": {
+        "_units_are_down",
+        "validate_root_write_paths",
+        "write_unknown_refusal",
+    },
+    "system_verify": set(),
+}
+NOT_CARRIED = {
+    # The dry run of `--system` enters here and hands over to the preview,
+    # whose codes are `--system --dry-run`'s and checked under its own entry.
+    "system_execute": {"system_preview"},
+}
+
+# `system_uninstall()` serves both spellings of the uninstall. These of its
+# codes are never returned on a dry run, so no row may list the dry-run
+# spelling beside them; every other code of the function must be listed for
+# it. 3 and 7 are behind `not args.dry_run`, which the test checks in the
+# source. 8 needs a command to fail, and run() issues none on a dry run.
+NOT_IN_UNINSTALL_DRY_RUN = {3, 7, 8}
+DRY_GUARDED = {3, 7}
+UNINSTALL_DRY_RUN = "`--uninstall --dry-run`"
+
+
+def _callees(func_name):
+    with open(DEPLOY_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    funcs = {f.name: f for f in ast.walk(tree)
+             if isinstance(f, ast.FunctionDef)}
+    return {n.func.id for n in ast.walk(funcs[func_name])
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id in funcs}
+
+
+def _mode_codes():
+    """{mode: codes that reach it}, from each entry point and the helpers
+    CARRIED names for it."""
     codes, _ = codes_by_function()
-    rows = table_rows()
+    out = {}
     for func, mode in MODE_ENTRIES.items():
-        for code in codes[func]:
-            assert any(r[0] == str(code)
-                       and (mode in r[1].split(", ") or r[1] == "every mode")
-                       for r in rows), (
-                "%s returns %d, and no row lists it for %s" % (func, code, mode))
+        reached = set(codes[func])
+        for helper in CARRIED[func]:
+            reached |= codes.get(helper, set())
+        out[mode] = reached
+    uninstall = out[MODE_ENTRIES["system_uninstall"]]
+    out[UNINSTALL_DRY_RUN] = uninstall - NOT_IN_UNINSTALL_DRY_RUN
+    return out
+
+
+def _listed(rows, code, mode):
+    return any(r[0] == str(code)
+               and (mode in r[1].split(", ") or r[1] == "every mode")
+               for r in rows)
+
+
+def test_every_helper_carrying_a_code_is_classified():
+    codes, _ = codes_by_function()
+    for func in MODE_ENTRIES:
+        with_codes = {c for c in _callees(func) if c in codes}
+        named = CARRIED[func] | NOT_CARRIED.get(func, set())
+        assert with_codes - named == set(), (
+            "%s calls %s, which can return or exit with a status; add it to "
+            "CARRIED or NOT_CARRIED" % (func, sorted(with_codes - named)))
+        assert named - with_codes == set(), (
+            "%s no longer calls %s, or it carries no status"
+            % (func, sorted(named - with_codes)))
+
+
+def test_each_mode_has_a_row_for_every_code_that_reaches_it():
+    rows = table_rows()
+    for mode, reached in _mode_codes().items():
+        for code in reached:
+            assert _listed(rows, code, mode), (
+                "%d reaches %s, and no row lists it for that mode"
+                % (code, mode))
+
+
+def test_no_row_lists_the_uninstall_dry_run_beside_a_code_it_never_returns():
+    rows = table_rows()
+    for code in NOT_IN_UNINSTALL_DRY_RUN:
+        assert not any(r[0] == str(code)
+                       and UNINSTALL_DRY_RUN in r[1].split(", ")
+                       for r in rows), code
+
+
+def test_the_codes_kept_off_the_uninstall_dry_run_are_behind_its_guard():
+    with open(DEPLOY_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    func = next(f for f in ast.walk(tree)
+                if isinstance(f, ast.FunctionDef)
+                and f.name == "system_uninstall")
+    guarded = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.If) and "not args.dry_run" in ast.unparse(
+                node.test):
+            for inner in node.body:
+                for r in ast.walk(inner):
+                    if isinstance(r, ast.Return) and r.value is not None \
+                            and _int_literal(r.value) is not None:
+                        guarded.add(_int_literal(r.value))
+    assert DRY_GUARDED <= guarded, (DRY_GUARDED, guarded)
+    assert DRY_GUARDED <= NOT_IN_UNINSTALL_DRY_RUN
+
+
+@pytest.mark.parametrize("edit", [
+    ("| 6 | `--system`, `--system --dry-run`, `--uninstall`, "
+     "`--uninstall --dry-run` |",
+     "| 6 | `--system`, `--system --dry-run`, `--uninstall` |"),
+    ("| 6 | `--system`, `--system --dry-run`, ",
+     "| 6 | `--system --dry-run`, "),
+    ("| 10 | `--system` |", "| 10 | `--system --dry-run` |"),
+], ids=["6-without-uninstall-dry-run", "6-without-system", "10-as-dry-run"])
+def test_the_edits_issue_146_found_unpinned_now_fail(edit, monkeypatch):
+    """Each of these edits to the table passed before issue #146."""
+    with open(OPERATING, encoding="utf-8") as fh:
+        text = fh.read()
+    old, new = edit
+    assert text.count(old) == 1, old
+    edited = text.replace(old, new)
+    monkeypatch.setattr(
+        sys.modules[__name__], "table_rows",
+        lambda text=None, _t=edited: _real_table_rows(_t))
+    with pytest.raises(AssertionError, match="no row lists it"):
+        test_each_mode_has_a_row_for_every_code_that_reaches_it()
+
+
+_real_table_rows = table_rows
 
 
 def test_argparse_and_a_command_s_own_status_have_their_rows():
