@@ -261,6 +261,18 @@ def compare(expected, actual):
     return lines
 
 
+def kill_notice(site):
+    """One line, or None, saying what `[reaper].action = "kill"` compiles to.
+    Not a failure and not a warning: the value is valid, and this is the
+    place a reviewer of a build log sees that the unit will signal. Printed
+    by `validate` and by a `build` that writes (ADR-0034)."""
+    if site.lookup("reaper.action") != "kill":
+        return None
+    return ('reaper.action = "kill": the unit runs reaper.py --kill, so the '
+            "reaper signals every finding outside NEVER_KILL, whoever owns "
+            "the process (ADR-0034).")
+
+
 def build(site_path, out_dir, check=False, out=None, err=None):
     """Build `site_path` into `out_dir`, or with `check` compare the two
     without writing. Returns the process exit code: 0 built or identical,
@@ -286,6 +298,12 @@ def build(site_path, out_dir, check=False, out=None, err=None):
             return EXIT_DIFFERS if lines else EXIT_OK
         _write_payload(out_dir, files)
         out.write("%s: built %d files into %s\n" % (site_path, len(files), out_dir))
+        # On the write path only: under --check, stdout is the list of
+        # differences and an empty one means identical, so a notice there
+        # would read as a difference.
+        notice = kill_notice(site)
+        if notice:
+            out.write(notice + "\n")
         return EXIT_OK
     except BuildError as exc:
         err.write("walk-blocker build: %s\n" % exc)

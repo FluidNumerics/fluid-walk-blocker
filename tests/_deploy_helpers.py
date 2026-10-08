@@ -55,6 +55,7 @@ REQUIRED_SOURCES = (
     "site.toml:timer.timeout_start_sec",
     "site.toml:timer.relink_timeout_s",
     "site.toml:timer.relink_kill_after_s",
+    "site.toml:reaper.action",
     "site.toml:trusted_binaries.timeout",
     "site.toml:trusted_binaries.sh",
     "site.toml:trusted_binaries.python3",
@@ -75,6 +76,10 @@ def site_values(**overrides):
     for shell in ("bash", "zsh", "fish"):
         for key, value in data["hooks"][shell].items():
             values["%shooks.%s.%s" % (stamp.SITE_PREFIX, shell, key)] = value
+    # The one `[reaper]` key deploy.py reads: the rest of that table is the
+    # reaper's, and a value here that deploy.py has no marker for would be
+    # reported as unused rather than silently ignored.
+    values[stamp.SITE_PREFIX + "reaper.action"] = data["reaper"]["action"]
     for key, value in overrides.items():
         full = key if key in ("VERSION", "SITE_SHA256") \
             or key.startswith(stamp.SITE_PREFIX) \

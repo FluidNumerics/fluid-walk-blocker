@@ -141,7 +141,7 @@ __version__ = '0.3.3'  # GENERATED from VERSION
 # reads the payload's, the install reads its root-only snapshot's, and both
 # refuse unless the lock names this digest and every payload file hashes to
 # its entry (ADR-0029). It catches a bad copy, not the payload's owner.
-SITE_SHA256 = '6207768970a539dd62fa998900668fa33da02b4ce98f72a06574c3e339e95f2a'  # GENERATED from SITE_SHA256
+SITE_SHA256 = '956c239b672a77f1b8f47b6c0991d522e04ba4d9292e33d42d61171c420bfe0f'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -242,6 +242,15 @@ TIMER_PERSISTENT = False  # GENERATED from site.toml:timer.persistent
 TIMEOUT_START_SEC = 240  # GENERATED from site.toml:timer.timeout_start_sec
 RELINK_TIMEOUT_S = 30  # GENERATED from site.toml:timer.relink_timeout_s
 RELINK_KILL_AFTER_S = 10  # GENERATED from site.toml:timer.relink_kill_after_s
+
+# `[reaper].action`: the promotion decision, "report" or "kill", rendered
+# into the service's ExecStart by render_units(). Compiled, never read back
+# from the installed unit, so a redeploy carries the site's decision instead
+# of reverting it to the default -- which is what a hand-edited unit did on
+# every install before this (ADR-0034). The reaper reads only its argv.
+REAPER_ACTION = 'report'  # GENERATED from site.toml:reaper.action
+REAPER_FLAGS = {"report": "--report", "kill": "--kill"}
+REAPER_VERBS = {"report": "report", "kill": "report and stop"}
 
 # `[trusted_binaries]`: absolute paths for everything the unit executes as
 # root, so nothing resolves through a PATH a user controls.
@@ -392,7 +401,7 @@ def audit_path(spool):
 
 UNIT_SERVICE = """\
 [Unit]
-Description=walk-blocker on {display_name}: report unbounded filesystem walks
+Description=walk-blocker on {display_name}: {verb} unbounded filesystem walks
 Documentation=file://{prefix}/README.md
 
 [Service]
@@ -426,7 +435,7 @@ Type=oneshot
 ExecStartPre=-{timeout} --kill-after={kill_after} {relink_timeout} {sh} {prefix}/shim/install.sh --relink
 # NOT `-` prefixed, and that asymmetry is the point: the reaper's own exit
 # status has to reach the unit.
-ExecStart={python3} {prefix}/reaper.py --report --spool {spool}
+ExecStart={python3} {prefix}/reaper.py {reaper_flags} --spool {spool}
 # FIVE exit codes, and four of them fail the unit:
 #
 #   0  nothing new, or nothing new that anyone could act on
@@ -476,8 +485,12 @@ def render_units(prefix, spool):
     """(service text, timer text) from the compiled constants. ONE function
     for both the preview and the install, so the preview cannot describe a
     unit the install then writes differently."""
+    # Indexed here, not at import: the schema's enum is the only thing that
+    # reaches REAPER_ACTION, and a payload edited past it is refused against
+    # its own lock before the first systemctl (ADR-0029).
     service = UNIT_SERVICE.format(
         display_name=DISPLAY_NAME, prefix=prefix, spool=spool,
+        reaper_flags=REAPER_FLAGS[REAPER_ACTION], verb=REAPER_VERBS[REAPER_ACTION],
         timeout=TRUSTED_TIMEOUT, kill_after=RELINK_KILL_AFTER_S,
         relink_timeout=RELINK_TIMEOUT_S, sh=TRUSTED_SH, python3=TRUSTED_PYTHON3,
         timeout_start=TIMEOUT_START_SEC)
@@ -3739,8 +3752,13 @@ def system_execute(args, env=None):
     if rc != 0:
         return rc
 
-    print("\ninstalled, report-only. There are TWO audit trails, and the")
-    print("evidence for --kill needs both:")
+    if REAPER_ACTION == "kill":
+        print("\ninstalled, and the reaper signals the processes it finds")
+        print("(reaper.action = kill). There are TWO audit trails, and the")
+        print("record of every kill needs both:")
+    else:
+        print("\ninstalled, report-only. There are TWO audit trails, and the")
+        print("evidence for --kill needs both:")
     print("  tail %s" % os.path.join(spool, "reaper-audit.jsonl"))
     print("      # Layer 2: what the reaper found, written as root, readable")
     print("      # by root and the %s group (ADR-0025)" % DEFAULT_SPOOL_GROUP)
