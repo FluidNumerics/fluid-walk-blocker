@@ -3102,9 +3102,9 @@ def test_uninstall_validates_every_hook_file_it_writes_not_only_the_prefix(
 
 
 def test_a_disabled_hooks_file_is_still_validated_as_a_path(tmp_path, monkeypatch):
-    """Disabled means never written or stripped; it does not mean unchecked.
-    The cost is a stat, and a hand-edited copy that re-enables the hook
-    would otherwise reach strip_block() through an unvalidated path."""
+    """Disabled means never written; it does not mean unchecked. The
+    uninstall still visits a disabled hook's file and strips a block of ours
+    from it (issue #196), so its path gets the same checks as any other."""
     monkeypatch.setattr(deploy, "HOOK_ENABLED_FISH", False)
     assert [shell for _a, shell, enabled in deploy.hook_table() if enabled] == \
         ["bash", "zsh"]

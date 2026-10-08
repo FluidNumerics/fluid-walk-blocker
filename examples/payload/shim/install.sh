@@ -1005,10 +1005,6 @@ has_block() {
 strip_block() {
     _file=$1
     [ -f "$_file" ] || return 0
-    # Nothing to strip is nothing to rewrite. A file with no block keeps its
-    # bytes, its mode and its inode; rewriting it would re-mode it 0644 and
-    # replace it for no change in content (issue #196).
-    has_block "$_file" || return 0
     # mktemp, not `> "$_file.walk-blocker.tmp"`. That would be a root
     # redirection to a PREDICTABLE name, and a plain `>` follows a symlink --
     # so in a shared directory another user could pre-create it pointing
@@ -2706,6 +2702,9 @@ SYS
         systemctl stop "$SG_SERVICE_UNIT" 2>/dev/null || :
         units_are_down || exit 3
         # Only a file actually cleaned is named in the "removed" line below.
+        # Nothing to strip is nothing to rewrite: a file with no block keeps
+        # its bytes, its mode and its inode, where strip_block() would re-mode
+        # it 0644 and replace it for no change in content (issue #196).
         for _uh in $_uninstall_hooks; do
             hook_select "$_uh"
             case $HK_KIND in

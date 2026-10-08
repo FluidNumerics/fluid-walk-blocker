@@ -1230,9 +1230,43 @@ def test_a_disabled_hook_in_a_missing_directory_does_not_refuse(tmp_path):
                                  **{"hooks.zsh.enabled": False})
     assert result.returncode == 0, result.stdout + result.stderr
     assert not layout.zshenv.parent.exists()
+    # Skipped silently: an absent file is not "left in place".
+    assert str(layout.zshenv) not in result.stdout + result.stderr
 
 
-def test_a_disabled_hooks_symlink_is_left_unread_and_unrefused(tmp_path):
+def test_a_disabled_hooks_file_is_read_only_inside_a_trusted_chain(tmp_path):
+    """The directory is walked before the file is read for a marker, so
+    nobody else can swap it for a FIFO in between -- and a refusal there
+    lands before any unit is touched."""
+    zdir = tmp_path / "zdir"
+    zdir.mkdir()
+    layout = Layout(tmp_path, zshenv=zdir / "zshenv")
+    layout.zshenv.write_text("# not ours\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 stat_body=stat_stub_uid_for(str(zdir), "1000 755"),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert str(zdir) in result.stderr
+    assert H.systemctl_calls(layout.toolbin) == []
+    assert layout.zshenv.read_text() == "# not ours\n"
+
+
+def test_a_disabled_hooks_unblocked_file_is_not_held_to_the_leaf_refusal(tmp_path):
+    """No block of ours, so the uninstall never rewrites it, and its owner
+    and mode are no reason to refuse the uninstall."""
+    layout = Layout(tmp_path)
+    layout.zshenv.write_text("# someone else's\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 stat_body=stat_stub_uid_for(str(layout.zshenv), "1000 644"),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert layout.zshenv.read_text() == "# someone else's\n"
+
+
+def test_a_disabled_hooks_symlink_is_left_in_place_and_unrefused(tmp_path):
+    """The link and its target survive unchanged, with a note on stdout.
+    That the target is never read is the code's ordering (the link test
+    comes before any read), not something this test can observe."""
     layout = Layout(tmp_path)
     target = tmp_path / "target"
     target.write_text(BEGIN + "\nsecret\n" + "# <<< walk-blocker <<<\n")
@@ -1258,6 +1292,7 @@ def test_a_disabled_hooks_block_in_a_file_someone_else_owns_is_refused(tmp_path)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "uid 1000" in result.stderr
     assert BEGIN in layout.zshenv.read_text()
+    assert H.systemctl_calls(layout.toolbin) == [], "a unit was touched before the refusal"
 
 
 def test_a_disabled_fish_drop_in_goes_only_with_its_generated_header(tmp_path):
