@@ -346,6 +346,9 @@ account (ADR-0004):
   names, so the people who make the `--kill` decision can read the trail and,
   by its mode bits, nobody else can (ADR-0025). A named ACL entry can widen
   that, and the deploy reports each entry that grants read beyond the group.
+  An entry on a file counts only if the same account or group can also search
+  the spool; where that turns on group membership, which the deploy does not
+  resolve, it reports the entry with that condition said.
   It is created with `mkdir` and set through a
   descriptor opened without following a link, never `install -d`, and it
   carries `.walk-blocker-spool`, the root-owned marker that the relink and the
