@@ -611,7 +611,7 @@
           "type": "number",
           "minimum": 1,
           "default": 10.0,
-          "description": "Seconds the reaper waits after its last signal before re-reading the process table to decide what actually died."
+          "description": "Seconds the reaper waits before taking a second, differenced PSI reading when no usable earlier poll exists: none was saved, or it is closer than the reaper's minimum interval. It is not the wait before the post-`SIGKILL` re-check, which is one second."
         },
         "audit_max_bytes": {
           "type": "integer",

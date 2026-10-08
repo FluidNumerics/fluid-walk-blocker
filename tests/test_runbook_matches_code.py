@@ -3,8 +3,9 @@
 `docs/operating.md` describes four things an operator checks a node
 against: the `audit_dir` states the reconcile journals, when it writes
 `coverage_change`, what `deploy.py --uninstall` undoes, and which shells get
-a hook. Each was found short of or different from the code (issue #89,
-issue #98, issue #99), and a reader checking a node against a short list
+a hook; the `action` values the reaper's trail carries joined them later.
+Each was found short of or different from the code (issue #89, issue #98,
+issue #99, issue #204), and a reader checking a node against a short list
 reads the missing item as a fault. Where the code's set can be read out of
 the source it is, so a state added to `install.sh` without a runbook entry
 fails here. The prose tests pin the true sentence; they do not forbid every
@@ -18,6 +19,7 @@ from conftest import ROOT
 OPERATING = os.path.join(ROOT, "docs", "operating.md")
 INSTALL_SH = os.path.join(ROOT, "node", "shim", "install.sh")
 DEPLOY_PY = os.path.join(ROOT, "node", "deploy.py")
+REAPER_PY = os.path.join(ROOT, "node", "reaper.py")
 
 
 def _read(path):
@@ -216,3 +218,61 @@ def test_the_runbook_promotes_by_the_site_key_and_names_no_retired_flag():
         text = _read(os.path.join(ROOT, *rel))
         assert "--kill-others" not in text, rel
         assert "skipped_other_user" not in text, rel
+
+
+def _terminate_body():
+    src = _read(REAPER_PY)
+    body = src[src.index("def terminate("):]
+    return body[:body.index("\ndef ")]
+
+
+def trail_actions():
+    """Every `action` value reaper.py can write: a Finding's default, each
+    assignment to a finding's action, each literal `"action"` in a record,
+    and each word terminate() returns. An action set any other way is
+    invisible to this scan; the known-subset test below is what notices the
+    scan going stale."""
+    src = _read(REAPER_PY)
+    found = set(re.findall(r'self\.action = "([a-z_]+)"', src))
+    found |= set(re.findall(r'finding\.action = "([a-z_]+)"', src))
+    found |= set(re.findall(r'"action": "([a-z_]+)"', src))
+    found |= set(re.findall(r'return "([a-z_]+)"', _terminate_body()))
+    return found
+
+
+def test_the_action_scan_finds_the_actions_we_know_are_there():
+    assert {"reported", "reported_never_killed", "blind", "skipped_kill_cap",
+            "already_gone", "terminated", "killed", "signalled_but_wedged",
+            "signal_failed", "kill_error"} <= trail_actions()
+
+
+def _action_habit():
+    text = _read(OPERATING)
+    start = text.index("- **`action` is what was done")
+    return _joined(text[start:text.index("\n- ", start + 1)])
+
+
+def test_every_action_the_reaper_writes_is_defined_in_the_runbook():
+    """Issue #204: the runbook named some of the trail's actions, and a
+    reader meeting a row with one it did not name had nothing to check it
+    against. The trail-reading habit defines every one, each followed by
+    its clause."""
+    habit = _action_habit()
+    missing = sorted(a for a in trail_actions()
+                     if not re.search(r"`%s`[:,]" % re.escape(a), habit))
+    assert not missing, (
+        "reaper.py writes actions the runbook's trail-reading habit does not "
+        "define: %s" % ", ".join(missing))
+
+
+def test_the_runbook_times_the_kill_recheck_as_the_code_does():
+    """Issue #203: the post-`SIGKILL` re-check is a fixed one-second sleep
+    in terminate(); `[reaper].settle_s` is the wait before a second PSI
+    reading and nothing in the kill path reads it."""
+    body = _terminate_body()
+    assert "signal.SIGKILL)" in body and "\n    sleep(1)\n" in body, body
+    assert "settle" not in body
+    section = _joined(_section(_read(OPERATING), "12. Promoting to `--kill`"))
+    assert "a re-check one second after `SIGKILL`" in section, section
+    assert "settle_s" not in section
+    assert "the re-check one second later" in _action_habit()
