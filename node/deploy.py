@@ -3574,9 +3574,27 @@ def system_execute(args, env=None):
         write_unit(service_path, service)
         write_unit(timer_path, timer)
 
-    run(["systemctl", "daemon-reload"], dry_run=args.dry_run, env=env)
-    run(["systemctl", "enable", "--now", TIMER_UNIT],
-        dry_run=args.dry_run, env=env)
+    try:
+        run(["systemctl", "daemon-reload"], dry_run=args.dry_run, env=env)
+        run(["systemctl", "enable", "--now", TIMER_UNIT],
+            dry_run=args.dry_run, env=env)
+    except SystemExit:
+        # Issue #145. run() has reported the command; the hook failure would
+        # otherwise go unreported by this script, because the notice below
+        # is never reached. The command's status still wins over 4: exit 4
+        # promises Layer 2 is running, and here it is not known to be. Not
+        # "NOT armed": enable --now can enable the timer and fail to start it.
+        if hooks_unproven:
+            sys.stderr.write(
+                "\ndeploy.py: Layer 1 NOT proven, and Layer 2 not known to be"
+                " armed.\n"
+                "  install.sh could not prove a required hook fires, and the\n"
+                "  systemctl command above failed, so %s is not known\n"
+                "  to be enabled or running: neither layer can be relied on.\n"
+                "  The required hook is written but unproven; no best-effort\n"
+                "  hook was written. Fix both causes above, then re-run this\n"
+                "  install.\n" % TIMER_UNIT)
+        raise
 
     # Told BEFORE the journal step, not after: journal_step() can end the run
     # through run()'s SystemExit, and this notice is the only thing that says

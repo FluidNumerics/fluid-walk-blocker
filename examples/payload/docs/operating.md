@@ -379,11 +379,14 @@ What it verifies, and refuses on:
   units are written and its timer re-enabled: the payload passed every
   trust check, and Layer 1's upkeep must never take Layer 2 down. If the
   ownership check below then refuses, the deploy exits 9 instead, writes no
-  unit, and the timer stays disabled. Any other `install.sh` failure leaves
-  the timer disabled and says so. When more than one step fails, the exit
-  status is the most severe and the rest are reported on stderr only: a
-  hook-proof failure (4) outranks a journal step that did not land (10, or a
-  command's own status). `install.sh` runs while the timer is disabled, so
+  unit, and the timer stays disabled. If `systemctl daemon-reload` or
+  `enable --now` then fails, the status is that command's own, not 4, and
+  the deploy says neither layer can be relied on (the exit table below).
+  Any other `install.sh` failure leaves the timer disabled and says so.
+  When more than one step fails, the exit status is the most severe and
+  the rest are reported on stderr only: a hook-proof failure (4) outranks
+  a journal step that did not land (10, or the status of the journal
+  step's own command). `install.sh` runs while the timer is disabled, so
   its output carries a line saying the timer is not armed; that is the
   state at that moment. The deploy enables the timer after it unless it
   stops before that point (§14);
@@ -482,9 +485,9 @@ required hook that failed its proof (4), because the install carries on to
 re-arm Layer 2. If the ownership check after `install.sh` then refuses, the
 status is 9, as above, and the timer stays disabled. If `systemctl
 daemon-reload` or `enable --now` then fails, the status is that command's
-own, and the run ends before `deploy.py` prints its Layer-1-not-proven
-notice: `install.sh`'s own stderr is then the only report of the hook
-failure (issue #145). If the journal step then fails, the status is 4. Under
+own, not 4, because 4 promises that Layer 2 is running and here it is not
+known to be; `deploy.py` says on stderr that neither layer can be relied on
+(issue #145). If the journal step then fails, the status is 4. Under
 `--verify`, drift and an unreadable file together exit 1. The install's dry
 run can report two refusals, from its checks and from the payload check, but
 both are 6. Order, not severity, decides between the uninstall's 5 and 7:
