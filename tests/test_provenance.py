@@ -347,13 +347,12 @@ def test_the_unresolvable_ref_line_has_no_doubled_period(repo, capsys):
 @pytest.mark.parametrize("how", ["raises", "exits-non-zero"])
 def test_a_failed_branch_listing_drops_the_hint_and_keeps_the_error(
         repo, capsys, monkeypatch, how):
-    """Best effort: the listing decorates an error and must never replace it.
-    Only the second listing (local branches) fails, so a half-built hint
-    from the first cannot pass for a dropped one."""
+    """Best effort: the listing decorates an error and must never replace
+    it."""
     real = P._git
 
     def failing(where, args, timeout, stdin=None):
-        if args[0] == "for-each-ref" and args[-1] == "refs/heads":
+        if args[0] == "for-each-ref":
             if how == "raises":
                 raise P.ProvenanceError("git for-each-ref did not finish")
             return subprocess.CompletedProcess(args, 128, b"", b"")
@@ -460,3 +459,129 @@ def test_a_payload_whose_recorded_digest_is_not_one_is_refused(
     assert code == P.EXIT_ERROR
     assert "Traceback" not in err
     assert "not a sha256" in err
+
+
+def _listed(err):
+    return err.split("Branches here: ", 1)[1].strip().split(", ")
+
+
+def _resolves_to(repo, name):
+    return _git(repo, "rev-parse", "--verify", "--quiet",
+                name + "^{commit}").strip()
+
+
+def test_a_branch_shadowed_by_a_local_one_is_listed_by_its_full_name(
+        repo, capsys):
+    """Issue #135: `refs/heads/origin/main` shadows `refs/remotes/origin/main`
+    for the short name `origin/main`, so the hint listed `origin/main` twice
+    and both pasted back to the local branch. The shadowed one is now listed
+    by its full name, and both names resolve to the commits they were
+    listed for."""
+    remote = _git(repo, "rev-parse", "refs/remotes/origin/main").strip()
+    local = _unrelated(repo, "a commit only the local branch has")
+    assert local != remote
+    _git(repo, "update-ref", "refs/heads/origin/main", local)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert listed == ["refs/remotes/origin/main", "main", "origin/main"], listed
+    assert _resolves_to(repo, "refs/remotes/origin/main") == remote
+    assert _resolves_to(repo, "origin/main") == local
+
+
+def test_a_branch_shadowed_by_a_tag_is_listed_by_its_full_name(repo, capsys):
+    """A tag `rel` wins over a branch `rel`: `--ref rel` names the tag."""
+    branch = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-ref", "refs/heads/rel", branch)
+    tagged = _unrelated(repo, "a commit only the tag names")
+    _git(repo, "tag", "rel", tagged)
+    _git(repo, "update-ref", "refs/heads/main", branch)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/rel" in listed and "rel" not in listed, listed
+    assert _resolves_to(repo, "refs/heads/rel") == branch
+    assert _resolves_to(repo, "rel") == tagged
+
+
+def test_a_branch_called_head_is_listed_by_its_full_name(repo, capsys):
+    """`HEAD` is the repository's HEAD, never `refs/heads/HEAD`."""
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    other = _unrelated(repo, "a commit only the branch called HEAD has")
+    _git(repo, "update-ref", "refs/heads/HEAD", other)
+    _git(repo, "update-ref", "refs/heads/main", head)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/HEAD" in listed and "HEAD" not in listed, listed
+    assert _resolves_to(repo, "refs/heads/HEAD") == other
+    assert _resolves_to(repo, "HEAD") == head
+
+
+def test_a_local_branch_named_like_another_ref_is_listed_by_its_full_name(
+        repo, capsys):
+    """git tries `refs/<name>` before `refs/heads/<name>`, so a local branch
+    called `remotes/origin/main` pastes back to the remote-tracking one."""
+    remote = _git(repo, "rev-parse", "refs/remotes/origin/main").strip()
+    local = _unrelated(repo, "a commit only the oddly named branch has")
+    _git(repo, "update-ref", "refs/heads/remotes/origin/main", local)
+    _git(repo, "update-ref", "refs/heads/main", remote)
+    code, _out, err = _unresolvable(repo, capsys)
+    listed = _listed(err)
+    assert "refs/heads/remotes/origin/main" in listed, listed
+    assert _resolves_to(repo, "refs/heads/remotes/origin/main") == local
+    assert _resolves_to(repo, "remotes/origin/main") == remote
+
+
+def test_an_unambiguous_name_stays_short_and_every_listed_name_round_trips(
+        repo, capsys):
+    """The full name is the exception. Every name listed, short or full,
+    pastes back as --ref to the commit of the ref it was listed for."""
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-ref", "refs/remotes/upstream/trunk", head)
+    _git(repo, "update-ref", "refs/heads/origin/main",
+         _unrelated(repo, "shadowing commit"))
+    _git(repo, "update-ref", "refs/heads/main", head)
+    code, _out, err = _unresolvable(repo, capsys)
+    listed = _listed(err)
+    expected = [("refs/remotes/origin/main", "refs/remotes/origin/main"),
+                ("upstream/trunk", "refs/remotes/upstream/trunk"),
+                ("main", "refs/heads/main"),
+                ("origin/main", "refs/heads/origin/main")]
+    assert listed == [name for name, _full in expected], listed
+    for name, full in expected:
+        assert _resolves_to(repo, name) == _git(
+            repo, "rev-parse", full).strip(), name
+
+
+def test_a_branch_named_like_another_full_refname_is_listed_in_full(
+        repo, capsys):
+    """git tries the name itself first, so a local branch whose short name is
+    `refs/heads/rel` pastes back to the branch `rel`."""
+    branch = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-ref", "refs/heads/rel", branch)
+    odd = _unrelated(repo, "a commit only the oddly named branch has")
+    _git(repo, "update-ref", "refs/heads/refs/heads/rel", odd)
+    _git(repo, "update-ref", "refs/heads/main", branch)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/refs/heads/rel" in listed, listed
+    assert "refs/heads/rel" not in listed, listed
+    assert _resolves_to(repo, "refs/heads/refs/heads/rel") == odd
+    assert _resolves_to(repo, "refs/heads/rel") == branch
+
+
+def test_a_branch_named_like_an_object_id_is_listed_in_full(repo, capsys):
+    """git reads a whole object id as that object before any ref, so a branch
+    named with another commit's id pastes back to that commit."""
+    named = _git(repo, "rev-parse", "HEAD").strip()
+    other = _unrelated(repo, "a commit only the hex-named branch has")
+    _git(repo, "update-ref", "refs/heads/" + named, other)
+    _git(repo, "update-ref", "refs/heads/main", named)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/" + named in listed and named not in listed, listed
+    assert _resolves_to(repo, "refs/heads/" + named) == other
+    assert _resolves_to(repo, named) == named
