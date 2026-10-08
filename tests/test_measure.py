@@ -909,7 +909,7 @@ ZERO_FLOOR_REF_PAIRS = [(1000, 1000, 0)] * 3
 
 def test_a_zero_reference_floor_reports_the_sentinel(ratio_clock):
     """Issue #197. The floor comparison divides by the reference half's
-    floor, and it runs before the positivity check, so a reference floor of
+    floor, which the positivity check does not read, so a reference floor of
     0.00 reaches it on a pair that is otherwise kept. The guard prints the
     999 sentinel in place of the division. Mutation: `r > 0` to `r >= 0` on
     that line, and awk divides by zero instead of printing 999.0 -- gawk
