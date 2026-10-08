@@ -363,7 +363,19 @@ account (ADR-0004):
   file is saved once to `<file>.walk-blocker.orig`, the first time this
   runs;
 - the reaper's service and timer under `[install].unit_dir`, enabled and
-  started as `walk-blocker.timer`.
+  started as `walk-blocker.timer`;
+- when `[install].journal_readable` is on, a `tmpfiles.d` drop-in,
+  `walk-blocker-journal.conf` under `[install].tmpfiles_dir`, that gives the
+  `[install].spool_group` read access to the journal (ADR-0026): `r-x` ACLs,
+  access and default, on `/var/log/journal` and `/run/log/journal` and on the
+  machine-ID directory in each, and `r--` on the `*.journal*` files in it. It
+  names the gid, never the group name, because tmpfiles resolves names through
+  NSS and can run at boot before a directory service is up. The deploy
+  rewrites it on every run and applies it with `systemd-tmpfiles --create`.
+  Every deploy revokes each gid recorded in the earlier drop-in that it no
+  longer grants, so a changed spool group is revoked rather than left holding
+  the journal. A deploy with the option off removes the drop-in and revokes
+  every gid it recorded; `--uninstall` does the same.
 
 What it verifies, and refuses on:
 
