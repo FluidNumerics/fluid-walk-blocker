@@ -651,26 +651,28 @@ def unowned_by(root, uid=0):
     return sorted(set(bad))
 
 
-def _not_started(cmd, err, capture):
+def _not_started(cmd, err, capture, check):
     """The result of a command `subprocess.run` could not start, numbered
-    the way the shell numbers it (issue #194): 127 when it was not found,
-    126 for any other start failure. That is bash's own split -- ENOENT is
-    127 and every other exec failure 126 -- so EACCES, ENOEXEC and the rest
-    all read as "found but could not be run".
+    by the POSIX shell's convention (issue #194): 127 when it was not
+    found, 126 when it was found but could not be run. Every start failure
+    other than ENOENT is the second kind -- EACCES, a directory, ENOEXEC.
+    Unlike bash, run() does not retry an ENOEXEC file as a shell script, so
+    a shebang-less file is 126 here where bash would have run it.
 
-    The reason stands in for the stderr the command never wrote: captured,
-    it is the result's stderr, which run() and every caller that relays
-    stderr report like a failed command's own; uncaptured, it goes to the
-    terminal, where the command's own stderr would have gone. So a caller
-    with check=False sees a status to judge, as a shell script would, not
-    an exception that skips its teardown or its notice.
+    Under check=True with capture, the reason is the result's stderr, and
+    run() prints it after `failed: <cmd>` as it would a failed command's.
+    Everywhere else it goes to the terminal now: a check=False caller
+    judges the status, as a shell script judges $?, and several (the
+    uninstall's teardown, the units-down probe) do not relay a captured
+    stderr, so a reason left in the result would be lost.
     """
     status = 127 if isinstance(err, FileNotFoundError) else 126
     reason = "%s: %s\n" % (cmd[0], err.strerror or err)
-    if not capture:
-        sys.stderr.write(reason)
-        return subprocess.CompletedProcess(cmd, status, None, None)
-    return subprocess.CompletedProcess(cmd, status, "", reason)
+    if check and capture:
+        return subprocess.CompletedProcess(cmd, status, "", reason)
+    sys.stderr.write(reason)
+    return subprocess.CompletedProcess(cmd, status, "" if capture else None,
+                                       "" if capture else None)
 
 
 def run(cmd, check=True, capture=True, dry_run=False, env=None):
@@ -681,7 +683,7 @@ def run(cmd, check=True, capture=True, dry_run=False, env=None):
     try:
         result = subprocess.run(cmd, capture_output=capture, text=True, env=env)
     except OSError as err:
-        result = _not_started(cmd, err, capture)
+        result = _not_started(cmd, err, capture, check)
     if check and result.returncode != 0:
         sys.stderr.write("failed: %s\n" % printable)
         # Only what was captured: uncaptured, the command already wrote its

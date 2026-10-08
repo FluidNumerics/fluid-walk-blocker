@@ -1375,17 +1375,54 @@ def test_a_command_that_cannot_start_does_not_exit_under_check_false(
         tmp_path, capsys):
     """check=False callers (the uninstall's teardown, the units-down probe,
     the snapshot copy) judge the status themselves, as a shell script would
-    judge $?; raising would skip the teardown after it. Captured, the reason
-    is the result's stderr, where a failed command's own would be; uncaptured,
-    it is on the terminal."""
+    judge $?; raising would skip the teardown after it. Captured or not, the
+    reason is on the terminal and not in the result, because several of
+    those callers never relay a captured stderr."""
     missing = str(tmp_path / "no-such-command")
     captured = deploy.run([missing], check=False)
     assert captured.returncode == 127
-    assert captured.stderr.startswith(missing + ": "), captured.stderr
-    assert capsys.readouterr().err == ""
+    assert captured.stderr == ""
+    assert capsys.readouterr().err.startswith(missing + ": ")
     uncaptured = deploy.run([missing], check=False, capture=False)
     assert uncaptured.returncode == 127
     assert capsys.readouterr().err.startswith(missing + ": ")
+
+
+def test_the_units_down_probe_shows_why_systemctl_did_not_answer(
+        tmp_path, monkeypatch, capsys):
+    """A captured check=False caller that does not relay stderr: the
+    units-down probe. The reason reaches the terminal from run() itself,
+    once, and the probe still refuses with 7. Mutation: carry the reason in
+    the result's stderr under check=False, and it is lost here."""
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    env = dict(os.environ, PATH=str(empty))
+    assert deploy._units_are_down(env) == 7
+    err = capsys.readouterr().err
+    assert err.count("systemctl: No such file or directory") == 1, err
+    assert "cannot confirm" in err, err
+
+
+def test_a_snapshot_copy_that_cannot_start_names_the_reason_once(
+        tmp_path, monkeypatch, capsys):
+    """The snapshot's directory copy is check=False and relays a captured
+    stderr itself. With `cp` missing from PATH, the reason is printed once
+    (by run(), not again by the relay), then the copy's `failed:` line, and
+    the payload check refuses with 6 (issue #194)."""
+    module = _damage_and_stage(lambda payload: None, tmp_path, monkeypatch)
+    bin_dir = tmp_path / "only-install"
+    bin_dir.mkdir()
+    (bin_dir / "install").symlink_to(shutil.which("install"))
+    env = dict(os.environ, PATH=str(bin_dir))
+    with pytest.raises(SystemExit) as exc:
+        module.stage_payload(env=env, dry_run=False)
+    assert exc.value.code == 6
+    err = capsys.readouterr().err
+    assert err.count("cp: No such file or directory") == \
+        err.count("failed: cp -a"), err
+    assert err.count("failed: cp -a") >= 1, err
+    assert err.index("cp: No such file or directory") \
+        < err.index("failed: cp -a"), err
 
 
 def test_a_systemctl_that_cannot_start_still_gets_the_hook_notice(
