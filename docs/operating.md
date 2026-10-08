@@ -133,10 +133,11 @@ capacity and inode count where measured — and then a proposed
   output kept beside `site.toml` is what records that.
 - A mount that deserves a deeper bounded walk: add `maxdepth`, but only after
   the measurement in `docs/site-config.md` (ADR-0007). Never as a guess.
-- A mount point `site.toml` cannot name — one with a space, a `+`, a
-  non-ASCII or non-UTF-8 byte, or `/` itself — is shown with every byte
-  outside `[A-Za-z0-9._/-]` as `\ooo`, measured at its real path, and gets a
-  comment instead of an entry. `path` takes only the schema's `sink_path`
+- A mount point `site.toml` cannot name — one with any byte outside
+  `[A-Za-z0-9._/-]` (a space, a `+`, a newline, a non-ASCII or non-UTF-8
+  byte), a `.`, `..` or empty component, a trailing slash, or `/` itself —
+  is shown with every byte outside that set as `\ooo`, measured at its real
+  path, and gets a comment instead of an entry. `path` takes only the schema's `sink_path`
   form; a field for an escaped path is issue #184.
 
 Network and parallel filesystems may report synthetic totals — a quota, a

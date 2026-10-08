@@ -81,8 +81,10 @@ def display_path(raw):
 
 def nameable(raw):
     """True when site.toml can name this mount point: the schema's
-    `sink_path`, with no `.` or `..` component (the semantic half)."""
-    if not SINK_PATH.match(raw):
+    `sink_path`, with no `.` or `..` component (the semantic half).
+    fullmatch: `$` alone also matches before a trailing newline, and a
+    mount point can end in one."""
+    if not SINK_PATH.fullmatch(raw):
         return False
     return not any(part in (b".", b"..") for part in raw.split(b"/"))
 
@@ -278,11 +280,13 @@ def render_toml(rows, today=None):
                 human_bytes(r["capacity_bytes"]), human_count(r["inodes_used"]),
                 human_count(r["inodes"]))
         else:
-            facts += ", unmeasured (%s)" % r["error"]
+            # The child's error can quote the real path; escape it too.
+            facts += ", unmeasured (%s)" % r["error"].encode(
+                "ascii", "backslashreplace").decode("ascii")
         out.append("")
         out.append("# %s: %s" % (r["mountpoint"], facts))
         if not r["nameable"]:
-            # Escaped above, so the comment is one ASCII line. A `path` here
+            # Escaped above, so the comment is ASCII. A `path` here
             # would fail validate, or name a path that is not the mount.
             out.append("# Not proposed: site.toml cannot name this mount point"
                        " yet. `path` takes only")

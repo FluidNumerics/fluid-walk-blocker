@@ -365,6 +365,7 @@ def test_a_mount_point_is_shown_with_every_unnameable_byte_octal_escaped():
     (b"/mnt/plain", True), (b"/", False), (b"/mnt/./x", False),
     (b"/mnt/../x", False), (b"/mnt/x/", False), (b"/mnt//x", False),
     (b"/mnt/a b", False), (b"/mnt/\xff", False), (b"/mnt/a+b", False),
+    (b"/mnt/x\n", False),
 ])
 def test_nameable_is_the_schemas_sink_path(raw, ok):
     assert survey.nameable(raw) is ok
@@ -392,6 +393,19 @@ def test_a_mount_point_site_toml_cannot_name_is_reported_not_proposed(
                '[install]\nspool_group = "wbaudit"\ntrusted_groups = []\n'
                '[slurm]\npartition = "p"\n[timer]\non_calendar = "*:00:30"\n')
     config.from_dict(tomllib.loads(minimal + "\n" + block))
+
+
+def test_an_unmeasured_mount_point_is_reported_in_ascii(unnameable_table):
+    """The child's error quotes the path it was handed, the real bytes; the
+    comment escapes it, as it escapes the mount point."""
+    child = [sys.executable, "-c",
+             "import os, sys; raise SystemExit("
+             "'cannot stat %s' % os.fsdecode(sys.argv[1]))"]
+    rows = survey.survey(unnameable_table, timeout=5, statvfs_command=child)
+    assert not any(r["measured"] for r in rows)
+    block = survey.render_toml(rows, today="2026-02-03")
+    assert "unmeasured (cannot stat /mnt/caf\\xe9" in block, block
+    assert block.isascii(), block
 
 
 def test_json_and_text_output_carry_the_escaped_form(unnameable_table):
