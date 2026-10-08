@@ -374,16 +374,24 @@ CORRECTED_NOTE = re.compile(
     r'under the (ADR-\d{4}|issue #\d+) entry in "Superseded wording", '
     r'was corrected in place for issue #(\d+)\b')
 NOTHING_MOVED = "nothing moved"
+# What a correction note says in any wording. A Status line that says it and
+# is not in the strict form is a note the check above would never read, so it
+# is reported rather than skipped -- as `NARROWS_LOOSE` does for `Narrows:`.
+# Either half of a note wrapped across two lines still says one of these.
+CORRECTION_LOOSE = re.compile(r"corrected|in place", re.I)
 
 
 def _corrections(text):
-    """{issue: [(entry, line), ...]} for each in-place correction noted under
-    Status. A note outside the Status block is not read; the pin below is what
-    catches a note that has wandered."""
+    """{issue: [(entry, line, rest), ...]} for each in-place correction noted
+    under Status; `rest` is the line after the note's own words. A note outside
+    the Status block is not read; the pin below is what catches a note that
+    has wandered."""
     found = {}
     for line in _status_block(text).splitlines():
-        for entry, issue in CORRECTED_NOTE.findall(line):
-            found.setdefault(issue, []).append((entry, line))
+        for match in CORRECTED_NOTE.finditer(line):
+            entry, issue = match.groups()
+            found.setdefault(issue, []).append(
+                (entry, line, line[match.end():]))
     return found
 
 
@@ -395,14 +403,22 @@ def _correction_problems(text):
     problems = []
     section = _superseded_section(text)
     tagged = set(AMENDED_TAG.findall(section or ""))
+    for line in _status_block(text).splitlines():
+        if (CORRECTION_LOOSE.search(line) and not CORRECTED_NOTE.search(line)
+                and not AMENDED_NOTE.search(line)):
+            problems.append("a Status line reads as an in-place correction "
+                            "note but not in the form this check reads: %r"
+                            % line)
     for issue, notes in sorted(_corrections(text).items()):
-        for entry, line in notes:
+        for entry, line, rest in notes:
             if section is None:
                 problems.append("the note for issue #%s names a correction, "
                                 "but there is no `## Superseded wording` "
                                 "section to correct" % issue)
                 continue
-            if NOTHING_MOVED not in line.lower():
+            # After the note's own words: a "Nothing moved." earlier on the
+            # line belongs to something else.
+            if NOTHING_MOVED not in rest.lower():
                 problems.append("the note for issue #%s does not say %r"
                                 % (issue, NOTHING_MOVED))
             # A correction moves nothing, so a tag for the same issue says
@@ -568,8 +584,19 @@ def _without_section(text):
     (_CORRECTION.format(entry="ADR-0025", issue=9), None, ["does not have"]),
     (_CORRECTION.format(entry="issue #7", issue=9), _without_section,
      ["no `## Superseded"]),
+    ("Nothing moved. " + _CORRECTION.format(entry="issue #7", issue=9).replace(
+        " Nothing moved (ADR-0023).", ""), None, ["does not say"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        " Nothing moved", " It was amended when issue #9 was decided."
+        " Nothing moved"), None, ["also reads as an amendment"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        "corrected in place", "corrected place"), None, ["not in the form"]),
+    (_CORRECTION.format(entry="issue #7", issue=9).replace(
+        "was corrected in place", "was corrected\nin place"), None,
+     ["not in the form", "not in the form"]),
 ], ids=["consistent", "nothing-moved-missing", "same-issue-tagged",
-        "entry-missing", "no-section"])
+        "entry-missing", "no-section", "nothing-moved-before-the-note",
+        "also-an-amendment", "reworded", "wrapped"])
 def test_the_correction_check_on_synthetic_records(note, move, expected):
     text = _SYNTHETIC.format(note=note, tag=_TAG7)
     problems = _correction_problems(move(text) if move else text)
