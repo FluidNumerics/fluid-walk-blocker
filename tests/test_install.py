@@ -12,6 +12,7 @@ audit sink is neutralized in both of its forms.
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -2319,10 +2320,12 @@ def test_sg_report_marks_a_reassertion_and_nothing_else(tmp_path):
 
 @pytest.mark.parametrize("fifth", ["true", "Reasserted", "", "reasserted "])
 def test_sg_report_refuses_any_other_fifth_argument(tmp_path, fifth):
-    _prio, record = _drive_sg_report(tmp_path, "uncovered_mount", "/archive",
-                                     "nfs4", "expensive", fifth)
+    prio, record = _drive_sg_report(tmp_path, "uncovered_mount", "/archive",
+                                    "nfs4", "expensive", fifth)
     assert record == {"layer": "shim", "action": "caller-bug",
                       "state": "caller-bug"}, record
+    # Every caller-bug record is at warning, whatever its form (issue #189).
+    assert prio == "user.warning", prio
 
 
 # --------------------------------------------------------------------------
@@ -3278,20 +3281,107 @@ def test_coverage_change_unwrapped_stays_at_warning(tmp_path, shell, marker):
     assert record["state"] == "unwrapped-1", record
 
 
+CALLER_BUG = {"layer": "shim", "action": "caller-bug", "state": "caller-bug"}
+
+# Every action install.sh reports in the short form. The long form is
+# `uncovered_mount`'s alone (issue #189), so each of these, called long, is
+# a caller bug. Pinned against the file below, so a new action cannot be
+# added without this list hearing about it.
+SHORT_FORM_ACTIONS = ["audit_dir", "coverage_change", "hook_check",
+                      "relink_refused"]
+
+
+def test_the_short_form_actions_are_every_other_action_install_sh_reports():
+    """Every `sg_report` call in install.sh names either `uncovered_mount`,
+    in the long form, or one of SHORT_FORM_ACTIONS, in the short; no
+    caller uses the long form for another action (issue #189)."""
+    text = open(INSTALL_SH).read()
+    calls = re.findall(r"^\s*(?:.*\|\| )?sg_report (\S+)(.*)$", text, re.M)
+    assert calls, "no sg_report call found"
+    actions = sorted({action for action, _rest in calls} - {"uncovered_mount"})
+    assert actions == SHORT_FORM_ACTIONS, actions
+    for action, rest in calls:
+        # A shell-word split, so a quoted argument with an arithmetic
+        # expansion in it counts once.
+        count = 1 + len(shlex.split(rest))
+        if action == "uncovered_mount":
+            assert count in (4, 5), (action, rest)
+        else:
+            assert count in (2, 3), (action, rest)
+
+
 @pytest.mark.parametrize("shell", SHELLS)
 @pytest.mark.parametrize("marker", [(), ("reasserted",)])
-def test_a_long_form_unknown_is_not_raised_to_err(tmp_path, shell, marker):
-    """The raise is for the short form, the only form the relink reports
-    `coverage_change` in; the grammar is unchanged, so a long-form call
-    keeps the long form's notice (ADR-0033; issue #189 asks whether it
-    should be a caller bug). Mutation: raise on any argument count, and
-    these read user.err."""
+@pytest.mark.parametrize("action", SHORT_FORM_ACTIONS)
+def test_a_long_form_call_naming_another_action_is_a_caller_bug(
+        tmp_path, shell, marker, action):
+    """Issue #189, ADR-0033 as amended: the long form is `uncovered_mount`'s
+    alone, so a four- or five-argument call naming any other action is a
+    caller bug, at warning like every caller bug. A long-form `unknown` is
+    no longer a `coverage_change` at notice, nor raised to err. Mutation:
+    drop the action check, and these write the misnamed record at notice."""
     _need(shell)
-    prio, record = _drive_sg_report(tmp_path, "coverage_change", "/mnt/a",
-                                    "nfs", "unknown", *marker, shell=shell)
-    assert record["action"] == "coverage_change", record
-    assert record["state"] == "unknown", record
-    assert prio == "user.notice", (marker, prio)
+    prio, record = _drive_sg_report(tmp_path, action, "/mnt/a", "nfs",
+                                    "unknown", *marker, shell=shell)
+    assert record == CALLER_BUG, (action, marker, record)
+    assert prio == "user.warning", (action, marker, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("args", [
+    ("/archive", "nfs4", "expensive", "bogus"),
+    ("/archive", "nfs4", "expensive", "Reasserted"),
+    ("/archive", "nfs4", "expensive", ""),
+    ("/archive", "nfs4", "bad state"),
+    ("/archive", "nfs4", ""),
+])
+def test_a_long_form_caller_bug_is_at_warning(tmp_path, shell, args):
+    """Issue #189, ADR-0033 as amended: every caller-bug record goes to
+    warning, whatever its form, so a bug report always shows under
+    `journalctl -p warning`. A long-form `uncovered_mount` with a bad marker
+    or an unrepresentable state used to log its caller bug at notice.
+    Mutation: drop the reset to warning, and these read user.notice."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "uncovered_mount", *args,
+                                    shell=shell)
+    assert record == CALLER_BUG, (args, record)
+    assert prio == "user.warning", (args, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("args", [
+    ("expensive",), ("expensive", "reasserted"), ("covered",), ("unmounted",),
+])
+def test_a_correct_long_form_call_is_unchanged(tmp_path, shell, args):
+    """Issue #189 changes misuse only: every long-form call install.sh makes
+    still writes its `uncovered_mount` record at notice."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "uncovered_mount", "/archive",
+                                    "nfs4", *args, shell=shell)
+    want = {"layer": "shim", "action": "uncovered_mount", "state": args[0],
+            "mount": "/archive", "fstype": "nfs4"}
+    if args[1:]:
+        want["reasserted"] = True
+    assert record == want, record
+    assert prio == "user.notice", (args, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("action,state,prio", [
+    ("audit_dir", "absent", "user.warning"),
+    ("hook_check", "present", "user.warning"),
+    ("relink_refused", "exit-3", "user.warning"),
+    ("coverage_change", "unwrapped-1", "user.warning"),
+    ("coverage_change", "unknown", "user.err"),
+])
+def test_a_correct_short_form_call_is_unchanged(tmp_path, shell, action,
+                                                state, prio):
+    """Issue #189 changes misuse only: each short-form action keeps its
+    record and its priority (ADR-0033)."""
+    _need(shell)
+    got, record = _drive_sg_report(tmp_path, action, state, shell=shell)
+    assert record == {"layer": "shim", "action": action, "state": state}, record
+    assert got == prio, (action, state, got)
 
 
 @pytest.mark.parametrize("shell", SHELLS)
