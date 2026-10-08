@@ -143,6 +143,11 @@ io_stall_fraction = 0.01        # differenced over one poll window, never cumula
 cpu_stall_fraction = 0.50
 kill_grace_s = 10
 max_kills = 10
+# What the unit runs the reaper with. "report" records every finding and
+# signals nothing; "kill" signals every finding outside NEVER_KILL, whoever
+# owns it. Set "kill" only after reading the trail against real traffic
+# (ADR-0009); the decision is compiled into the unit (ADR-0034).
+action = "report"
 settle_s = 10.0
 audit_max_bytes = 10485760
 stream_filters = ["tail"]

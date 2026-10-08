@@ -63,12 +63,13 @@ the ADR it bears on.
 | 0025 The audit trail is readable by a site-named group, and a listed service group may hold a spool ancestor | The spool ancestors' owner, group and mode before and after the package upgrade that changed them, and the membership of the group it left holding write |
 | 0026 A site may grant the spool group read on the whole journal, and the deployer proves the grant landed | journald's storage and split mode, the journal directories' and files' ACLs by class of entry, how many journal files the reader could open, and a root pull of the same window showing the refusals that reader could not see |
 | 0027 The uninstall refuses an install that was not built from its own configuration (narrowed by 0029: the payload is checked against its own lock) | n/a: structural |
-| 0028 An orphaned traversal is a finding only past the traversal budget | The trail row naming a reparented known-tool walk shortly after it started, and the same process's age at a later firing |
+| 0028 An orphaned traversal is a finding only past the traversal budget (narrowed by 0034: `--kill` is the whole action) | The trail row naming a reparented known-tool walk shortly after it started, and the same process's age at a later firing |
 | 0029 The dry run and the install check the payload against its own record | n/a: structural |
 | 0030 The reconcile re-asserts a standing uncovered mount on a slow cadence, beside its change records (narrowed by 0031: coverage drift is standing too) | journald's split mode and rotation limits as configured, the journal's disk usage, and the oldest entry a reader could read, against how long an uncovered mount had been standing |
 | 0031 Coverage drift is a standing condition, remembered as a high-water linked set (narrowed by 0033: `unknown` is logged at err) | n/a: structural; retention as ADR-0030 |
 | 0032 The node has declared requirements, and a fault only below one is unsupported | n/a: upstream documentation and measurements on the tool; no site evidence |
 | 0033 A coverage change the relink cannot judge is logged at err, above real drift | n/a: structural |
+| 0034 The reaper's action is a site value compiled into the unit | n/a: structural |
 
 ## What this file is not
 

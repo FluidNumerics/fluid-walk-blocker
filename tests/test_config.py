@@ -338,6 +338,34 @@ def test_an_empty_trusted_groups_list_is_allowed_and_names_are_kept():
     assert site.lookup("install.spool_group") == "wb_read-1"
 
 
+def test_the_reaper_action_is_a_closed_set_with_a_report_default():
+    """`report` or `kill` and nothing else -- the retired `--kill-others` has
+    no value here -- and a site that omits the key ships report-only
+    (ADR-0034)."""
+    data = load_example_dict()
+    data["reaper"]["action"] = "kill_others"
+    with pytest.raises(jsonschema.ValidationError) as exc:
+        config.from_dict(data)
+    assert list(exc.value.absolute_path) == ["reaper", "action"], exc.value
+    data = load_example_dict()
+    del data["reaper"]["action"]
+    assert config.from_dict(data).lookup("reaper.action") == "report"
+
+
+def test_validate_prints_the_kill_notice_only_for_kill(tmp_path, capsys):
+    """One stdout line, not a failure and not stderr: the value is valid,
+    and the line is for whoever reads the build log (ADR-0034)."""
+    assert cli.main(["validate", "--site", EXAMPLE]) == 0
+    assert "reaper.action" not in capsys.readouterr().out
+    site = tmp_path / "site.toml"
+    site.write_text(open(EXAMPLE).read().replace(
+        'action = "report"', 'action = "kill"'), encoding="utf-8")
+    assert cli.main(["validate", "--site", str(site)]) == 0
+    captured = capsys.readouterr()
+    assert 'reaper.action = "kill"' in captured.out and "--kill" in captured.out
+    assert captured.err == ""
+
+
 def test_neither_group_key_has_a_default():
     """A default reader group would be a guess about who reads the trail,
     and a default trusted list would be a guess about which ancestor is

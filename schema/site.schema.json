@@ -601,6 +601,12 @@
           "default": 10,
           "description": "The most processes one poll may signal. A poll that wants more stops and reports; a runaway reaper is its own incident."
         },
+        "action": {
+          "type": "string",
+          "enum": ["report", "kill"],
+          "default": "report",
+          "description": "What the unit runs the reaper with. `report` renders `--report`: every finding is recorded and nothing is signalled. `kill` renders `--kill`: the reaper signals every finding outside `NEVER_KILL`, whoever owns the process, within `max_kills` and `kill_grace_s`. Compiled into the service unit's `ExecStart` by `deploy.py`, so a redeploy carries the decision instead of reverting it; the reaper itself reads only its argv. Set it only after the trail has been read against real traffic (ADR-0009, \"Re-measure when\"); `validate` and `build` print a notice when it is `kill` (ADR-0034)."
+        },
         "settle_s": {
           "type": "number",
           "minimum": 1,

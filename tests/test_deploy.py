@@ -676,6 +676,59 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
     assert "would refuse too" in proc.stderr, proc.stderr
 
 
+def test_the_preview_refuses_an_unmapped_action_without_a_traceback(
+        traversable_root):
+    """A stamped `REAPER_ACTION` outside the schema's enum can only come
+    from a payload edited by hand past the build. The preview's job is still
+    to print the plan and REFUSE at its payload check (exit 6, ADR-0029),
+    not to die in a KeyError before that check is reached -- review round 1
+    on this PR found it did. The units are not rendered, because there is
+    no honest unit to show for a value this build does not map."""
+    payload = os.path.join(traversable_root, "payload")
+    layout = Layout(traversable_root,
+                    prefix=os.path.join(traversable_root, "prefix"),
+                    bashrc=os.path.join(traversable_root, "bashrc"),
+                    zshenv=os.path.join(traversable_root, "zshenv"),
+                    fishconf=os.path.join(traversable_root, "fish-conf.fish"),
+                    spool=os.path.join(traversable_root, "var-log"),
+                    toolbin=os.path.join(traversable_root, "usrbin"),
+                    mount_table=os.path.join(traversable_root, "mounts"))
+    stamped_install(traversable_root, dest=os.path.join(payload, "shim"),
+                    layout=layout)
+    values = site_values(**{
+        "install.prefix": str(layout.prefix),
+        "install.spool_dir": str(layout.spool),
+        "install.spool_group": SPOOL_GROUP,
+        "install.unit_dir": os.path.join(traversable_root, "unit-dir"),
+        "install.staging_parent": os.path.join(traversable_root, "run"),
+        "hooks.bash.file": str(layout.bashrc),
+        "hooks.zsh.file": str(layout.zshenv),
+        "hooks.fish.file": str(layout.fishconf),
+        "reaper.action": "maim",
+    })
+    script = write_stamped_deploy(values, payload)
+
+    proc = subprocess.run([NODE_PYTHON, script, "--system", "--dry-run"],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "KeyError" not in proc.stderr, proc.stderr
+    out = proc.stdout
+    assert "System-wide install of walk-blocker Layer 1" in out
+    # The whole note, not its first line: review round 2 narrowed what it
+    # claims (the payload check refuses the edit unless the lock was
+    # rewritten with it, ADR-0029), and the top-up round found that change
+    # had no oracle -- the first line alone pinned nothing it said.
+    assert (
+        "# units are NOT rendered: the stamped reaper.action 'maim' is not a\n"
+        "# value this build maps (kill, report). The payload was edited past its\n"
+        "# build: the payload check below refuses it, unless its lock was\n"
+        "# rewritten with it, the case ADR-0029 does not claim to catch.\n"
+    ) in out, out
+    assert "ExecStart=" not in out and "OnCalendar=" not in out, out
+    assert _previewed_lines(out, script) == [], out
+
+
 def _previewed_lines(out, script):
     return [l for l in out.splitlines()
             if "--system" in l and script in l]
@@ -3276,13 +3329,73 @@ def test_a_unit_path_that_is_a_symlink_is_not_followed(tmp_path):
     assert target.read_text() == "do not truncate me\n"
 
 
-def test_the_reaper_ships_report_only():
+def test_the_reaper_ships_report_only_by_default():
     """Promoting to --kill is a decision someone makes after reading real
-    findings. Checked against ExecStart specifically: `--kill-after` on the
-    unrelated ExecStartPre legitimately puts `--kill` elsewhere in the unit."""
+    findings, recorded as `[reaper].action = "kill"`; the example, and so
+    this suite's payload, leaves it at the default. Checked against
+    ExecStart specifically: `--kill-after` on the unrelated ExecStartPre
+    legitimately puts `--kill` elsewhere in the unit."""
+    assert deploy.REAPER_ACTION == "report"
     _directive, command = exec_lines("ExecStart=")[0]
     assert "--report" in command
     assert "--kill" not in command
+
+
+@pytest.mark.parametrize("action, flags, verb", [
+    ("report", ["--report"], "report"),
+    ("kill", ["--kill"], "report and stop"),
+])
+def test_the_compiled_action_is_all_that_puts_kill_in_execstart(
+        monkeypatch, action, flags, verb):
+    """`[reaper].action` is stamped as REAPER_ACTION and is the whole of
+    what decides the reaper's flags: `kill` renders `--kill` and nothing
+    else, `report` renders no `--kill` at all, and the retired
+    `--kill-others` is rendered by neither (ADR-0034). The Description says
+    the same thing in words, so `systemctl status` reads right too."""
+    monkeypatch.setattr(deploy, "REAPER_ACTION", action)
+    _directive, command = exec_lines("ExecStart=")[0]
+    words = command.split()
+    assert words[2:] == flags + ["--spool", "/SPOOL"], command
+    assert ("--kill" in words) == (action == "kill")
+    assert "--kill-others" not in command
+    _d, description = exec_lines("Description=")[0]
+    assert description.endswith(": %s unbounded filesystem walks" % verb), description
+
+
+def test_the_action_tables_are_exactly_the_schema_enum():
+    """deploy.py's two tables and the schema's enum are one closed set: a
+    value the schema accepts cannot reach render_units() unmapped, and no
+    mapping exists for a value the schema refuses."""
+    from walk_blocker import config
+    props = config.load_schema()["properties"]["reaper"]["properties"]
+    enum = set(props["action"]["enum"])
+    assert set(deploy.REAPER_FLAGS) == enum == set(deploy.REAPER_VERBS)
+    assert props["action"]["default"] == "report"
+
+
+def test_the_preview_and_the_install_agree_on_a_promoted_unit(
+        tmp_path, monkeypatch, capsys):
+    """The dry run is where an operator reads the ExecStart a promotion
+    writes, before it is written; both come from render_units() (ADR-0034),
+    and the post-install message says which mode landed."""
+    monkeypatch.setattr(deploy, "REAPER_ACTION", "kill")
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "run", recording_run([]))
+    args = _args(tmp_path)
+    assert deploy.system_preview(args) == 0
+    previewed = capsys.readouterr().out
+    line = "ExecStart=%s %s/reaper.py --kill --spool %s" % (
+        deploy.TRUSTED_PYTHON3, args.prefix, args.spool_dir)
+    assert line in previewed.splitlines(), previewed
+
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    assert deploy.system_execute(args) == 0
+    out = capsys.readouterr().out
+    written = open(os.path.join(args.unit_dir, deploy.SERVICE_UNIT)).read()
+    assert line in written.splitlines(), written
+    assert ("installed, and the reaper signals findings outside NEVER_KILL,\n"
+            "up to [reaper].max_kills per poll (reaper.action = kill).") in out, out
+    assert "report-only" not in out
 
 
 def test_layer_2_does_not_depend_on_layer_1_housekeeping():

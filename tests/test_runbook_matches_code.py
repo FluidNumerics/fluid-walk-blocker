@@ -199,3 +199,20 @@ def test_the_standing_definition_excludes_a_name_unlinked_on_this_poll():
         .split("`relink_refused`")[0])
     assert ("the remembered names still unlinked, other than any that poll "
             "unlinked, which get the change record only") in clause, clause
+
+
+def test_the_runbook_promotes_by_the_site_key_and_names_no_retired_flag():
+    """ADR-0034: promotion is `[reaper].action = "kill"` compiled into the
+    unit, not a hand edit of the unit, and `--kill-others` is gone from the
+    parser, so it is gone from every page an operator or a user reads. The
+    ADRs are records and keep their history; they are not scanned."""
+    section = _joined(_section(_read(OPERATING), "12. Promoting to `--kill`"))
+    assert '`[reaper].action = "kill"`' in section, section
+    assert "not a `site.toml` value" not in section
+    for rel in (("docs", "operating.md"), ("README.md",),
+                ("node", "docs", "what-to-run-instead.md.in"),
+                ("docs", "site-config.md"), ("docs", "plan.md"), ("CLAUDE.md",),
+                ("node", "reaper.py"), ("node", "deploy.py")):
+        text = _read(os.path.join(ROOT, *rel))
+        assert "--kill-others" not in text, rel
+        assert "skipped_other_user" not in text, rel

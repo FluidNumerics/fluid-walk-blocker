@@ -41,6 +41,9 @@ def cmd_validate(args):
     print("%s: valid (%s)" % (args.site, site.lookup("site.display_name")))
     for key, value in sorted(site.derived().items()):
         print("%s = %s" % (key, value))
+    notice = build.kill_notice(site)
+    if notice:
+        print(notice)
     return 0
 
 

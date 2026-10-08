@@ -85,6 +85,7 @@ CONSUMERS = {
         "site.toml:timer.accuracy_sec", "site.toml:timer.persistent",
         "site.toml:timer.timeout_start_sec", "site.toml:timer.relink_timeout_s",
         "site.toml:timer.relink_kill_after_s",
+        "site.toml:reaper.action",
         "site.toml:trusted_binaries.timeout", "site.toml:trusted_binaries.sh",
         "site.toml:trusted_binaries.python3",
         "site.toml:site.display_name",

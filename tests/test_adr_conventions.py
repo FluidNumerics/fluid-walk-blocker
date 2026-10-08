@@ -83,7 +83,7 @@ def _by_number(number):
 def test_the_adrs_are_numbered_without_gaps():
     numbers = [_number(p) for p in ADRS]
     assert numbers == ["%04d" % i for i in range(1, len(numbers) + 1)]
-    assert len(numbers) == 33
+    assert len(numbers) == 34
 
 
 @pytest.mark.parametrize("path", ADRS, ids=_number)

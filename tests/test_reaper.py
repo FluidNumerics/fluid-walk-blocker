@@ -167,12 +167,12 @@ def _seed_state(tmp_path, uids=("1001",)):
 
 
 def _stalling_kill_args(tmp_path, cg, procfs_root, mounts_path, extra=()):
-    """A `--kill --kill-others` run() wired to seed a stalling uid-1001 slice
-    and act against synthetic /proc entries for it, without waiting out the
-    real kill grace (the injected sleep in each test makes that free)."""
+    """A `--kill` run() wired to seed a stalling uid-1001 slice and act
+    against synthetic /proc entries for it, without waiting out the real
+    kill grace (the injected sleep in each test makes that free)."""
     _seed_state(tmp_path)
     return reaper.build_parser().parse_args([
-        "--kill", "--kill-others",
+        "--kill",
         "--spool", str(tmp_path / "spool"),
         "--audit", str(tmp_path / "audit.jsonl"),
         "--cgroup-root", str(cg),
@@ -1165,11 +1165,12 @@ def test_a_repeated_kill_error_is_not_deduplicated(tmp_path, procfs, mounts_path
     assert {e["action"] for e in entries} == {"kill_error"}
 
 
-def test_kill_without_kill_others_never_signals_another_users_process(
-        tmp_path, procfs, mounts_path):
-    """Killing someone else's work is a per-incident human decision, not a
-    flag default: `--kill` alone skips another user's finding, sends nothing,
-    and says so on the record; `--kill-others` is what unlocks it."""
+def test_kill_signals_another_users_process(tmp_path, procfs, mounts_path):
+    """`--kill` is the whole action. The reaper's one caller is the root-run
+    unit, which passes the flag only when the site set [reaper].action =
+    "kill" (ADR-0034); a per-uid gate behind a second flag served no caller.
+    So another user's finding gets a real signal and a real action, with
+    nothing skipped in between."""
     other = UID_B if os.getuid() != UID_B else UID_A
     cg = tmp_path / "cg"
     write_slice(cg, other, io_full_total=60.0 * 1e6)
@@ -1192,20 +1193,19 @@ def test_kill_without_kill_others_never_signals_another_users_process(
                killer=lambda pid, sig: signalled.append((pid, sig)),
                alive=lambda pid: False)
 
-    assert signalled == [], signalled
+    assert signalled == [(4112, reaper.signal.SIGTERM)], signalled
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
-    assert [e["action"] for e in entries] == ["skipped_other_user"], entries
+    assert [(e["action"], e["uid"]) for e in entries] == [("terminated", other)], entries
 
-    # The same finding, with --kill-others: a real signal, and a new action.
-    write_slice(cg, other, io_full_total=120.0 * 1e6)
-    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
-    reaper.run(args, sleep=lambda _s: None,
-               killer=lambda pid, sig: signalled.append((pid, sig)),
-               alive=lambda pid: False)
-    assert [pid for pid, _sig in signalled] == [4112]
-    assert [e["action"] for e in _read_audit(str(tmp_path / "audit.jsonl"))] == [
-        "skipped_other_user", "terminated"]
 
+def test_the_parser_no_longer_knows_kill_others():
+    """Retired with ADR-0034: the flag gated acting on other users' processes
+    behind a second ceremony that the reaper's only caller, the root-run
+    unit, could never usefully omit. A unit still carrying it must fail to
+    start rather than quietly report."""
+    with pytest.raises(SystemExit) as exc:
+        reaper.build_parser().parse_args(["--kill", "--kill-others"])
+    assert exc.value.code == 2
 
 def test_append_audit_rotates_past_the_size_threshold(tmp_path, monkeypatch):
     """No logrotate snippet is shipped and the installer's write locations
@@ -2827,47 +2827,27 @@ def test_a_signal_that_cannot_be_sent_fails_the_unit_on_every_poll(
 
 def test_a_skip_sends_no_signal_and_never_exits_kill_failed(
         tmp_path, procfs, mounts_path):
-    """The two standing POLICY skips -- another user's process without
-    --kill-others, and a finding over --max-kills -- send nothing, so they
-    are new-actionable once and quiet after, never code 3, however wedged
-    the process would have turned out to be."""
+    """The standing POLICY skip -- a finding over --max-kills -- sends
+    nothing, so it is new-actionable once and quiet after, never code 3,
+    however wedged the process would have turned out to be."""
     cg = tmp_path / "cg"
     write_slice(cg, UID_B, io_full_total=60.0 * 1e6)
-    # Another user's process: skipped_other_user.
-    write_proc(procfs, 4114, "find",
-               ["find", "/scratch/h", "-type", "f", "-name", "x"],
-               uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
-    args = _stalling_kill_args(tmp_path, cg, procfs, mounts_path)
-    args.kill_others = False
-    signalled = []
-    rcs = []
-    for i in range(2):
-        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
-        rcs.append(reaper.run(args, sleep=lambda _s: None,
-                              killer=lambda pid, sig: signalled.append(sig),
-                              alive=lambda pid: True))
-    assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs
-    assert signalled == []
-    entries = _read_audit(str(tmp_path / "audit.jsonl"))
-    assert {e["action"] for e in entries} == {"skipped_other_user"}, entries
-
-    # The cap: a second finding with --max-kills 0 is skipped_kill_cap.
     write_proc(procfs, 4115, "find",
                ["find", "/scratch/k", "-type", "f", "-name", "y"],
                uid=UID_B, ppid=1, state="D", cpu_s=73657.0, age_s=4 * 86400)
     capped = _stalling_kill_args(tmp_path, cg, procfs, mounts_path,
                                  extra=("--max-kills", "0"))
+    signalled = []
     rcs = []
     for i in range(2):
-        write_slice(cg, UID_B, io_full_total=(180.0 + 60.0 * i) * 1e6)
+        write_slice(cg, UID_B, io_full_total=(60.0 + 60.0 * i) * 1e6)
         rcs.append(reaper.run(capped, sleep=lambda _s: None,
                               killer=lambda pid, sig: signalled.append(sig),
                               alive=lambda pid: True))
     assert rcs == [reaper.EXIT_ACTIONABLE, reaper.EXIT_QUIET], rcs
     assert signalled == []
     entries = _read_audit(str(tmp_path / "audit.jsonl"))
-    assert "skipped_kill_cap" in {e["action"] for e in entries}, entries
-
+    assert {e["action"] for e in entries} == {"skipped_kill_cap"}, entries
 
 # --------------------------------------------------------------------------
 # the opaque arm needs two consecutive polls in D (ADR-0020)
@@ -3074,7 +3054,7 @@ def test_an_unfit_spool_sends_no_signal(tmp_path, procfs, mounts_path):
     spool.chmod(0o777)
     sent = []
     rc = reaper.run(_spool_args(spool, cg, procfs, mounts_path,
-                                extra=("--kill", "--kill-others")),
+                                extra=("--kill",)),
                     out=io.StringIO(), err=io.StringIO(), sleep=lambda _s: None,
                     killer=lambda pid, sig: sent.append((pid, sig)),
                     alive=lambda pid: False)

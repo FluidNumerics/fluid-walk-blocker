@@ -131,7 +131,8 @@ it would be acting on the reaper's own failure. A finding's `origin` — read
 from its cgroup leaf and mapped through `[reaper].origins` — is descriptive
 and never an input to `classify()` (ADR-0003). The unit's exit status
 follows the partition: 0 quiet or unactionable, 1 a new actionable
-finding, 2 blind (ADR-0009). Under `--kill`: `SIGTERM`, `kill_grace_s`,
+finding, 2 blind (ADR-0009). Under `--kill`, which the unit carries when
+`[reaper].action` is `kill` (ADR-0034): `SIGTERM`, `kill_grace_s`,
 `SIGKILL`, settle, re-check, and `signalled_but_wedged` when the process is
 still there — never a claimed kill that did not land.
 

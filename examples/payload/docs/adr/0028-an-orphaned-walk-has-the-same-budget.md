@@ -1,6 +1,7 @@
 # ADR-0028: An orphaned traversal is a finding only past the traversal budget, the same budget a runaway has
 
 **Status:** accepted, 2026-09-30
+The Consequences clause "Under `--kill-others`, an orphaned walk is killed at the first poll after it passes the budget" is narrowed by ADR-0034: the flag is retired and `--kill` is the whole action, and the superseded wording is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0028 — see `docs/evidence.md`
 
 ## Context
@@ -61,8 +62,8 @@ toward `fanout_traversal`'s group.
 
 ## Consequences
 
-- Under `--kill-others`, an orphaned walk is killed at the first poll after
-  it passes the budget, so it may run for up to the budget plus one poll
+- Under `--kill`, an orphaned walk is killed at the first poll after it
+  passes the budget, so it may run for up to the budget plus one poll
   interval. That is the price of not killing a detached walk someone wants.
 - A process whose age cannot be read is not an orphan finding, as it is
   already not a runaway one. Age is read from the process table, never
@@ -88,3 +89,13 @@ calibrated as `[reaper].traversal_budget_s` always was.
 
 - `[reaper].traversal_budget_s`, now read by the orphan arm as well as the
   runaway arm.
+
+## Superseded wording
+
+Narrowed by ADR-0034. The Consequences above read:
+
+> Under `--kill-others`, an orphaned walk is killed at the first poll after it passes the budget, so it may run for up to the budget plus one poll interval.
+
+The flag is gone: `--kill`, which the unit carries when `[reaper].action`
+is `kill`, acts on every finding outside `NEVER_KILL`, and the orphan's
+window of the budget plus one poll interval is unchanged.
