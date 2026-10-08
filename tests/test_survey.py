@@ -77,7 +77,7 @@ def test_classification_from_table_fields(mount_table):
         assert r["default_class"] == ("expensive" if r["remote"] else "cheap")
         assert r["measured"] is True
         assert r["capacity_bytes"] == 2 ** 40 and r["inodes"] == 5 * 10 ** 6
-    assert rows["/mnt/with space"]["fstype"] == "ext4"
+    assert rows["/mnt/with\\040space"]["fstype"] == "ext4"
 
 
 def test_pseudo_filesystems_are_skipped_unless_all(mount_table):
@@ -267,7 +267,8 @@ def test_a_non_utf8_mount_table_is_surveyed_not_raised(tmp_path, locale):
         if extra:
             rows = by_mountpoint(json.loads(r.stdout))
             assert rows["/mnt/b"]["remote_reason"] == "source"
-            assert rows["/mnt/\ufffdc"]["remote_reason"] == "type"
+            assert rows["/mnt/\\377c"]["remote_reason"] == "type"
+            assert rows["/mnt/\\377c"]["nameable"] is False
 
 
 def test_survey_splits_mount_fields_as_the_shim_does(tmp_path):
@@ -291,13 +292,146 @@ def test_survey_splits_mount_fields_as_the_shim_does(tmp_path):
 def test_survey_keeps_a_carriage_return_inside_its_field(tmp_path):
     """Issue #172, from PR #174's review. The shim's readers end a row on
     \\n alone, so a \\r is a byte of its field. Universal newlines ended the
-    row on it: `/m\\rp` became a mount point `p`."""
+    row on it: `/m\\rp` became a mount point `p`. The \\r is shown as
+    \\015, the octal form survey prints for a byte site.toml cannot name
+    (issue #173)."""
     mounts = tmp_path / "mounts"
     mounts.write_bytes(b"/dev/sda1 / ext4 rw 0 0\n"
                        b"h:/e /m\rp xfs rw 0 0\n"
                        b"h\r:/e /mnt/r xfs rw 0 0\r\n")
     rows = by_mountpoint(survey.survey(str(mounts), timeout=0.5,
                                        statvfs_command=FAKE_CHILD))
-    assert sorted(rows) == ["/", "/m\rp", "/mnt/r"]
-    for point in ("/m\rp", "/mnt/r"):
+    assert sorted(rows) == ["/", "/m\\015p", "/mnt/r"]
+    for point in ("/m\\015p", "/mnt/r"):
         assert rows[point]["remote_reason"] == "source", rows[point]
+
+
+# A child that reports the bytes it was handed, as hex, in the inode count's
+# place: what statvfs would have been asked to measure.
+ARGV_CHILD = [sys.executable, "-c",
+              "import json, os, sys; print(json.dumps({'capacity_bytes': 1,"
+              " 'free_bytes': 0, 'inodes': int(os.fsencode(sys.argv[1]).hex(), 16),"
+              " 'inodes_free': 0}))"]
+
+# Fictional mount points: a byte that is not UTF-8, a space the kernel
+# escapes, a non-ASCII name that is valid UTF-8, and a plain one.
+UNNAMEABLE_TABLE = (b"a:/x /mnt/\377c nfs4 rw 0 0\n"
+                    b"b:/y /mnt/with\\040sp nfs4 rw 0 0\n"
+                    b"c:/z /mnt/caf\xc3\xa9 nfs4 rw 0 0\n"
+                    b"d:/w /mnt/plain nfs4 rw 0 0\n")
+UNNAMEABLE = {
+    "/mnt/\\377c": b"/mnt/\377c",
+    "/mnt/with\\040sp": b"/mnt/with sp",
+    "/mnt/caf\\303\\251": b"/mnt/caf\xc3\xa9",
+}
+
+
+@pytest.fixture
+def unnameable_table(tmp_path):
+    path = tmp_path / "mounts"
+    path.write_bytes(UNNAMEABLE_TABLE)
+    return str(path)
+
+
+def test_statvfs_is_handed_the_real_mount_point_bytes(unnameable_table):
+    """Issue #173. The table was read with replacement, so a byte that is
+    not UTF-8 became U+FFFD and statvfs was asked about a path that does
+    not exist. The child now gets the kernel's bytes, unescaped."""
+    rows = by_mountpoint(survey.survey(unnameable_table, timeout=5,
+                                       statvfs_command=ARGV_CHILD))
+    expected = dict(UNNAMEABLE, **{"/mnt/plain": b"/mnt/plain"})
+    assert sorted(rows) == sorted(expected)
+    for shown, raw in expected.items():
+        assert rows[shown]["measured"] is True, rows[shown]["error"]
+        assert rows[shown]["inodes"] == int(raw.hex(), 16), shown
+
+
+def test_a_mount_point_is_shown_with_every_unnameable_byte_octal_escaped():
+    """The kernel's own `\\ooo`, for space, tab, newline and backslash,
+    extended to every byte outside the sink_path set; a nameable path is
+    unchanged."""
+    assert survey.display_path(b"/mnt/plain-1.x_y") == "/mnt/plain-1.x_y"
+    assert survey.display_path(b"/a b\tc\nd\\e") == "/a\\040b\\011c\\012d\\134e"
+    assert survey.display_path(b"/\xff") == "/\\377"
+    assert survey.display_path(b"/caf\xc3\xa9") == "/caf\\303\\251"
+    assert survey.display_path(b"/a+b") == "/a\\053b"
+    # Every escape reads back with the one decoder the mount table needs.
+    for raw in UNNAMEABLE.values():
+        shown = survey.display_path(raw).encode("ascii")
+        assert survey._unescape(shown) == raw
+
+
+@pytest.mark.parametrize("raw, ok", [
+    (b"/mnt/plain", True), (b"/", False), (b"/mnt/./x", False),
+    (b"/mnt/../x", False), (b"/mnt/x/", False), (b"/mnt//x", False),
+    (b"/mnt/a b", False), (b"/mnt/\xff", False), (b"/mnt/a+b", False),
+    (b"/mnt/x\n", False),
+])
+def test_nameable_is_the_schemas_sink_path(raw, ok):
+    assert survey.nameable(raw) is ok
+
+
+def test_a_mount_point_site_toml_cannot_name_is_reported_not_proposed(
+        unnameable_table):
+    """Issue #173. A `path` for these would fail validate, or, decoded with
+    replacement, name a path that is not the mount. Each is measured and
+    named, escaped, in a comment; only the plain one gets an entry, and that
+    entry still validates."""
+    rows = survey.survey(unnameable_table, timeout=5, statvfs_command=FAKE_CHILD)
+    block = survey.render_toml(rows, today="2026-02-03")
+    proposed = tomllib.loads(block)["filesystems"]["mounts"]
+    assert [m["path"] for m in proposed] == ["/mnt/plain"]
+    for shown in UNNAMEABLE:
+        header = [line for line in block.splitlines()
+                  if line.startswith("# %s: " % shown)]
+        assert len(header) == 1, block
+        assert "capacity" in header[0]
+    assert block.count("Not proposed: site.toml cannot name") == len(UNNAMEABLE)
+    assert "issue #184" in block
+    assert block.count("remote_proxy change its class, and they change"
+                       " every mount's.") == len(UNNAMEABLE)
+    assert "no entry can change" not in block
+    assert block.isascii()
+    minimal = ('schema_version = 1\n[site]\ndisplay_name = "Minimal"\n'
+               '[install]\nspool_group = "wbaudit"\ntrusted_groups = []\n'
+               '[slurm]\npartition = "p"\n[timer]\non_calendar = "*:00:30"\n')
+    config.from_dict(tomllib.loads(minimal + "\n" + block))
+
+
+def test_an_unmeasured_mount_point_is_reported_in_ascii(unnameable_table):
+    """The child's error quotes the path it was handed, the real bytes; the
+    comment escapes it, as it escapes the mount point."""
+    child = [sys.executable, "-c",
+             "import os, sys; raise SystemExit("
+             "'cannot stat %s' % os.fsdecode(sys.argv[1]))"]
+    rows = survey.survey(unnameable_table, timeout=5, statvfs_command=child)
+    assert not any(r["measured"] for r in rows)
+    block = survey.render_toml(rows, today="2026-02-03")
+    assert "unmeasured (cannot stat /mnt/caf\\xe9" in block, block
+    assert block.isascii(), block
+
+
+def test_json_and_text_output_carry_the_escaped_form(unnameable_table):
+    """Valid JSON with no lone surrogate, from node/survey.py run as a
+    script, in a C locale as well as a UTF-8 one. The payload's copy is
+    the same file; test_build's payload check fails when it is stale."""
+    environ = {k: v for k, v in os.environ.items()
+               if not k.startswith(("LC_", "PYTHON")) and k != "LANG"}
+    for locale in ("C", "C.UTF-8"):
+        environ["LC_ALL"] = locale
+        r = subprocess.run([sys.executable,
+                            os.path.join(paths.node_dir(), "survey.py"),
+                            "--mounts", unnameable_table, "--timeout", "0.5",
+                            "--json"], capture_output=True, env=environ, timeout=60)
+        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+        r.stdout.decode("ascii")
+        rows = by_mountpoint(json.loads(r.stdout))
+        assert set(UNNAMEABLE) < set(rows)
+        assert all(rows[shown]["nameable"] is False for shown in UNNAMEABLE)
+        assert rows["/mnt/plain"]["nameable"] is True
+        text = subprocess.run([sys.executable,
+                               os.path.join(paths.node_dir(), "survey.py"),
+                               "--mounts", unnameable_table, "--timeout", "0.5"],
+                              capture_output=True, env=environ, timeout=60)
+        assert text.returncode == 0
+        assert b"/mnt/caf\\303\\251" in text.stdout
