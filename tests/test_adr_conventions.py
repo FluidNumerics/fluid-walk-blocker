@@ -340,9 +340,14 @@ def _amendment_problems(text):
         problems.append("the Status note cites issue #%s, but "
                         "`## Superseded wording` has no entry tagged with it"
                         % issue)
-    if noted and RECORDED_BELOW not in status:
-        problems.append("the Status note does not say the replaced wording is "
-                        "%s" % RECORDED_BELOW)
+    # Each note is one line and points below itself: a pointer on another
+    # line, a narrowing's note say, does not answer for it.
+    for line in status.splitlines():
+        for issue in AMENDED_NOTE.findall(line):
+            if RECORDED_BELOW not in line:
+                problems.append("the Status note for issue #%s does not say "
+                                "the replaced wording is %s"
+                                % (issue, RECORDED_BELOW))
     return problems
 
 
@@ -433,8 +438,12 @@ def _in_context(text):
     (_NOTE, _TAG7, _in_context, ["no Status note"]),
     (_NOTE.replace("was decided", "was raised"), _TAG7, None,
      ["no Status note"]),
+    ('A narrowed clause is recorded under "Superseded wording" below.\n'
+     + _NOTE.split(" The wording")[0] + "\n", _TAG7, None,
+     ["issue #7 does not say"]),
 ], ids=["consistent", "tag-without-note", "different-issues",
-        "note-without-pointer", "note-in-context", "note-reworded"])
+        "note-without-pointer", "note-in-context", "note-reworded",
+        "pointer-on-another-line"])
 def test_the_amendment_check_on_synthetic_records(note, tag, move, expected):
     text = _SYNTHETIC.format(note=note, tag=tag)
     problems = _amendment_problems(move(text) if move else text)
