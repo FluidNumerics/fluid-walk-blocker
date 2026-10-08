@@ -371,10 +371,11 @@ account (ADR-0004):
   machine-ID directory in each, and `r--` on the `*.journal*` files in it. It
   names the gid, never the group name, because tmpfiles resolves names through
   NSS and can run at boot before a directory service is up. The deploy
-  rewrites it on every run and applies it with `systemd-tmpfiles --create`. A
-  deploy with the option off removes the drop-in an earlier one wrote and
-  revokes the gids recorded in it, so a changed spool group is revoked too
-  rather than left holding the journal; `--uninstall` does the same.
+  rewrites it on every run and applies it with `systemd-tmpfiles --create`.
+  Every deploy revokes each gid recorded in the earlier drop-in that it no
+  longer grants, so a changed spool group is revoked rather than left holding
+  the journal. A deploy with the option off removes the drop-in and revokes
+  every gid it recorded; `--uninstall` does the same.
 
 What it verifies, and refuses on:
 
