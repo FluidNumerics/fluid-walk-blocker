@@ -657,6 +657,11 @@ while [ "$_p" -le "$PAIRS" ]; do
         _p=$((_p + 1))
         continue
     fi
+    # `r > 0` on these two lines is already guaranteed: the positivity check
+    # above discards the pair unless M_FAST > 0 && M_GUARDED > 0 for both
+    # halves, and `r` is the reference half's copy of those same strings. The
+    # guard is kept as a defence and is not reachable from a run, so no test
+    # pins it (issue #197). The floor guard above is reachable and is pinned.
     _pr_fast=$(awk -v c="$_c_fast" -v r="$_r_fast" \
         'BEGIN{printf "%.3f", (r > 0 ? c/r : 0)}')
     _pr_guarded=$(awk -v c="$_c_guarded" -v r="$_r_guarded" \
