@@ -552,3 +552,36 @@ def test_an_unambiguous_name_stays_short_and_every_listed_name_round_trips(
     for name, full in expected:
         assert _resolves_to(repo, name) == _git(
             repo, "rev-parse", full).strip(), name
+
+
+def test_a_branch_named_like_another_full_refname_is_listed_in_full(
+        repo, capsys):
+    """git tries the name itself first, so a local branch whose short name is
+    `refs/heads/rel` pastes back to the branch `rel`."""
+    branch = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-ref", "refs/heads/rel", branch)
+    odd = _unrelated(repo, "a commit only the oddly named branch has")
+    _git(repo, "update-ref", "refs/heads/refs/heads/rel", odd)
+    _git(repo, "update-ref", "refs/heads/main", branch)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/refs/heads/rel" in listed, listed
+    assert "refs/heads/rel" not in listed, listed
+    assert _resolves_to(repo, "refs/heads/refs/heads/rel") == odd
+    assert _resolves_to(repo, "refs/heads/rel") == branch
+
+
+def test_a_branch_named_like_an_object_id_is_listed_in_full(repo, capsys):
+    """git reads a whole object id as that object before any ref, so a branch
+    named with another commit's id pastes back to that commit."""
+    named = _git(repo, "rev-parse", "HEAD").strip()
+    other = _unrelated(repo, "a commit only the hex-named branch has")
+    _git(repo, "update-ref", "refs/heads/" + named, other)
+    _git(repo, "update-ref", "refs/heads/main", named)
+    code, _out, err = _unresolvable(repo, capsys)
+    assert code == P.EXIT_ERROR
+    listed = _listed(err)
+    assert "refs/heads/" + named in listed and named not in listed, listed
+    assert _resolves_to(repo, "refs/heads/" + named) == other
+    assert _resolves_to(repo, named) == named

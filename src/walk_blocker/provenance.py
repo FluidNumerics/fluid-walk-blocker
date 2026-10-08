@@ -140,10 +140,16 @@ BRANCHES_SHOWN = 5
 SHORT_NAME_RULES = ("%s", "refs/%s", "refs/tags/%s", "refs/heads/%s",
                     "refs/remotes/%s")
 
-# A top-level name git can read as a root ref: HEAD, FETCH_HEAD, ORIG_HEAD
-# and the like. Which of them exist is not something `for-each-ref` lists, so
-# a short name of this shape is treated as taken whether or not one does.
+# The first rule reads the name as a file directly under the git directory,
+# which `for-each-ref` does not list. git writes its own there under names of
+# this shape (HEAD, FETCH_HEAD, ORIG_HEAD and the like), so a short name of
+# this shape is treated as taken whether or not one exists. A file planted
+# there by hand under any other name is not seen.
 ROOT_REF_SHAPE = re.compile(r"^[A-Z_-]+$")
+
+# A whole object id, SHA-1 or SHA-256. git reads one as that object before it
+# tries any ref, so a branch named like one never pastes back to itself.
+OBJECT_ID_SHAPE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
@@ -158,7 +164,7 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
     was listed for (issue #135). It is the short name when git resolves that
     to this ref, and the full refname otherwise: a local branch that shadows
     a remote-tracking one of the same short name, a tag that shadows a
-    branch, a branch called `HEAD`. The test applies git's documented rules
+    branch, a branch called `HEAD`, a branch named like an object id. The test applies git's documented rules
     to the refs listed here instead of asking git to shorten the name, so the
     hint does not depend on how a given git version abbreviates.
 
@@ -198,7 +204,7 @@ def existing_branches(repo, timeout=DEFAULT_TIMEOUT, count=BRANCHES_SHOWN):
 def _pasteable(short, full, existing):
     """`short` if git resolves it to `full`, else `full` itself, which always
     resolves to itself: the first rule tries the name as given."""
-    if ROOT_REF_SHAPE.match(short):
+    if ROOT_REF_SHAPE.match(short) or OBJECT_ID_SHAPE.match(short):
         return full
     for rule in SHORT_NAME_RULES:
         candidate = rule % short
