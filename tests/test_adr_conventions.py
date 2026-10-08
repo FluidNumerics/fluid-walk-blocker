@@ -271,10 +271,12 @@ def test_the_superseded_section_sits_below_the_record_and_above_any_closing(path
     text = _read(path)
     if SUPERSEDED not in text:
         return
-    assert text.index("## Site config touched") < text.index(SUPERSEDED.strip()), (
+    # The headings as lines, not as substrings: ADR-0023 names both in its
+    # prose, above where either section starts.
+    assert text.index("\n## Site config touched\n") < text.index(SUPERSEDED), (
         "`## Superseded wording` precedes `## Site config touched` in %s" % path)
     if CLOSING in text:
-        assert text.index(SUPERSEDED.strip()) < text.index(CLOSING), (
+        assert text.index(SUPERSEDED) < text.index(CLOSING), (
             "`## Superseded wording` follows the closing paragraph in %s" % path)
 
 
@@ -287,3 +289,187 @@ def test_the_closing_paragraph_is_the_records_last_words(path):
         return
     assert "\n## " not in text.split(CLOSING, 1)[1], (
         "a section follows the closing paragraph in %s" % path)
+
+
+# ADR-0023 (issue #139): an issue's decision may amend an accepted record with
+# no record of its own. With no `Narrows:` line pointing back, nothing above
+# checks such an amendment, so it is checked here: the tag in
+# `## Superseded wording` and the Status note name the same issues, both ways.
+AMENDED_TAG = re.compile(r"^Amended when issue #(\d+) was decided\.", re.M)
+AMENDED_NOTE = re.compile(r"was amended when issue #(\d+) was decided\b")
+RECORDED_BELOW = 'recorded under "Superseded wording" below'
+# What may open a `## Superseded wording` section. Every tag but the last two
+# is checked against something: a narrowing by its `Narrows:` line, an issue
+# amendment by its Status note. The two forms that predate both are pinned to
+# the records that carry them, so neither can be reused without an argument.
+SECTION_TAG = re.compile(
+    r"^(?:Narrowed by ADR-\d{4}\.|Amended when issue #\d+ was decided\.|"
+    r"Superseded by ADR-\d{4}\.|Corrected \d{4}-\d{2}-\d{2},)")
+# A legacy tag anywhere in the section, not only the one that opens it: a
+# record's later entry is tagged too, and the pin has to reach it.
+LEGACY_TAG = re.compile(
+    r"^(Superseded by ADR-\d{4}\.|Corrected \d{4}-\d{2}-\d{2},)", re.M)
+LEGACY_TAGGED = {
+    # ADR-0021 removed the flag ADR-0008's command spelled, without a
+    # Narrows: line; ADR-0023's Consequences counts this record for that reason.
+    "0008",
+    # A correction after publication, recorded so the record does not
+    # quietly acquire a true sentence in place of a false one.
+    "0022",
+}
+
+
+def _status_block(text):
+    return text.split("\n## Context", 1)[0]
+
+
+def _amendment_problems(text):
+    """What is wrong with a record's issue-decision amendments, as strings.
+
+    A function rather than inline asserts so that the synthetic records below
+    exercise exactly the check the corpus is held to."""
+    problems = []
+    section = _superseded_section(text)
+    tagged = set(AMENDED_TAG.findall(section or ""))
+    status = _status_block(text)
+    noted = set(AMENDED_NOTE.findall(status))
+    for issue in sorted(tagged - noted):
+        problems.append("issue #%s amended this record, but no Status note "
+                        "says so" % issue)
+    for issue in sorted(noted - tagged):
+        problems.append("the Status note cites issue #%s, but "
+                        "`## Superseded wording` has no entry tagged with it"
+                        % issue)
+    # Each note is one line and points below itself: a pointer on another
+    # line, a narrowing's note say, does not answer for it.
+    for line in status.splitlines():
+        for issue in AMENDED_NOTE.findall(line):
+            if RECORDED_BELOW not in line:
+                problems.append("the Status note for issue #%s does not say "
+                                "the replaced wording is %s"
+                                % (issue, RECORDED_BELOW))
+    return problems
+
+
+@pytest.mark.parametrize("path", ADRS, ids=_number)
+def test_an_amendment_on_an_issue_decision_is_noted_under_status(path):
+    assert _amendment_problems(_read(path)) == [], path
+
+
+def test_the_issue_decision_amendments_are_seen():
+    """Anti-vacuity: the two precedents ADR-0023 named, and its own."""
+    amended = {_number(p) for p in ADRS
+               if AMENDED_TAG.search(_superseded_section(_read(p)) or "")}
+    assert {"0021", "0023", "0029"} <= amended, amended
+
+
+def _section_problems(number, text):
+    """What is wrong with how record `number` tags its superseded wording.
+
+    A function for the same reason as `_amendment_problems`: the synthetic
+    records below run the check the corpus is held to."""
+    problems = []
+    # One section per record: every check here and in `_amendment_problems`
+    # reads the first, so a second would go unread.
+    if text.count(SUPERSEDED) > 1:
+        problems.append("more than one `## Superseded wording` section")
+    section = _superseded_section(text)
+    if section is None:
+        return problems
+    if not SECTION_TAG.match(section.lstrip("\n")):
+        problems.append("`## Superseded wording` does not open with what "
+                        "moved its wording (ADR-0023)")
+    if number not in LEGACY_TAGGED:
+        for legacy in LEGACY_TAG.findall(section):
+            problems.append("%r is a form only %s carry"
+                            % (legacy, sorted(LEGACY_TAGGED)))
+    # The reverse of the narrows test: a "Narrowed by" tag names a record
+    # whose `Narrows:` line points here.
+    for narrower in re.findall(r"^Narrowed by ADR-(\d{4})\.", section, re.M):
+        try:
+            _narrows_clause(narrower, number)
+        except AssertionError as error:
+            problems.append(str(error))
+    return problems
+
+
+@pytest.mark.parametrize("path", ADRS, ids=_number)
+def test_every_superseded_section_opens_with_what_moved_its_wording(path):
+    assert _section_problems(_number(path), _read(path)) == [], path
+
+
+_SYNTHETIC = """# ADR-9999: synthetic
+
+**Status:** accepted, 2026-01-01
+{note}**Evidence:** n/a
+
+## Context
+
+c
+
+## Site config touched
+
+none
+
+## Superseded wording
+
+{tag}The Consequences above read:
+
+> old
+"""
+_NOTE = ('The bullet was amended when issue #7 was decided. The wording it '
+         'replaced is recorded under "Superseded wording" below.\n')
+
+
+_TAG7 = "Amended when issue #7 was decided. "
+
+
+def _in_context(text):
+    """The record with its Status note moved into `## Context`."""
+    return text.replace(_NOTE, "").replace("\nc\n", "\n" + _NOTE)
+
+
+@pytest.mark.parametrize("note, tag, move, expected", [
+    (_NOTE, _TAG7, None, []),
+    ("", _TAG7, None, ["no Status note"]),
+    (_NOTE, "Amended when issue #8 was decided. ", None,
+     ["issue #8 amended", "cites issue #7"]),
+    (_NOTE.split(" The wording")[0] + "\n", _TAG7, None, ["does not say"]),
+    (_NOTE, _TAG7, _in_context, ["no Status note"]),
+    (_NOTE.replace("was decided", "was raised"), _TAG7, None,
+     ["no Status note"]),
+    ('A narrowed clause is recorded under "Superseded wording" below.\n'
+     + _NOTE.split(" The wording")[0] + "\n", _TAG7, None,
+     ["issue #7 does not say"]),
+], ids=["consistent", "tag-without-note", "different-issues",
+        "note-without-pointer", "note-in-context", "note-reworded",
+        "pointer-on-another-line"])
+def test_the_amendment_check_on_synthetic_records(note, tag, move, expected):
+    text = _SYNTHETIC.format(note=note, tag=tag)
+    problems = _amendment_problems(move(text) if move else text)
+    assert len(problems) == len(expected), problems
+    for fragment, problem in zip(expected, problems):
+        assert fragment in problem, problems
+
+
+_LATER_LEGACY = ("\nSuperseded by ADR-0021. The Decision above read:\n\n"
+                 "> older\n")
+
+
+@pytest.mark.parametrize("number, tag, extra, expected", [
+    ("9999", _TAG7, "", []),
+    ("9999", "", "", ["does not open"]),
+    ("9999", _TAG7, "\n## Superseded wording\n\nNo tag.\n",
+     ["more than one"]),
+    ("9999", "Superseded by ADR-0021. ", "", ["a form only"]),
+    ("0008", "Superseded by ADR-0021. ", "", []),
+    ("9999", _TAG7, _LATER_LEGACY, ["a form only"]),
+    ("9999", "Narrowed by ADR-0009. ", "", ["no longer narrows ADR-9999"]),
+], ids=["tagged", "untagged", "second-section", "legacy-opening",
+        "legacy-on-its-record", "legacy-later-entry", "narrower-without-line"])
+def test_the_section_check_on_synthetic_records(number, tag, extra, expected):
+    text = _SYNTHETIC.format(note="", tag=tag) + extra
+    problems = _section_problems(number, text)
+    assert len(problems) == len(expected), problems
+    for fragment, problem in zip(expected, problems):
+        assert fragment in problem, problems

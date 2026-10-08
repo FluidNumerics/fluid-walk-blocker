@@ -17,6 +17,11 @@ Conventions (delete this comment in a real ADR):
   Two things do not move: a narrowing that clarifies how a clause should be
   read rather than replacing what it says, and a clause in `## Context`, which
   is what was true then and is not updated.
+- An issue's decision may amend an accepted record without a record of its
+  own, by the same move: the wording goes to `## Superseded wording`, tagged
+  "Amended when issue #N was decided.", and a line under Status names the
+  clause, the issue, and that the replaced wording is recorded there
+  (ADR-0023).
 - Decisions, not evidence (ADR-0014). No hostnames, usernames, uids,
   partition or QoS names, customer or engineer names, neighbour timers,
   inode counts, capacities, percentages, user or core counts, vendor build
@@ -62,9 +67,11 @@ as a list. "none" is a valid answer and must be written.
 
 <!--
 Include the section below only where a later record narrowed wording in THIS
-record. Omit it entirely otherwise -- most records never have one. It sits
-below `## Site config touched` and above the closing paragraph, which stays
-the record's last words (ADR-0023).
+record, or an issue's decision amended it. Omit it entirely otherwise -- most
+records never have one. It sits below `## Site config touched` and above the
+closing paragraph, which stays the record's last words (ADR-0023). An
+amendment on an issue decision is tagged "Amended when issue #N was decided."
+instead, and the Status block gains the line naming the clause and the issue.
 
 ## Superseded wording
 
