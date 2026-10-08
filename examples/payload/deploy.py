@@ -4001,14 +4001,20 @@ def system_uninstall(args, env=None):
         # what install.sh --uninstall visits (issue #196): a hook the site
         # disabled after an install wrote it still carries that install's
         # block. Worded so that it holds for a file that was never ours.
+        # The drop-in's condition follows install.sh: an enabled one is
+        # removed outright, a disabled one only when it carries the header.
         shared = all_hook_files(args, fish=False)
         fish = all_hook_files(args, fish=True)
+        fish_on = any(enabled for _a, shell, enabled in hook_table()
+                      if shell == "fish")
         hook_steps = (
             "  strip the block between the walk-blocker markers in\n"
             "  %s, where present;\n"
             "  remove the fish drop-in %s\n"
-            "  if its first line is walk-blocker's generated header;\n"
-            % (", ".join(shared), fish[0]))
+            "  %s;\n"
+            % (", ".join(shared), fish[0],
+               "outright (the whole file is walk-blocker's)" if fish_on
+               else "if its first line is walk-blocker's generated header"))
         sys.stderr.write(
             "deploy.py: refusing to run the teardown helper: %s\n" % why)
         sys.stderr.write(

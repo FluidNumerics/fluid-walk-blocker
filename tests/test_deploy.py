@@ -2895,7 +2895,10 @@ def test_a_refused_uninstall_helper_names_every_hook_the_build_knows(
     err = capsys.readouterr().err
     assert "fish drop-in" in err, err
     assert args.fish_conf_file in err, err
-    assert "generated header" in err, err
+    # The drop-in's condition is install.sh's: outright when the hook is
+    # enabled, only with its generated header when it is not.
+    assert ("generated header" in err) == (not fish), err
+    assert ("outright" in err) == fish, err
     assert "walk-blocker markers" in err, err
     assert "enables none" not in err, err
     assert "none on this site" not in err, err

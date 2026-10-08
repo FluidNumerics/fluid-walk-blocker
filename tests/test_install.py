@@ -1312,6 +1312,25 @@ def test_a_disabled_fish_drop_in_goes_only_with_its_generated_header(tmp_path):
     assert not layout.fishconf.exists()
 
 
+def test_a_disabled_hook_sharing_an_enabled_hooks_file_says_nothing_of_it(tmp_path):
+    """A disabled hook naming an enabled hook's file has nothing of its own
+    to say about it: the enabled visit strips it, and a "left in place" note
+    beside that file's "removed" line would contradict it."""
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(STOCK_BASHRC)
+    installed, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout,
+                                    **{"hooks.fish.enabled": False})
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.fish.enabled": False,
+                                    "hooks.fish.file": str(layout.bashrc)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "%s left in place" % layout.bashrc not in result.stdout, result.stdout
+    assert layout.bashrc.read_text() == STOCK_BASHRC
+    removed = [ln for ln in result.stdout.splitlines() if "removed from" in ln]
+    assert len(removed) == 1 and str(layout.bashrc) in removed[0], result.stdout
+
+
 def test_the_drop_in_header_is_the_one_the_installer_writes(tmp_path):
     """The uninstall's proof of ownership is the first line write_fish_conf()
     produces; the two cannot drift."""

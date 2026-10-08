@@ -2637,6 +2637,16 @@ SYS
         # refusal still lands before any teardown.
         _removed=''
         _uninstall_hooks=''
+        # The enabled hooks' files, newline-delimited so a path with a space
+        # in it still matches whole: a disabled hook naming the same file has
+        # nothing of its own to say about it (the enabled visit handles it).
+        _enabled_files='
+'
+        for _uh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
+            hook_select "$_uh"
+            _enabled_files="$_enabled_files$HK_FILE
+"
+        done
         for _uh in $SG_HOOKS_KNOWN; do
             hook_select "$_uh"
             case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
@@ -2647,6 +2657,11 @@ SYS
                     _uninstall_hooks="$_uninstall_hooks $_uh"
                     continue
                     ;;
+            esac
+            case $_enabled_files in
+                *"
+$HK_FILE
+"*) continue ;;
             esac
             # Disabled, and nothing there: nothing to clean, and nothing to
             # check -- its directory may not exist at all on a node without
