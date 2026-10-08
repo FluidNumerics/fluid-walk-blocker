@@ -768,7 +768,7 @@ ADR-0026's exposure, not only to disk use.
 
 ## 11. Ask the node what is deployed
 
-Four answers, and they should agree:
+Five answers, and they should agree:
 
 ```sh
 cat <prefix>/.walk-blocker-payload

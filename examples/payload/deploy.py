@@ -3804,7 +3804,22 @@ def system_uninstall(args, env=None):
     else:
         helper, why = uninstall_helper(args.prefix)
     if helper is None:
-        hooks = enabled_hook_files(args)
+        # Name only the hook steps this site has (issue #142): the fish
+        # drop-in exists only when the fish hook is enabled, and a site with
+        # no hook enabled has no hook step at all.
+        shared = [getattr(args, attr) for attr, shell, enabled in hook_table()
+                  if enabled and shell != "fish"]
+        fish = [getattr(args, attr) for attr, shell, enabled in hook_table()
+                if enabled and shell == "fish"]
+        hook_steps = ""
+        if shared:
+            hook_steps += ("  strip the block between the walk-blocker markers"
+                           " in\n  %s;\n" % ", ".join(shared))
+        if fish:
+            hook_steps += ("  remove the fish drop-in %s\n  outright (the"
+                           " whole file is walk-blocker's);\n" % fish[0])
+        if not hook_steps:
+            hook_steps = "  no hook file to clean, since this site enables none;\n"
         sys.stderr.write(
             "deploy.py: refusing to run the teardown helper: %s\n" % why)
         sys.stderr.write(
@@ -3815,13 +3830,12 @@ def system_uninstall(args, env=None):
             "  wrapped_names.sh back under %s, in a chain only root\n"
             "  can write, and run the uninstall again. Or, by hand, as root:\n"
             "  `systemctl disable --now %s`, `systemctl stop %s`, remove\n"
-            "  both unit files from %s and `systemctl daemon-reload`, strip\n"
-            "  the block between the walk-blocker markers in each shared hook\n"
-            "  file, remove the fish drop-in outright (the whole file is\n"
-            "  walk-blocker's) -- the hook files are %s -- then remove %s\n"
-            "  and the relink's two memories, %s and %s.\n"
+            "  both unit files from %s and `systemctl daemon-reload`;\n"
+            "%s"
+            "  then remove %s and the relink's two memories,\n"
+            "  %s and %s.\n"
             % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
-               ", ".join(hooks) or "none on this site",
+               hook_steps,
                os.path.join(args.prefix, "bin"),
                os.path.join(args.spool_dir, UNCOVERED_NAME),
                os.path.join(args.spool_dir, LINKED_NAME)))
