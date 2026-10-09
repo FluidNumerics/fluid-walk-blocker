@@ -1061,12 +1061,14 @@ unmatched_refusal() {
     # unmatched_refusal FILE KEY -- the install's message for a block-style
     # hook file whose markers are unmatched; the caller exits 3, the code of
     # every other refusal of a hook file here.
-    echo "install.sh: refusing $2 $1: it has the walk-blocker BEGIN marker" >&2
-    echo "  ($BEGIN) with no END marker ($END) after it." >&2
+    echo "install.sh: refusing $2 $1: it has an unclosed walk-blocker BEGIN" >&2
+    echo "  marker ($BEGIN): no END marker ($END)" >&2
+    echo "  follows it before the end of the file or the next BEGIN." >&2
     echo "  Stripping the old block before writing the new one would delete" >&2
-    echo "  every line from that BEGIN to the end of the file, and that content" >&2
-    echo "  is not walk-blocker's. The file has not been touched. Repair or" >&2
-    echo "  remove the partial block by hand, then re-run (issue #218)." >&2
+    echo "  every line from that BEGIN to the end of the file or to the next" >&2
+    echo "  END, and that content is not walk-blocker's." >&2
+    echo "  The file has not been touched. Repair or remove the partial block" >&2
+    echo "  by hand, then re-run (issue #218)." >&2
 }
 
 strip_block() {
@@ -1080,7 +1082,7 @@ strip_block() {
     case $SG_BLOCK_SHAPE in
         none) return 0 ;;
         unmatched)
-            echo "install.sh: $_file not rewritten: it has the walk-blocker BEGIN marker with no END after it" >&2
+            echo "install.sh: $_file not rewritten: it has an unclosed walk-blocker BEGIN marker" >&2
             return 3
             ;;
     esac
@@ -1639,9 +1641,10 @@ report_hook_state() {
     echo "  Layer 1 is not reaching \`ssh host 'cmd'\` for $_hook_shell. Reinstall" >&2
     echo "  with deploy.py --system, as root." >&2
     if [ "$_hook_state" = block-missing ] && [ "$SG_BLOCK_SHAPE" = unmatched ]; then
-        echo "  $_hook_file has the BEGIN marker with no END marker after it." >&2
-        echo "  The install refuses such a file until the partial block is" >&2
-        echo "  repaired or removed by hand (issue #218)." >&2
+        echo "  $_hook_file has an unclosed BEGIN marker: no END marker follows" >&2
+        echo "  it before the end of the file or the next BEGIN. The install" >&2
+        echo "  refuses such a file, so reinstalling will not repair it until" >&2
+        echo "  the partial block is repaired or removed by hand (issue #218)." >&2
     elif [ "$_hook_state" = block-missing ]; then
         echo "  $_hook_file may be configuration owned by the $_hook_pkg package;" >&2
         echo "  an upgrade of $_hook_pkg that took the maintainer's version is the" >&2
@@ -2814,9 +2817,9 @@ $HK_FILE
         # its bytes, its mode and its inode, where strip_block() would re-mode
         # it 0644 and replace it for no change in content (issue #196).
         #
-        # A file whose BEGIN marker has no END after it is left exactly as it
-        # is, said, and the teardown carries on (issue #218): stripping it
-        # would delete everything from that marker to the end of the file,
+        # A file with an unclosed BEGIN marker -- see block_shape() -- is left
+        # exactly as it is, said, and the teardown carries on (issue #218):
+        # stripping it would delete lines that are not walk-blocker's,
         # and refusing here, with the units already down, would leave the
         # rest of Layer 1 in place for a fault in one file. The run then
         # ends 8 rather than 0, because a hook file still carries part of
@@ -2836,7 +2839,7 @@ $HK_FILE
                             _removed="$_removed $HK_FILE,"
                             ;;
                         unmatched)
-                            echo "walk-blocker: $HK_FILE left untouched: it has the BEGIN marker ($BEGIN) with no END marker ($END) after it, and stripping it would delete everything from there to the end of the file. Remove the partial block by hand." >&2
+                            echo "walk-blocker: $HK_FILE left untouched: it has an unclosed BEGIN marker ($BEGIN), with no END marker ($END) before the end of the file or the next BEGIN, and stripping it would delete lines that are not walk-blocker's. Remove the partial block by hand." >&2
                             _left="$_left $HK_FILE,"
                             ;;
                     esac

@@ -1577,6 +1577,7 @@ def test_uninstall_leaves_a_file_with_an_unmatched_begin_untouched(tmp_path, sha
     assert (after.st_ino, stat.S_IMODE(after.st_mode)) == (before.st_ino, 0o600), (
         "rewritten, or re-moded, though its bytes came back the same")
     assert "%s left untouched" % layout.bashrc in result.stderr, out
+    assert "unclosed BEGIN marker" in result.stderr, out
     assert "did not fully succeed" in result.stderr, out
     # ...and the teardown carried on past it.
     assert layout.zshenv.read_text() == "# a stock zshenv\n"
@@ -1715,7 +1716,8 @@ def test_relink_reports_an_unmatched_begin_as_a_missing_block_and_says_why(tmp_p
     result, _l = run_install(tmp_path, ["--relink"], tools=("find", "grep"), layout=layout)
     assert result.returncode == 0, result.stderr
     assert "bash PATH hook block-missing" in result.stderr
-    assert "BEGIN marker with no END marker after it" in result.stderr
+    assert "has an unclosed BEGIN marker" in result.stderr
+    assert "reinstalling will not repair it" in result.stderr
     assert "bash package" not in result.stderr, (
         "a package upgrade does not leave half a block behind")
 
