@@ -55,9 +55,11 @@ FAST_ENV = {"WALK_BLOCKER_MEASURE_WARMUP": "1"}
 # measure.sh accepts (issue #223): drift is capped at 999, which is also the
 # reading of a baseline that printed 0.00, so an allowance at the cap would
 # keep a reading that measured nothing and is refused. It is not a proof of
-# impossibility. A pair is still discarded when one reading of the stub is
-# about eleven times the other, which a stub that runs `exit 0` reaches only
-# under a stall that would make the run's verdict meaningless anyway.
+# impossibility. Drift is 100*|a-b|/a over the FIRST baseline reading, so a
+# second reading below the first never exceeds 100 %; a run is still refused
+# when the second reads about eleven times the first, or the first reads 0.00,
+# which a stub that runs `exit 0` reaches only under a stall that would make
+# the run's verdict meaningless anyway.
 NO_DISCARD = {"WALK_BLOCKER_MEASURE_DRIFT_PCT": "998.9"}
 
 # What a `date` stub printed on its first call before issue #222: the counter
@@ -319,7 +321,7 @@ def degenerate_clock(tmp_path):
     Every reading then comes out identical, so the baseline-drift check sees
     0.0 % and passes every pair -- and every overhead is exactly 0.00, which
     is the shape the ratio line mishandles. A `date` with no `%N` support does
-    NOT reach that line: its readings make the drift sentinel print 999 % and
+    NOT reach that line: its readings make drift print the 999.0 % cap and
     the pairs are discarded as drift, which is why this stub counts instead.
 
     `guard.sh` is unaffected by it either way: it resolves `SG_DATE` by
@@ -814,8 +816,8 @@ def test_single_guard_mode_refuses_a_clock_that_did_not_measure(
     run that measured nothing.
 
     The check has to come BEFORE the drift refusal: identical readings make
-    drift compute as the 999 sentinel, so the drift message would fire first
-    and say the two readings disagree by 999 % when they agree exactly."""
+    drift read as the 999 cap, so the drift message would fire first and
+    say the two readings disagree by 999.0 % when they agree exactly."""
     env = {"PATH": degenerate_clock + os.pathsep + os.environ["PATH"]}
     r = run_measure([guard, "1", "1000", "1000"], env=env)
     assert r.returncode == 2, r.stdout + r.stderr
@@ -990,13 +992,13 @@ def test_the_largest_floor_allowance_still_discards_a_zero_floor(ratio_clock):
 
 
 def test_a_real_floor_disagreement_over_the_cap_prints_the_cap(ratio_clock):
-    """Issue #223. A candidate floor twenty times the reference's is 1900 %
-    apart; it prints as the cap, 999.0, the same as a floor that measured
-    nothing, and a 998 % allowance discards it. Reported without an
-    allowance first, so the cap is pinned on the report line too. Mutation:
-    drop the cap, and the line reads 1900.0."""
+    """Issue #223. A candidate floor eleven times the reference's is
+    1000.0 % apart, just over the cap; with no allowance set it is reported,
+    as the cap, 999.0, the same as a floor that measured nothing. The next
+    test discards it. Mutation: drop the cap, or cap only above 1000, and
+    the line reads 1000.0."""
     ref_pairs = [(1000, 1000, 1000)] * 3
-    cand_pairs = [(1100, 1300, 20000)] * 3
+    cand_pairs = [(1100, 1300, 11000)] * 3
     ref, cand, env = ratio_clock(ref_pairs, cand_pairs)
     r = run_measure(["--against", ref, cand, "1", "3", "100", "100"], env=env)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1007,26 +1009,27 @@ def test_a_real_floor_disagreement_over_the_cap_prints_the_cap(ratio_clock):
 def test_a_real_floor_disagreement_over_the_cap_is_discarded(ratio_clock):
     """The same pairs as above, under the largest allowance accepted."""
     ref_pairs = [(1000, 1000, 1000)] * 3
-    cand_pairs = [(1100, 1300, 20000)] * 3
+    cand_pairs = [(1100, 1300, 11000)] * 3
     ref, cand, env = ratio_clock(ref_pairs, cand_pairs)
     r = run_measure(["--against", ref, cand, "1", "3", "100", "100"],
                     env=dict(env, WALK_BLOCKER_MEASURE_FLOOR_PCT="998"))
     assert r.returncode == 3, r.stdout + r.stderr
     assert _lines(r.stdout, "pair 1 DISCARDED") == [
         "pair 1 DISCARDED: the two halves disagree by 999.0 % about how fast"
-        " the machine is (floors 1.00 vs 20.00 ms), over the 998 % allowed"
+        " the machine is (floors 1.00 vs 11.00 ms), over the 998 % allowed"
         " -- a ratio between them would be measuring the machine"], r.stdout
     assert "only 0 pairs survived" in r.stderr
 
 
 def test_a_real_drift_over_the_cap_prints_the_cap_and_is_refused(tmp_path, guard):
-    """Issue #223, the drift percentage. The second baseline reads twelve
-    times the first, 1100 % apart; it prints as the cap, 999.0, and the
-    largest drift allowance accepted, 998, refuses the run as drift with
-    exit 2. Both overheads are positive, so drift is what decides it.
-    Mutation: drop the cap, and the table row reads 1100.0."""
+    """Issue #223, the drift percentage. The second baseline reads eleven
+    times the first, 1000.0 % apart and just over the cap; it prints as the
+    cap, 999.0, and the largest drift allowance accepted, 998, refuses the
+    run as drift with exit 2. Both overheads are positive, so drift is what
+    decides it. Mutation: drop the cap, or cap only above 1000, and the
+    table row reads 1000.0."""
     env = {"PATH": _scripted_date(tmp_path,
-                                  "1000 2250 1000 1000 12000 1500 2850 3750")
+                                  "1000 2250 1000 1000 11000 1500 2850 3750")
            + os.pathsep + os.environ["PATH"],
            "WALK_BLOCKER_MEASURE_DRIFT_PCT": "998"}
     r = run_measure([guard, "1", "1000", "1000"], env=env)
@@ -1035,6 +1038,26 @@ def test_a_real_drift_over_the_cap_prints_the_cap_and_is_refused(tmp_path, guard
     assert "  by 999.0 %, over the 998 % this gate allows." \
         in r.stderr.splitlines(), r.stderr
     assert "within the" not in r.stdout, "it reported a pass"
+
+
+def test_a_zero_baseline_reads_as_the_drift_cap(tmp_path, guard):
+    """Issue #223. A first baseline that printed 0.00 leaves nothing to
+    divide by, and drift reads as the cap, 999.0: "not measured", which the
+    largest allowance accepted still refuses. Both overheads are positive,
+    so the positivity check lets the run reach drift. Mutation: read the
+    zero denominator as 0 instead of the cap, and the run passes its
+    budgets and exits 0."""
+    env = {"PATH": _scripted_date(tmp_path,
+                                  "0 1250 1000 1000 0 1500 2850 3750")
+           + os.pathsep + os.environ["PATH"],
+           "WALK_BLOCKER_MEASURE_DRIFT_PCT": "998"}
+    r = run_measure([guard, "1", "1000", "1000"], env=env)
+    assert re.search(r"^baseline drift +999\.0 %$", r.stdout, re.M), r.stdout
+    assert re.search(r"^shim overhead +1\.25 ms/call$", r.stdout, re.M), \
+        r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "  by 999.0 %, over the 998 % this gate allows." \
+        in r.stderr.splitlines(), r.stderr
 
 
 def test_exactly_the_minimum_of_usable_pairs_is_compared(ratio_clock):
