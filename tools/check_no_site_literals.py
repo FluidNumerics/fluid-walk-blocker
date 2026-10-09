@@ -138,7 +138,9 @@ def parse_names(data):
     newline-separated, and "\\n", "\\r\\n" and a bare "\\r" each end a name --
     the universal-newline reading a file opened in text mode always had, so
     a newline list from a file yields the names it did before. A newline
-    list cannot carry a name containing "\\r" or "\\n"; use -z for those.
+    list cannot carry a name containing "\\r" or "\\n"; use -z for those. A
+    list mixing NUL and newlines is NUL-separated, so its newlines sit inside
+    names that do not exist and the scan stops with exit 2, never narrower.
 
     Empty names are dropped. Names are decoded as the filesystem encodes
     them (os.fsdecode), so a name that is not UTF-8 resolves to its own file
@@ -281,6 +283,11 @@ def main(argv=None):
         # list for a commit that only deletes is empty, and for one that only
         # changes symlinks or a submodule pointer it names no regular file.
         die("no files to scan under %s; pass paths explicitly or fix --root" % root)
+    # A name os.fsdecode could not decode as UTF-8 carries surrogates that a
+    # strict stdout refuses to encode; the traceback would exit 1 with the
+    # rest of the findings unprinted. stderr is already backslashreplace.
+    if findings and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     for line in findings:
         print(line)
     # The root is named so a pass says which tree it passed. The count is of

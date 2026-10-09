@@ -388,6 +388,37 @@ def test_a_nul_separated_list_keeps_cr_and_lf_inside_a_name(sandbox, via):
     assert r.stderr.decode().startswith("2 file(s) under ")
 
 
+@pytest.mark.parametrize("sep", [b"\n", b"\0"], ids=["newline", "nul"])
+@pytest.mark.parametrize("via", ["file", "stdin"])
+def test_a_name_that_is_not_utf8_reads_its_own_file(sandbox, via, sep):
+    # Decoded with os.fsdecode, a non-UTF-8 name resolves to the file the
+    # filesystem holds under those bytes. A "replace" decode would name a
+    # file that does not exist; stdin used to crash on it.
+    tree, terms = sandbox
+    with open(os.path.join(os.fsencode(str(tree)), b"\xff.md"), "w", encoding="utf-8") as fh:
+        fh.write("10.0.0.1\n")
+    r = run_list(tree, terms, b"\xff.md" + sep, via)
+    assert r.returncode == gate.EXIT_FINDINGS, r.stderr
+    assert r.stderr.decode().startswith("1 file(s) under ")
+    # The finding is printed, escaped, rather than crashing stdout's encoder.
+    assert r.stdout == b"\\udcff.md:1: ipv4\n"
+
+
+@pytest.mark.parametrize("data", [b"a.md\0b.md\0\n", b"a.md\nb.md\0"],
+                         ids=["nul-then-newline", "newline-then-nul"])
+@pytest.mark.parametrize("via", ["file", "stdin"])
+def test_a_list_mixing_nul_and_newline_is_refused_not_narrowed(sandbox, via, data):
+    # Any NUL makes the whole list NUL-separated, so a newline in it is part
+    # of a name. A mixed list therefore names a path that does not exist and
+    # stops with exit 2: loud, never a scan of fewer files that passes.
+    tree, terms = sandbox
+    (tree / "a.md").write_text("plain\n", encoding="utf-8")
+    (tree / "b.md").write_text("plain\n", encoding="utf-8")
+    r = run_list(tree, terms, data, via)
+    assert r.returncode == gate.EXIT_CONFIG, r.stderr
+    assert b"do not exist" in r.stderr
+
+
 def test_parse_names_splits_one_way_per_list():
     assert gate.parse_names(b"") == []
     assert gate.parse_names(b"a\r\nb\rc\n\nd") == ["a", "b", "c", "d"]
