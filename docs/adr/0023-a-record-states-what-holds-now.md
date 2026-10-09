@@ -112,11 +112,12 @@ reads that line, not the edit, so review alone catches a correction made
 without one, or with one the test cannot read: worded without "corrected", or
 placed outside the Status block.
 
-An edit that only adds text to a record's `## Decision` or `## Consequences`
-— a new sentence or bullet, with nothing in the record replaced — moves
-nothing either, because nothing is superseded. It is still an edit to an
-accepted record, so the Status block gains one line naming what was added, the
-issue or pull request it came from, and that nothing moved. That line says
+The licence covers one edit more, which is neither a move nor a correction:
+an edit that only adds text to a record's `## Decision` or `## Consequences`
+— a new sentence or bullet, with nothing in the record replaced. It moves
+nothing, because nothing is superseded. It is still an edit to an accepted
+record, so the Status block gains one line naming what was added, the issue or
+pull request it came from, and that nothing moved. That line says
 neither "was amended when issue #N was decided", which promises moved wording,
 nor "corrected", which is reserved for the note above.
 

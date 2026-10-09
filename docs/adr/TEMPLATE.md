@@ -26,6 +26,10 @@ Conventions (delete this comment in a real ADR):
   live, so when it stops being true it is corrected in place: the quotes are
   not touched, nothing moves, and a line under Status names the entry and the
   issue (ADR-0023).
+- An edit that only adds a sentence or bullet, replacing nothing, moves
+  nothing: a line under Status names what was added, the issue or pull
+  request it came from, and that nothing moved, without the words
+  "amended when issue #N was decided" or "corrected" (ADR-0023).
 - Decisions, not evidence (ADR-0014). No hostnames, usernames, uids,
   partition or QoS names, customer or engineer names, neighbour timers,
   inode counts, capacities, percentages, user or core counts, vendor build
