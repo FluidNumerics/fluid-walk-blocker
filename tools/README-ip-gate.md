@@ -39,6 +39,15 @@ names the root it scanned, counts the files it actually read, and says
 `terms=on` or `terms=off`, so a pass on the wrong tree and a structural-only
 pass are both visible as such.
 
+`--files-from FILE` and `--files-from -` (stdin) parse the same bytes into the
+same names. A list holding any NUL byte is NUL-separated, as `git ... -z`
+writes it, and is split on NUL alone, so a name may contain a carriage return
+or a newline. Any other list is newline-separated, and LF, CRLF and a bare CR
+each end a name; such a list cannot name a file whose name holds either
+character, so use `-z` for those. A list that mixes the two, such as a NUL
+list followed by a newline, is read as NUL-separated, so the newline is part
+of a name; that name does not exist and the scan stops with exit 2.
+
 Three cases that used to pass are exit 2, because none of them scans what the
 caller meant:
 

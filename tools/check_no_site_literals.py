@@ -128,6 +128,27 @@ def tracked_files(root):
     return [os.path.join(root, p.decode()) for p in proc.stdout.split(b"\0") if p]
 
 
+def parse_names(data):
+    """The names in a --files-from list: the same names for the same bytes,
+    whether they came from a file or from stdin.
+
+    A list holding any NUL byte is NUL-separated (`git ... -z`) and split on
+    NUL alone: every other byte, "\\r" and "\\n" included, belongs to a name,
+    because a name may legitimately contain either. Otherwise the list is
+    newline-separated, and "\\n", "\\r\\n" and a bare "\\r" each end a name --
+    the universal-newline reading a file opened in text mode always had, so
+    a newline list from a file yields the names it did before. A newline
+    list cannot carry a name containing "\\r" or "\\n"; use -z for those. A
+    list mixing NUL and newlines is NUL-separated, so its newlines sit inside
+    names that do not exist and the scan stops with exit 2, never narrower.
+
+    Empty names are dropped. Names are decoded as the filesystem encodes
+    them (os.fsdecode), so a name that is not UTF-8 resolves to its own file
+    rather than to a replacement-character name that does not exist."""
+    parts = data.split(b"\0") if b"\0" in data else data.splitlines()
+    return [os.fsdecode(p) for p in parts if p]
+
+
 def expand(paths):
     for p in paths:
         if os.path.isdir(p):
@@ -215,15 +236,19 @@ def main(argv=None):
         return EXIT_NO_TERMS
 
     if a.files_from:
+        # Both sources are read as bytes and parsed by one function. Issue
+        # #216: stdin used to be read as text with no newline translation and
+        # a file with universal newlines, so a CRLF list kept "\r" on every
+        # name from stdin only.
         if a.files_from == "-":
-            data = sys.stdin.read()
+            data = sys.stdin.buffer.read()
         else:
             try:
-                with open(a.files_from, encoding="utf-8", errors="replace") as fh:
+                with open(a.files_from, "rb") as fh:
                     data = fh.read()
             except OSError as exc:
                 die("cannot read --files-from %s: %s" % (a.files_from, exc.__class__.__name__))
-        named = [os.path.join(root, p) for p in re.split(r"[\0\n]", data) if p]
+        named = [os.path.join(root, p) for p in parse_names(data)]
         files = named
     elif a.paths:
         named = [os.path.join(root, p) for p in a.paths]
@@ -258,6 +283,11 @@ def main(argv=None):
         # list for a commit that only deletes is empty, and for one that only
         # changes symlinks or a submodule pointer it names no regular file.
         die("no files to scan under %s; pass paths explicitly or fix --root" % root)
+    # A name os.fsdecode could not decode as UTF-8 carries surrogates that a
+    # strict stdout refuses to encode; the traceback would exit 1 with the
+    # rest of the findings unprinted. stderr is already backslashreplace.
+    if findings and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     for line in findings:
         print(line)
     # The root is named so a pass says which tree it passed. The count is of
