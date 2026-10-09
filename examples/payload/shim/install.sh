@@ -1391,10 +1391,12 @@ assert_audit_dir() {
 }
 
 sg_report() {
-    # sg_report ACTION STATE                (any ACTION but uncovered_mount)
+    # sg_report ACTION STATE
     # sg_report ACTION STATE reasserted
     # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive|covered|unmounted
     # sg_report uncovered_mount MOUNTPOINT FSTYPE expensive reasserted
+    #
+    # In both short forms, ACTION is any action but `uncovered_mount`.
     #
     # The optional third argument of the short form, and the fifth of the
     # long one, mark a re-assertion of a standing condition (ADR-0030,
