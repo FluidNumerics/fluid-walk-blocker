@@ -1530,6 +1530,197 @@ def test_uninstall_still_works_on_a_plain_bashrc(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# unmatched markers (issue #218)
+# --------------------------------------------------------------------------
+#
+# strip_block()'s awk drops every line from a BEGIN to the next END. With no
+# END after the BEGIN, that is everything to the end of the file; with a
+# second BEGIN first, it is whatever sat between the two. Neither is
+# walk-blocker's. Such a file is never rewritten: the install refuses with 3
+# and the uninstall leaves it, says so, carries on, and ends 8.
+
+AFTER = "export SITE_THING=1\nalias ll='ls -l'\n"
+
+UNMATCHED_SHAPES = {
+    "begin-without-end":
+        STOCK_BASHRC + BEGIN + "\nPATH=/x:$PATH\n" + AFTER,
+    "end-before-begin":
+        END + "\n" + STOCK_BASHRC + BEGIN + "\nPATH=/x:$PATH\n" + AFTER,
+    "two-begins-then-one-end":
+        BEGIN + "\nPATH=/x:$PATH\n" + AFTER + BEGIN + "\nPATH=/y\n" + END
+        + "\n" + STOCK_BASHRC,
+    "a-good-block-then-an-unmatched-begin":
+        BEGIN + "\nPATH=/x:$PATH\n" + END + "\n" + STOCK_BASHRC + BEGIN
+        + "\n" + AFTER,
+    # awk reads a last line that has no newline, so the scan must too.
+    "begin-as-an-unterminated-last-line":
+        STOCK_BASHRC + BEGIN,
+}
+
+
+@pytest.mark.parametrize("shape", sorted(UNMATCHED_SHAPES))
+def test_uninstall_leaves_a_file_with_an_unmatched_begin_untouched(tmp_path, shape):
+    layout = Layout(tmp_path)
+    original = UNMATCHED_SHAPES[shape].encode()
+    layout.bashrc.write_bytes(original)
+    os.chmod(str(layout.bashrc), 0o600)
+    before = os.stat(str(layout.bashrc))
+    # A well-formed block in the other shared file, which must still go.
+    layout.zshenv.write_text("%s\nPATH=/x:$PATH\n%s\n# a stock zshenv\n" % (BEGIN, END))
+    layout.bin.mkdir(parents=True)
+    os.symlink("/nowhere", str(layout.bin / "find"))
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
+    out = result.stdout + result.stderr
+    assert result.returncode == 8, out
+    assert layout.bashrc.read_bytes() == original
+    after = os.stat(str(layout.bashrc))
+    assert (after.st_ino, stat.S_IMODE(after.st_mode)) == (before.st_ino, 0o600), (
+        "rewritten, or re-moded, though its bytes came back the same")
+    assert "%s left untouched" % layout.bashrc in result.stderr, out
+    assert "did not fully succeed" in result.stderr, out
+    # ...and the teardown carried on past it.
+    assert layout.zshenv.read_text() == "# a stock zshenv\n"
+    assert not layout.bin.exists()
+    assert "removed from %s," % layout.zshenv in result.stdout, out
+    assert str(layout.bashrc) not in [
+        ln for ln in result.stdout.splitlines() if "removed" in ln][0]
+
+
+def test_uninstall_leaves_an_unmatched_begin_in_a_disabled_hooks_file(tmp_path):
+    """A disabled hook's file reaches the strip because it carries a BEGIN
+    (issue #196), and the same rule holds there."""
+    layout = Layout(tmp_path)
+    original = ("# a stock zshenv\n%s\nPATH=/x\n%s" % (BEGIN, AFTER)).encode()
+    layout.zshenv.write_bytes(original)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout,
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 8, result.stdout + result.stderr
+    assert layout.zshenv.read_bytes() == original
+    assert "%s left untouched" % layout.zshenv in result.stderr
+
+
+@pytest.mark.parametrize("args", [["--system"], ["--system", "--dry-run"]])
+@pytest.mark.parametrize("shape", sorted(UNMATCHED_SHAPES))
+def test_the_install_refuses_a_file_with_an_unmatched_begin(tmp_path, shape, args):
+    """Refused before anything is written -- no backup, no shim farm, no
+    other hook -- with 3, the code of every other hook-file refusal. The
+    dry run refuses too: it is a fact about the content, so the install
+    would refuse identically, and deploy.py's dry run reports it."""
+    layout = Layout(tmp_path)
+    original = UNMATCHED_SHAPES[shape].encode()
+    layout.bashrc.write_bytes(original)
+    before = os.stat(str(layout.bashrc))
+    result, layout = run_install(tmp_path, args, fake_uid=0, layout=layout)
+    out = result.stdout + result.stderr
+    assert result.returncode == 3, out
+    assert "refusing hooks.bash.file %s" % layout.bashrc in result.stderr, out
+    assert "has not been touched" in result.stderr
+    assert layout.bashrc.read_bytes() == original
+    assert os.stat(str(layout.bashrc)).st_ino == before.st_ino
+    assert not (layout.bashrc.parent / (layout.bashrc.name + ORIG)).exists()
+    assert not layout.bin.exists()
+    assert not layout.zshenv.exists()
+
+
+def test_the_install_refuses_an_unmatched_begin_in_zshenv_too(tmp_path):
+    layout = Layout(tmp_path)
+    original = ("# a stock zshenv\n%s\nPATH=/x\n%s" % (BEGIN, AFTER)).encode()
+    layout.zshenv.write_bytes(original)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0, layout=layout)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "refusing hooks.zsh.file %s" % layout.zshenv in result.stderr
+    assert layout.zshenv.read_bytes() == original
+
+
+def _shell_function(text, name):
+    start = text.index("\n%s() {\n" % name) + 1
+    return text[start:text.index("\n}\n", start) + 3]
+
+
+def test_prepend_block_refuses_a_file_that_became_unmatched_after_the_check(tmp_path):
+    """The pre-write check runs before the shim farm is built, and the file
+    can change after it. prepend_block() scans again, before its backup, so
+    the refusal still lands with the file untouched. Driven by sourcing the
+    functions themselves, since no ordinary run separates the two reads."""
+    text = open(INSTALL_SH).read()
+    original = (STOCK_BASHRC + BEGIN + "\n" + AFTER).encode()
+    target = tmp_path / "bashrc"
+    target.write_bytes(original)
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "set -eu\nBEGIN='%s'\nEND='%s'\n" % (BEGIN, END)
+        + "".join(_shell_function(text, name) for name in (
+            "block_shape", "unmatched_refusal", "strip_block", "prepend_block"))
+        + "bashrc_block() { echo block; }\n"
+        'prepend_block "%s" bashrc_block hooks.bash.file\n'
+        "echo reached\n" % target)
+    result = subprocess.run([SH, str(probe)], capture_output=True, text=True,
+                            env={"PATH": "/usr/bin:/bin"}, timeout=30)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "reached" not in result.stdout
+    assert "refusing hooks.bash.file" in result.stderr
+    assert target.read_bytes() == original
+    assert not (tmp_path / ("bashrc" + ORIG)).exists()
+
+
+def test_strip_block_itself_will_not_rewrite_an_unmatched_file(tmp_path):
+    """The guard inside strip_block(), so a new caller that forgets the
+    scan still cannot reach the awk."""
+    text = open(INSTALL_SH).read()
+    original = (STOCK_BASHRC + BEGIN + "\n" + AFTER).encode()
+    target = tmp_path / "bashrc"
+    target.write_bytes(original)
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "set -eu\nBEGIN='%s'\nEND='%s'\n" % (BEGIN, END)
+        + _shell_function(text, "block_shape") + _shell_function(text, "strip_block")
+        + 'strip_block "%s"\necho reached\n' % target)
+    result = subprocess.run([SH, str(probe)], capture_output=True, text=True,
+                            env={"PATH": "/usr/bin:/bin"}, timeout=30)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "reached" not in result.stdout
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("text, expected", [
+    # The ordinary block, with someone's content after it.
+    (BEGIN + "\nPATH=/x:$PATH\n" + END + "\n" + STOCK_BASHRC + AFTER,
+     STOCK_BASHRC + AFTER),
+    # A stray END before a good block is kept as an ordinary line: awk
+    # prints it, and it costs nothing to leave.
+    (END + "\n" + STOCK_BASHRC + BEGIN + "\nPATH=/x\n" + END + "\n" + AFTER,
+     END + "\n" + STOCK_BASHRC + AFTER),
+    # Two good blocks both go.
+    (BEGIN + "\na\n" + END + "\n" + STOCK_BASHRC + BEGIN + "\nb\n" + END
+     + "\n" + AFTER, STOCK_BASHRC + AFTER),
+    # An END with no newline still closes the block.
+    (STOCK_BASHRC + BEGIN + "\nPATH=/x\n" + END, STOCK_BASHRC),
+], ids=["block-then-content", "stray-end-first", "two-blocks", "unterminated-end"])
+def test_a_begin_with_its_end_after_it_is_still_stripped(tmp_path, text, expected):
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(text)
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0, layout=layout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert layout.bashrc.read_text() == expected
+    assert "left untouched" not in result.stderr
+
+
+@pytest.mark.parametrize("shape", sorted(UNMATCHED_SHAPES))
+def test_relink_reports_an_unmatched_begin_as_a_missing_block_and_says_why(tmp_path, shape):
+    """The reconcile's `present` is the shape the install and the uninstall
+    would strip, so its advice to reinstall is not given over a file the
+    install will refuse without saying so."""
+    layout = Layout(tmp_path)
+    layout.bashrc.write_text(UNMATCHED_SHAPES[shape])
+    result, _l = run_install(tmp_path, ["--relink"], tools=("find", "grep"), layout=layout)
+    assert result.returncode == 0, result.stderr
+    assert "bash PATH hook block-missing" in result.stderr
+    assert "BEGIN marker with no END marker after it" in result.stderr
+    assert "bash package" not in result.stderr, (
+        "a package upgrade does not leave half a block behind")
+
+
+# --------------------------------------------------------------------------
 # the trust chain
 # --------------------------------------------------------------------------
 

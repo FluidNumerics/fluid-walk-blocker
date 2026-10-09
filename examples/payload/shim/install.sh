@@ -855,7 +855,32 @@ check_hook_file() {
     # preview, the notes predicting them) for one shell's file.
     hook_select "$1"
     case $HK_KIND in
-        block)  require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY" ;;
+        block)
+            require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+            # The markers, before anything is written (issue #218). Refused
+            # in a preview too, like require_no_newline(): it is a fact about
+            # the file's content, not about who is asking, so the install
+            # would refuse identically -- and `deploy.py --system --dry-run`
+            # turns this exit into its own refusal. A link is passed over:
+            # a writing run has already refused it above.
+            if [ -f "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
+                if [ -r "$HK_FILE" ]; then
+                    block_shape "$HK_FILE"
+                    if [ "$SG_BLOCK_SHAPE" = unmatched ]; then
+                        unmatched_refusal "$HK_FILE" "$HK_KEY"
+                        exit 3
+                    fi
+                else
+                    # Only an ordinary user gets here, and a writing run by
+                    # one is refused for want of root; root reads every
+                    # regular file.
+                    echo "# NOTE: $HK_KEY $HK_FILE is not readable to this"
+                    echo "# account, so its walk-blocker markers were not"
+                    echo "# checked; --system checks them as root."
+                    echo
+                fi
+            fi
+            ;;
         dropin) require_plain_dropin "$HK_FILE" "$2" "$HK_KEY" ;;
     esac
 }
@@ -865,7 +890,7 @@ write_hook() {
     hook_select "$1"
     case $HK_KIND in
         block)
-            prepend_block "$HK_FILE" "$HK_BLOCK_FN"
+            prepend_block "$HK_FILE" "$HK_BLOCK_FN" "$HK_KEY"
             echo "walk-blocker: $HK_FILE block installed${2:-}"
             ;;
         dropin)
@@ -988,23 +1013,77 @@ end
 BLOCK
 }
 
-has_block() {
-    # has_block FILE -- whether FILE carries walk-blocker's opening marker
-    # as a whole line. Read in sh rather than by grep, which would resolve
-    # through a PATH that may carry our own shim. Every caller has already
-    # established that FILE is a regular file, so the read cannot block on
-    # a FIFO.
-    while IFS= read -r _hb_line; do
-        if [ "$_hb_line" = "$BEGIN" ]; then
-            return 0
-        fi
+block_shape() {
+    # block_shape FILE -- sets SG_BLOCK_SHAPE to what FILE's marker lines
+    # say about walk-blocker's block:
+    #
+    #   none       no $BEGIN line: nothing of ours to strip
+    #   matched    every $BEGIN has an $END after it, before any further
+    #              $BEGIN: strip_block() removes exactly the blocks
+    #   unmatched  a $BEGIN with no $END after it, or a second $BEGIN before
+    #              the first one's $END (issue #218)
+    #
+    # `unmatched` is the shape strip_block() cannot handle: its awk drops
+    # every line from a $BEGIN to the next $END, so with no $END that is
+    # everything to the end of the file, and with a second $BEGIN first it
+    # is whatever sat between the two. Neither is walk-blocker's, and the
+    # file is read by every login shell. So nothing rewrites such a file:
+    # the install refuses, and the uninstall leaves it as it was and says so.
+    # A stray $END with no open $BEGIN is neither: strip_block() keeps it as
+    # an ordinary line, so it costs nothing to leave.
+    #
+    # Read in sh rather than by grep, which would resolve through a PATH
+    # that may carry our own shim. Every caller has already established that
+    # FILE is a regular file, so the read cannot block on a FIFO. A last line
+    # with no newline is still read: awk sees it, so this has to.
+    _bs_open=0
+    SG_BLOCK_SHAPE=none
+    while IFS= read -r _bs_line || [ -n "$_bs_line" ]; do
+        case $_bs_line in
+            "$BEGIN")
+                if [ "$_bs_open" -eq 1 ]; then
+                    SG_BLOCK_SHAPE=unmatched
+                    return 0
+                fi
+                _bs_open=1
+                SG_BLOCK_SHAPE=matched
+                ;;
+            "$END") _bs_open=0 ;;
+        esac
     done < "$1"
-    return 1
+    if [ "$_bs_open" -eq 1 ]; then
+        SG_BLOCK_SHAPE=unmatched
+    fi
+    return 0
+}
+
+unmatched_refusal() {
+    # unmatched_refusal FILE KEY -- the install's message for a block-style
+    # hook file whose markers are unmatched; the caller exits 3, the code of
+    # every other refusal of a hook file here.
+    echo "install.sh: refusing $2 $1: it has the walk-blocker BEGIN marker" >&2
+    echo "  ($BEGIN) with no END marker ($END) after it." >&2
+    echo "  Stripping the old block before writing the new one would delete" >&2
+    echo "  every line from that BEGIN to the end of the file, and that content" >&2
+    echo "  is not walk-blocker's. The file has not been touched. Repair or" >&2
+    echo "  remove the partial block by hand, then re-run (issue #218)." >&2
 }
 
 strip_block() {
+    # strip_block FILE -- remove every marked block from FILE. Returns 3 and
+    # leaves FILE untouched when its markers are unmatched; see
+    # block_shape(). Checked here as well as by each caller, so a new caller
+    # cannot reach the awk below without it.
     _file=$1
     [ -f "$_file" ] || return 0
+    block_shape "$_file"
+    case $SG_BLOCK_SHAPE in
+        none) return 0 ;;
+        unmatched)
+            echo "install.sh: $_file not rewritten: it has the walk-blocker BEGIN marker with no END after it" >&2
+            return 3
+            ;;
+    esac
     # mktemp, not `> "$_file.walk-blocker.tmp"`. That would be a root
     # redirection to a PREDICTABLE name, and a plain `>` follows a symlink --
     # so in a shared directory another user could pre-create it pointing
@@ -1024,14 +1103,26 @@ strip_block() {
 }
 
 prepend_block() {
-    # prepend_block FILE BLOCK_FN -- BLOCK_FN is bashrc_block or zshenv_block,
-    # a function name invoked as a plain command below. Everything here is
+    # prepend_block FILE BLOCK_FN KEY -- BLOCK_FN is bashrc_block or
+    # zshenv_block, a function name invoked as a plain command below; KEY is
+    # the site.toml key, for a refusal's message. Everything here is
     # file-handling mechanics (the backup, the mktemp/chmod/mv race-avoidance)
     # that does not depend on which shell reads the result; only the CONTENT
     # written differs, and that stays in separate per-shell functions so a
     # change meant for one shell's prose cannot silently touch the other's.
     _file=$1
     _block_fn=$2
+    # check_hook_file() refused an unmatched file before anything was
+    # written; this catches one that became unmatched since, before the
+    # backup below or the touch. A plain call into strip_block() would
+    # refuse too, but only after both (issue #218).
+    if [ -f "$_file" ]; then
+        block_shape "$_file"
+        if [ "$SG_BLOCK_SHAPE" = unmatched ]; then
+            unmatched_refusal "$_file" "$3"
+            exit 3
+        fi
+    fi
     # A snapshot of whatever this run found, taken before `touch` can create
     # the file it did not find and before this function's own write touches
     # it -- the directory is already proven trusted (root-owned, not group-
@@ -1519,16 +1610,13 @@ report_hook_state() {
     else
         # Read it rather than shelling out to grep: the file is small, this
         # runs as root on every poll, and `grep` here would resolve through a
-        # PATH that may well have our own shim in front of it.
-        _begin=0
-        _end=0
-        while IFS= read -r _line; do
-            case $_line in
-                "$BEGIN") _begin=1 ;;
-                "$END") _end=1 ;;
-            esac
-        done < "$_hook_file"
-        if [ "$_begin" -eq 1 ] && [ "$_end" -eq 1 ]; then
+        # PATH that may well have our own shim in front of it. `present`
+        # is the shape the install and the uninstall would strip: a BEGIN
+        # with its END after it. An unmatched BEGIN is not a block either
+        # path will rewrite (issue #218), so it is reported as missing, with
+        # the reason below.
+        block_shape "$_hook_file"
+        if [ "$SG_BLOCK_SHAPE" = matched ]; then
             _hook_state=present
         else
             _hook_state=block-missing
@@ -1550,7 +1638,11 @@ report_hook_state() {
     echo "walk-blocker: $_hook_shell PATH hook $_hook_state in $_hook_file" >&2
     echo "  Layer 1 is not reaching \`ssh host 'cmd'\` for $_hook_shell. Reinstall" >&2
     echo "  with deploy.py --system, as root." >&2
-    if [ "$_hook_state" = block-missing ]; then
+    if [ "$_hook_state" = block-missing ] && [ "$SG_BLOCK_SHAPE" = unmatched ]; then
+        echo "  $_hook_file has the BEGIN marker with no END marker after it." >&2
+        echo "  The install refuses such a file until the partial block is" >&2
+        echo "  repaired or removed by hand (issue #218)." >&2
+    elif [ "$_hook_state" = block-missing ]; then
         echo "  $_hook_file may be configuration owned by the $_hook_pkg package;" >&2
         echo "  an upgrade of $_hook_pkg that took the maintainer's version is the" >&2
         echo "  likeliest thing to have removed the block. See ADR-0008." >&2
@@ -2685,7 +2777,8 @@ $HK_FILE
                 block)
                     # No block, nothing of ours: never rewritten, so its
                     # owner and mode are not this uninstall's business.
-                    has_block "$HK_FILE" || continue
+                    block_shape "$HK_FILE"
+                    [ "$SG_BLOCK_SHAPE" != none ] || continue
                     require_plain_hook_file "$HK_FILE" 1 "$HK_KEY"
                     ;;
                 dropin)
@@ -2720,14 +2813,33 @@ $HK_FILE
         # Nothing to strip is nothing to rewrite: a file with no block keeps
         # its bytes, its mode and its inode, where strip_block() would re-mode
         # it 0644 and replace it for no change in content (issue #196).
+        #
+        # A file whose BEGIN marker has no END after it is left exactly as it
+        # is, said, and the teardown carries on (issue #218): stripping it
+        # would delete everything from that marker to the end of the file,
+        # and refusing here, with the units already down, would leave the
+        # rest of Layer 1 in place for a fault in one file. The run then
+        # ends 8 rather than 0, because a hook file still carries part of
+        # walk-blocker's block -- the code `deploy.py --uninstall` gives a
+        # teardown that did not fully succeed, which is what it returns for
+        # any non-zero status from this script.
+        _left=''
         for _uh in $_uninstall_hooks; do
             hook_select "$_uh"
             case $HK_KIND in
                 block)
-                    if [ -f "$HK_FILE" ] && has_block "$HK_FILE"; then
-                        strip_block "$HK_FILE"
-                        _removed="$_removed $HK_FILE,"
-                    fi
+                    [ -f "$HK_FILE" ] || continue
+                    block_shape "$HK_FILE"
+                    case $SG_BLOCK_SHAPE in
+                        matched)
+                            strip_block "$HK_FILE"
+                            _removed="$_removed $HK_FILE,"
+                            ;;
+                        unmatched)
+                            echo "walk-blocker: $HK_FILE left untouched: it has the BEGIN marker ($BEGIN) with no END marker ($END) after it, and stripping it would delete everything from there to the end of the file. Remove the partial block by hand." >&2
+                            _left="$_left $HK_FILE,"
+                            ;;
+                    esac
                     ;;
                 # Plain `rm -f`, not strip_block: there are no markers to
                 # strip out of shared content, because the drop-in was never
@@ -2756,11 +2868,17 @@ $HK_FILE
         fi
         if [ -n "$_removed" ]; then
             echo "walk-blocker: removed from$_removed and $BIN"
+        elif [ -n "$_left" ]; then
+            echo "walk-blocker: removed $BIN"
         else
             echo "walk-blocker: removed $BIN; no hook file carried walk-blocker's block or drop-in"
         fi
         echo "walk-blocker: $SG_TIMER_UNIT is stopped and not enabled, so Layer 2 (the reaper) is not running either"
         echo "walk-blocker: \`python3 deploy.py --system\` from a payload restores both layers"
         echo "walk-blocker: $SG_SPOOL_DIR left in place; it holds the audit trail"
+        if [ -n "$_left" ]; then
+            echo "install.sh: the uninstall did not fully succeed: walk-blocker's BEGIN marker is still in${_left%,}" >&2
+            exit 8
+        fi
         ;;
 esac
