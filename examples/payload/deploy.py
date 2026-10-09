@@ -3468,11 +3468,25 @@ def _units_are_down(env):
 def _remove_installed_entries(args, env):
     """Take back what this run copied: every INSTALLED_ENTRIES path under
     the prefix, and nothing else -- the same bound the recursive mutations
-    keep. `check=False`, because an entry the failed step never reached is
-    not a reason to stop a refusal half-way."""
+    keep. True when every removal succeeded.
+
+    `check=False`, so one failed removal does not stop the rest of a refusal
+    half-way; `rm -rf` of an entry the failed step never reached exits 0, so
+    a non-zero status is a removal that did not happen. Each one is named
+    here and the caller is told, so a refusal does not claim a removal it
+    did not make (issue #221). The caller's exit status is unchanged."""
+    removed = True
     for entry in INSTALLED_ENTRIES:
-        run(["rm", "-rf", os.path.join(args.prefix, entry)],
-            check=False, dry_run=args.dry_run, env=env)
+        target = os.path.join(args.prefix, entry)
+        result = run(["rm", "-rf", target],
+                     check=False, dry_run=args.dry_run, env=env)
+        if result.returncode != 0:
+            removed = False
+            sys.stderr.write(
+                "deploy.py: could not remove %s (rm exited %d); it is still "
+                "under the root-only prefix. Remove it by hand.\n"
+                % (target, result.returncode))
+    return removed
 
 
 def _write_offenders(offenders):
@@ -3588,7 +3602,13 @@ def system_execute(args, env=None):
         source = os.path.join(source_root, relative)
         target = os.path.join(args.prefix, relative)
         if is_dir:
-            run(["rm", "-rf", target], check=False, dry_run=args.dry_run, env=env)
+            # check=True: a directory that survives a failed `rm -rf` makes
+            # `cp -a` copy INTO it, as target/<basename>, leaving the old
+            # entries live with the new copy nested beneath them (issue
+            # #221). A missing target is not a failure -- `rm -rf` exits 0
+            # -- so a first install is unaffected; anything else ends the
+            # run with rm's own status, as every other failed command does.
+            run(["rm", "-rf", target], dry_run=args.dry_run, env=env)
             # --no-preserve=ownership, so every destination inode is
             # root-owned from CREATION. Plain `cp -a` as root chowns each new
             # file to the source's owner, which opens a window the
@@ -3642,13 +3662,15 @@ def system_execute(args, env=None):
             # Remove what this run wrote, rather than leaving a rejected
             # payload on disk for someone to widen later. Bounded to the
             # entries this install creates.
-            _remove_installed_entries(args, env)
+            removed = _remove_installed_entries(args, env)
             sys.stderr.write(
                 "  Nothing was enabled, the units are left stopped AND\n"
-                "  disabled, the payload this run wrote has been removed, and\n"
+                "  disabled, %s, and\n"
                 "  %s stays 0700. See ADR-0004: artifacts the monitored\n"
                 "  account can write are not a backstop against that account.\n"
-                % args.prefix)
+                % ("the payload this run wrote has been removed" if removed
+                   else "the entries named above were NOT removed",
+                   args.prefix))
             return 5
 
     # Checks passed, so the payload may now be readable by the users it is

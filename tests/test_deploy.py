@@ -25,6 +25,7 @@ import json
 import os
 import py_compile
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -1077,6 +1078,114 @@ def test_a_rejected_payload_is_removed_not_left_on_disk(tmp_path, monkeypatch):
         assert os.path.join(args.prefix, entry) in removed, entry
     assert not any(c == ["chmod", "0755", args.prefix] for c in calls), \
         "a rejected prefix must stay root-only"
+
+
+def _failing_rm(tmp_path, status):
+    """A stand-in `rm` that fails with `status`, as one blocked by an
+    immutable or busy entry would: the directory survives."""
+    path = tmp_path / "failing-rm"
+    path.write_text("#!/bin/sh\necho 'rm: cannot remove' >&2\nexit %d\n"
+                    % status)
+    path.chmod(0o755)
+    return str(path)
+
+
+@pytest.mark.parametrize("make_rm, status", [
+    (lambda tmp_path: _failing_rm(tmp_path, 1), 1),
+    (lambda tmp_path: str(tmp_path / "no-such-rm"), 127),
+])
+def test_a_failed_rm_before_a_directory_copy_ends_the_install(
+        tmp_path, monkeypatch, capsys, make_rm, status):
+    """Issue #221: a directory that survives its `rm -rf` would have `cp -a`
+    copy INTO it, nesting the new payload under the old. The real run() is
+    handed a failing or missing `rm` for that step; the install ends with
+    rm's own status and no `cp` runs. Mutation: put check=False back, and
+    `cp` runs and the install exits 0."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    pass_prefix_checks(monkeypatch)
+    real_run = deploy.run
+    calls = []
+    inner = recording_run(calls)
+    rm = make_rm(tmp_path)
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if cmd[:2] == ["rm", "-rf"]:
+            calls.append(cmd)
+            return real_run([rm] + cmd[1:], check=check, capture=capture,
+                            dry_run=dry_run, env=env)
+        return inner(cmd, check=check, capture=capture, dry_run=dry_run,
+                     env=env)
+    monkeypatch.setattr(deploy, "run", fake_run)
+    args = _args(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()), \
+            pytest.raises(SystemExit) as exc:
+        deploy.system_execute(args)
+    assert exc.value.code == status
+    assert [c for c in calls if c[:2] == ["rm", "-rf"]], calls
+    # The snapshot's own copies run earlier; none may land in the prefix.
+    into_prefix = [c for c in calls if c[0] == "cp"
+                   and c[-1].startswith(args.prefix + os.sep)]
+    assert not into_prefix, into_prefix
+    assert "failed: %s -rf " % rm in capsys.readouterr().err
+
+
+def test_the_dry_run_still_lists_each_rm_before_its_copy(tmp_path, monkeypatch):
+    """The dry run prints the same `rm -rf`, then `cp -a`, for every
+    directory entry: check=True changes what a failure does, not the plan
+    (issue #221)."""
+    pass_prefix_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "system_preview", lambda args, env=None: 0)
+    args = _args(tmp_path)
+    args.dry_run = True
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert deploy.system_execute(args) == 0
+    lines = out.getvalue().splitlines()
+    for relative, is_dir, _mode in deploy.PAYLOAD_SOURCES:
+        if not is_dir:
+            continue
+        target = os.path.join(args.prefix, relative)
+        rm = lines.index("would run: rm -rf %s" % shlex.quote(target))
+        assert lines[rm + 1].startswith("would run: cp -a ") \
+            and lines[rm + 1].endswith(" " + shlex.quote(target)), lines[rm + 1]
+
+
+def test_a_refusal_does_not_claim_a_removal_that_failed(
+        tmp_path, monkeypatch, capsys):
+    """Issue #221, second site: the ownership refusal said the payload had
+    been removed whatever `rm -rf` returned. A failed removal is named and
+    the message says so; the status stays 5. Mutation: ignore the status in
+    _remove_installed_entries(), and "has been removed" is printed."""
+    pass_payload_checks(monkeypatch)
+    monkeypatch.setattr(deploy, "_is_root", lambda: True)
+    monkeypatch.setattr(deploy, "untrusted_prefix_chain",
+                        lambda p, trusted_uids=(0,), trusted_gids=(): [])
+    monkeypatch.setattr(deploy, "untraversable_for_users", lambda prefix: [])
+    monkeypatch.setattr(
+        deploy, "unowned_by",
+        lambda root, uid=0: [deploy.Unowned("%s/shim/guard.sh" % root,
+                                            deploy.UNOWNED_FOREIGN_UID,
+                                            "owned by uid 1000")])
+    inner = recording_run([])
+    stuck = None
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        result = inner(cmd, check=check, capture=capture, dry_run=dry_run,
+                       env=env)
+        # Only the refusal's removal fails: the pre-copy one has passed.
+        if cmd[:2] == ["rm", "-rf"] and cmd[-1] == stuck:
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+        return result
+    monkeypatch.setattr(deploy, "run", fake_run)
+
+    args = _args(tmp_path)
+    stuck = os.path.join(args.prefix, deploy.INSTALLED_ENTRIES[-1])
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert deploy.system_execute(args) == 5
+    err = capsys.readouterr().err
+    assert "could not remove %s (rm exited 1)" % stuck in err, err
+    assert "has been removed" not in err, err
+    assert "NOT removed" in err, err
 
 
 def test_deploy_refuses_to_wire_up_a_payload_it_could_not_make_root_owned(
