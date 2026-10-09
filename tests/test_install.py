@@ -4342,3 +4342,45 @@ def test_the_uninstall_preview_exits_3_over_an_untrusted_directory(
                                  **overrides)
     assert result.returncode == 3, result.stdout + result.stderr
     assert layout.zshenv.read_text() == PREVIEW_SHAPES["block"]
+
+
+def test_the_uninstall_preview_predicts_the_failure_over_a_directory_drop_in(
+        tmp_path):
+    """An enabled drop-in path holding a directory: the teardown's `rm -f`
+    fails on it, after the units are down (issue #240). The preview says
+    FAIL and exits 3 rather than promising a removal."""
+    layout = Layout(tmp_path)
+    layout.fishconf.mkdir()
+    preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                  fake_uid=0, layout=layout)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 3, out
+    line = _preview_lines(preview.stdout)["hooks.fish.file"]
+    assert line.startswith("FAIL: it is a directory"), out
+    assert "would fail on a hook file above" in preview.stdout, out
+
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert layout.fishconf.is_dir()
+
+
+def test_the_uninstall_preview_names_what_it_does_not_check(tmp_path):
+    """Root, the helper's own wrapped_names.sh and the units stopping are
+    writing-run refusals that are not about a hook file. The preview does
+    not make them, and says so rather than letting exit 0 read as clean:
+    here wrapped_names.sh is somebody else's, which the writing run refuses
+    and the preview cannot see."""
+    stat_body = stat_stub_uid_for("*wrapped_names.sh", "1000 644")
+    preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                  fake_uid=0, stat_body=stat_body)
+    assert preview.returncode == 0, preview.stdout + preview.stderr
+    said = " ".join(line.lstrip("# ") for line in preview.stdout.splitlines())
+    for unchecked in ("Not checked here", "root", "wrapped_names.sh",
+                      "whether systemd stops the units"):
+        assert unchecked in said, preview.stdout
+
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout, stat_body=stat_body)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "wrapped_names.sh" in result.stderr

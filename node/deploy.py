@@ -4098,8 +4098,8 @@ def system_uninstall(args, env=None):
                 sys.stderr.write(preview.stderr or "")
                 sys.stderr.write(
                     "deploy.py: install.sh's own uninstall dry run refused "
-                    "(exit 3) on a hook\n  file named above. The writing "
-                    "helper refuses there too, and does so only\n  after the "
+                    "(exit 3): the writing\n  helper would refuse or fail on "
+                    "a hook file named above, and does so only\n  after the "
                     "systemd units are removed, so an uninstall that got that "
                     "far\n  would end 8 with Layer 1 still installed. Fix the "
                     "condition above\n  before uninstalling.\n")

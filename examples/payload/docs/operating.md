@@ -1093,8 +1093,13 @@ If the helper cannot be inspected as the caller, it is not run. A helper
 deployed by a release before issue #219 has no uninstall dry run. In both
 cases the hook list is marked `NOT CHECKED`, and the dry run carries on.
 `sh <prefix>/shim/install.sh --uninstall --dry-run` gives the same list on
-its own. It exits 3 where the uninstall would refuse, 8 where it would leave
-a file untouched, and 0 otherwise.
+its own. It exits 3 where the uninstall would refuse or fail on a hook file,
+8 where it would leave a file untouched, and 0 otherwise. A failure it
+predicts is an enabled drop-in path that is a directory, which the
+teardown's `rm -f` cannot remove (issue #240). It makes no check that is not
+about a hook file, and says so: root, the helper's own `wrapped_names.sh`,
+which `deploy.py`'s dry run checks before running it, and whether systemd
+stops the units.
 
 `install.sh --uninstall` exists too, and takes Layer 1 off but removes
 less: the unit files, and the journal drop-in with its grant, stay until

@@ -30,8 +30,9 @@
 #                                      uninstall would do to it, and why;
 #                                      writes nothing, stops nothing and
 #                                      needs no privilege. Exits 3 where
-#                                      the uninstall would refuse, 8 where
-#                                      it would end 8 (issue #219).
+#                                      the uninstall would refuse or fail on
+#                                      a hook file, 8 where it would end 8
+#                                      (issue #219).
 #   install.sh --version
 #   install.sh --help
 #
@@ -1949,10 +1950,14 @@ uninstall_preview() {
     # hook per line, and nothing else. Writes nothing, runs no systemctl,
     # needs no root, and never sources wrapped_names.sh: none of what it
     # decides depends on the wrapped names. Exits 3 when the writing run
-    # would refuse (it refuses before stopping a unit, so 3 outranks 8), 8
-    # when it would leave a file with an unclosed marker and end 8, else 0.
+    # would refuse or fail on a hook file (it refuses before stopping a
+    # unit, so 3 outranks 8), 8 when it would leave a file with an unclosed
+    # marker and end 8, else 0. The checks that are not about a hook file
+    # -- root, the helper's own wrapped_names.sh, the units stopping -- are
+    # not made here, and the output says so.
     SG_WOULD_REFUSE=0
     _pv_left=0
+    _pv_fails=0
     uninstall_enabled_files
     echo "# The hook files \`install.sh --uninstall\` visits -- every hook this"
     echo "# build knows, enabled or not (issue #196) -- and what it would do:"
@@ -1970,7 +1975,19 @@ uninstall_preview() {
                 uninstall_outcome "$_uh" 0
                 case $UO_ACT in
                     strip) echo "$_pv_head strip walk-blocker's block" ;;
-                    remove) echo "$_pv_head remove the drop-in" ;;
+                    remove)
+                        # A directory there is removed by the same `rm -f`
+                        # as anything else, which fails on it, and under
+                        # `set -e` that stops the writing run with the units
+                        # already down. Predicted rather than reported as a
+                        # removal; issue #240 is the writing side.
+                        if [ -d "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
+                            echo "$_pv_head FAIL: it is a directory, which the uninstall's \`rm -f\` cannot remove, so the run would stop there with the units already down"
+                            _pv_fails=1
+                        else
+                            echo "$_pv_head remove the drop-in"
+                        fi
+                        ;;
                     leave)
                         echo "$_pv_head leave untouched, and exit 8: $UO_WHY"
                         _pv_left=1
@@ -1981,9 +1998,17 @@ uninstall_preview() {
                 ;;
         esac
     done
+    echo "# Not checked here, because none is about a hook file: root, the"
+    echo "# helper's own wrapped_names.sh (\`deploy.py --uninstall --dry-run\`"
+    echo "# checks it before it runs this), and whether systemd stops the units."
     if [ "$SG_WOULD_REFUSE" -eq 1 ]; then
         echo "# install.sh --uninstall would refuse, exit 3, before it stops a"
         echo "# unit or touches a file: see each NOTE above."
+        exit 3
+    fi
+    if [ "$_pv_fails" -eq 1 ]; then
+        echo "# install.sh --uninstall would fail on a hook file above, after"
+        echo "# it has stopped the units: see FAIL."
         exit 3
     fi
     [ "$_pv_left" -eq 0 ] || exit 8
