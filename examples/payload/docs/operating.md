@@ -1084,11 +1084,11 @@ caller can reach, only a disabled drop-in under such a directory is
 refused. An enabled drop-in there in any of those shapes other than a
 directory is predicted `remove the drop-in`, since the teardown removes it
 whole without reading it; a directory there is predicted `FAIL`, as above.
-Under a directory the caller cannot search, any hook may be refused,
-the enabled drop-in included, as below. Otherwise the file is left alone, because it
-is absent or carries no walk-blocker block; or, for a disabled hook,
-because it is a symlink or not a regular file, is a drop-in without the
-generated header, or is the file an enabled hook names. Through
+Otherwise the file is left alone, because it is absent or carries no
+walk-blocker block; or, for a disabled hook, because it is a symlink or
+not a regular file, is a drop-in without the generated header, or is the
+file an enabled hook names. Under a directory the caller cannot search,
+any hook may be refused, the enabled drop-in included, as below. Through
 `deploy.py`, a hook file the caller can stat, enabled or not, that is a
 symlink or not a regular file, is not owned by root or is writable beyond
 its owner, or sits under a directory another account can write, is refused
