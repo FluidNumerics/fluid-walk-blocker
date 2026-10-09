@@ -1772,15 +1772,39 @@ sg_absent_not_hidden() {
     # look. `-e` answers false for a directory above it this account cannot
     # search as well as for a path that is not there. The nearest ancestor
     # `-d` finds was stat'ed, so every directory above IT is searchable, and
-    # whether it is searchable itself decides. Root searches every
-    # directory, so only a dry run by an ordinary account can get 1. The
-    # schema admits only absolute paths, and `dirname /` is `/`, which `-d`
-    # always finds.
+    # whether it is searchable itself decides. It is left in SG_SEEN_DIR:
+    # the deepest directory this account can stat, where the part of the
+    # chain it can check begins (uninstall_hidden()). On a local filesystem
+    # root is never refused a search, so there only an ordinary account's
+    # dry run gets 1; root refused one (root squashing on NFS) gets 1 too,
+    # and the answer, not checked, is as honest for it. The schema admits
+    # only absolute paths, and `dirname /` is `/`, which `-d` always finds.
     _ah=$(dirname "$1")
     while [ ! -d "$_ah" ]; do
         _ah=$(dirname "$_ah")
     done
+    SG_SEEN_DIR=$_ah
     [ -x "$_ah" ]
+}
+
+uninstall_hidden() {
+    # uninstall_hidden -- for a dry run's hook path that
+    # sg_absent_not_hidden() has just called hidden: walk the part of the
+    # directory chain this account CAN stat, from SG_SEEN_DIR up, before
+    # answering. A directory there another account can write is the
+    # writing run's refusal whatever lies below it -- the writing
+    # deploy.py walks every hook file's chain, present or not -- so it is
+    # a refusal here too (UC_CLAIM refuse, exit 3). Otherwise the rest of
+    # the chain and the file are out of this account's sight, and the
+    # answer is unknown, never a guess.
+    uninstall_noted require_trusted_chain "$SG_SEEN_DIR" "Another user could replace what is under it, the hook file included." 0
+    if [ "$UC_NOTED" -eq 1 ]; then
+        UC_CLAIM=refuse
+        UC_WHY="a directory above it is not trusted (see the NOTE above), and one below that cannot be searched by this account"
+        return 0
+    fi
+    UC_CLAIM=unknown
+    UC_WHY="a directory above it cannot be searched by this account"
 }
 
 uninstall_enabled_files() {
@@ -1860,16 +1884,15 @@ uninstall_claim() {
             UC_NOTED=0
             if [ "$HK_KIND" = block ]; then
                 # A dry run by an account that cannot search a directory
-                # above the file can make none of the checks below: the
-                # chain walk would answer "cannot examine" out of this
-                # account's own permissions and read as a refusal. Said as
-                # not checked, as for a disabled hook in the same place.
-                # Root searches every directory, so a root dry run and the
-                # writing run never take this branch.
+                # above the file cannot make the checks below as they
+                # stand: the chain walk would answer "cannot examine" out of
+                # this account's own permissions and read as a refusal. It
+                # checks the part of the chain it can see instead
+                # (uninstall_hidden()), as for a disabled hook in the same
+                # place. Never taken by the writing run ($2 is 1).
                 if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
                         && ! sg_absent_not_hidden "$HK_FILE"; then
-                    UC_CLAIM=unknown
-                    UC_WHY="a directory above it cannot be searched by this account"
+                    uninstall_hidden
                     return 0
                 fi
                 uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
@@ -1893,8 +1916,7 @@ $HK_FILE
     # is no reason to refuse an uninstall.
     if [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
         if [ "$2" -eq 0 ] && ! sg_absent_not_hidden "$HK_FILE"; then
-            UC_CLAIM=unknown
-            UC_WHY="a directory above it cannot be searched by this account"
+            uninstall_hidden
             return 0
         fi
         UC_CLAIM=no

@@ -4448,35 +4448,115 @@ def test_the_uninstall_preview_does_not_read_under_an_untrusted_directory(
     assert line.startswith("refuse, exit 3"), out
 
 
-@pytest.mark.skipif(os.getuid() == 0, reason="root searches every directory")
-@pytest.mark.parametrize("hook", ["bash", "zsh"])
-def test_an_enabled_hook_above_an_unsearchable_directory_is_not_checked(
-        tmp_path, hook):
-    """The unsearchable directory sits ABOVE the file's own parent, and the
-    `stat` the chain walk runs is the real one there, so the walk fails to
-    examine the parent out of this account's permissions. That is not a
-    refusal the writing run (root) would make: it is NOT CHECKED, as for a
-    disabled hook in the same place -- and no NOTE claims a refusal."""
-    locked = tmp_path / "locked"
+def _hidden_hook_layout(tmp_path, hook, open_untrusted):
+    """`open/locked/sub/hookfile`, with `locked` at mode 0 so this account
+    cannot search it. `stat` is a stub that answers what root would see for
+    the part of the chain this account can stat -- `open` as uid 1000 mode
+    777 when `open_untrusted`, else root 0755; `locked` as root, mode 0 --
+    and runs the REAL stat below `locked`, which this account is refused.
+    Everything else is root 0755, so no other hook's user-owned chain is a
+    refusal here. Returns `(layout, stat_body, locked)`."""
+    opn = tmp_path / "open"
+    locked = opn / "locked"
     parent = locked / "sub"
     parent.mkdir(parents=True)
-    kwargs = {"bashrc" if hook == "bash" else "zshenv": parent / "hookfile"}
+    kwargs = {{"bash": "bashrc", "zsh": "zshenv", "fish": "fishconf"}[hook]:
+              parent / "hookfile"}
     layout = Layout(tmp_path, **kwargs)
-    _hook_path(layout, hook).write_text(PREVIEW_SHAPES["block"])
-    # The real stat under the locked tree, root/0755 everywhere else, so no
-    # other hook's user-owned chain is a refusal here.
-    stat_body = ('#!/bin/sh\ncase "$3" in\n  %s|%s/*) exec %s "$@" ;;\n'
+    _hook_path(layout, hook).write_text(
+        PREVIEW_SHAPES["header" if hook == "fish" else "block"])
+    stat_body = ('#!/bin/sh\ncase "$3" in\n'
+                 '  %s) printf "%s\\n" ;;\n'
+                 '  %s) printf "0 0\\n" ;;\n'
+                 '  %s/*) exec %s "$@" ;;\n'
                  '  *) printf "0 755\\n" ;;\nesac\n'
-                 % (locked, locked, H.REAL_STAT))
+                 % (opn, "1000 777" if open_untrusted else "0 755",
+                    locked, locked, H.REAL_STAT))
+    return layout, stat_body, locked
+
+
+def _hidden_preview(tmp_path, hook, enabled, open_untrusted):
+    layout, stat_body, locked = _hidden_hook_layout(tmp_path, hook,
+                                                    open_untrusted)
     os.chmod(str(locked), 0)
     try:
         preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
-                                      layout=layout, stat_body=stat_body)
+                                      layout=layout, stat_body=stat_body,
+                                      **{"hooks.%s.enabled" % hook: enabled})
     finally:
         os.chmod(str(locked), 0o755)
+    return preview, _preview_lines(preview.stdout)["hooks.%s.file" % hook]
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("hook", ["bash", "zsh"])
+def test_a_hook_above_an_unsearchable_directory_is_not_checked(
+        tmp_path, hook, enabled):
+    """The unsearchable directory sits ABOVE the file's own parent, and the
+    `stat` below it is the real one, so the walk cannot examine the parent
+    out of this account's permissions. With the chain above it trusted,
+    that is no refusal of root's: it is NOT CHECKED, and no NOTE claims
+    one."""
+    preview, line = _hidden_preview(tmp_path, hook, enabled,
+                                    open_untrusted=False)
     out = preview.stdout + preview.stderr
     assert preview.returncode == 0, out
-    line = _preview_lines(preview.stdout)["hooks.%s.file" % hook]
     assert line == ("NOT CHECKED: a directory above it cannot be searched "
                     "by this account"), out
     assert "will refuse" not in preview.stdout, out
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("hook", ["bash", "zsh"])
+def test_an_untrusted_directory_above_an_unsearchable_one_is_a_refusal(
+        tmp_path, hook, enabled):
+    """The part of the chain this account CAN stat is walked before it
+    answers NOT CHECKED. A directory there another account can write is
+    the writing run's refusal whatever lies below it (root's view, with
+    `locked` searchable, refuses), so the dry run refuses too: exit 3."""
+    preview, line = _hidden_preview(tmp_path, hook, enabled,
+                                    open_untrusted=True)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 3, out
+    assert line.startswith("refuse, exit 3: a directory above it is not "
+                           "trusted"), out
+    assert ("NOTE: %s is owned by uid 1000, not root"
+            % (tmp_path / "open")) in preview.stdout, out
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("hook", ["bash", "zsh"])
+def test_roots_view_of_the_untrusted_layout_refuses(tmp_path, hook, enabled):
+    """The oracle the two tests above are held to: the same layout with
+    `locked` searchable, which is what root sees, refuses in the dry run
+    and in the writing run alike."""
+    layout, stat_body, _locked = _hidden_hook_layout(tmp_path, hook, True)
+    overrides = {"hooks.%s.enabled" % hook: enabled}
+    preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                  fake_uid=0, layout=layout,
+                                  stat_body=stat_body, **overrides)
+    assert preview.returncode == 3, preview.stdout + preview.stderr
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout, stat_body=stat_body,
+                                 **overrides)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "owned by uid 1000, not root" in result.stderr
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
+@pytest.mark.parametrize("enabled, want_rc, want_line", [
+    (False, 3, "refuse, exit 3: a directory above it is not trusted"),
+    (True, 0, "NOT CHECKED: a directory above it cannot be searched"),
+])
+def test_a_fish_drop_in_above_an_unsearchable_directory(
+        tmp_path, enabled, want_rc, want_line):
+    """A disabled drop-in under an untrusted directory is the writing run's
+    refusal, as for the block hooks. An enabled one is removed whole, with
+    no chain check to fail, so it is never refused: NOT CHECKED."""
+    preview, line = _hidden_preview(tmp_path, "fish", enabled,
+                                    open_untrusted=True)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == want_rc, out
+    assert line.startswith(want_line), out

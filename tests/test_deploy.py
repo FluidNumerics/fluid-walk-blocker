@@ -697,6 +697,53 @@ def test_the_uninstall_dry_run_refuses_where_the_helper_would(
     assert "dry run: nothing was changed" not in captured.out, captured
 
 
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
+@pytest.mark.parametrize("open_untrusted, want", [(True, 6), (False, 0)])
+def test_the_uninstall_dry_run_agrees_with_the_helper_under_a_hidden_path(
+        tmp_path, monkeypatch, capsys, open_untrusted, want):
+    """`open/locked/sub/bashrc`, `locked` unsearchable to this account.
+    deploy.py cannot stat the hook path, so it names it NOT CHECKED and
+    keeps it out of its own path checks; the helper's preview walks the
+    part of the chain this account can see. An untrusted `open` is then a
+    refusal through the helper (6, root's answer too), and a trusted one is
+    NOT CHECKED in both places (0)."""
+    import _install_helpers as H
+    opn = tmp_path / "open"
+    locked = opn / "locked"
+    (locked / "sub").mkdir(parents=True)
+    bashrc = locked / "sub" / "bashrc"
+    bashrc.write_text("%s\nx\n%s\n" % (UNINSTALL_PREVIEW_BEGIN,
+                                       UNINSTALL_PREVIEW_END))
+    monkeypatch.setattr(deploy, "DEFAULT_BASHRC_FILE", str(bashrc))
+    pass_uninstall_checks(monkeypatch, deploy.DEFAULT_PREFIX)
+    layout = Layout(tmp_path, bashrc=bashrc)
+    stamped_install(tmp_path, layout=layout)
+    stat_body = ('#!/bin/sh\ncase "$3" in\n'
+                 '  %s) printf "%s\\n" ;;\n'
+                 '  %s) printf "0 0\\n" ;;\n'
+                 '  %s/*) exec %s "$@" ;;\n'
+                 '  *) printf "0 755\\n" ;;\nesac\n'
+                 % (opn, "1000 777" if open_untrusted else "0 755",
+                    locked, locked, H.REAL_STAT))
+    H.populate_bin(layout.toolbin, stat_body=stat_body)
+    env = H.sandbox_env(layout, layout.toolbin)
+    os.chmod(str(locked), 0)
+    try:
+        rc = _uninstall_dry_run(tmp_path, monkeypatch, env)
+    finally:
+        os.chmod(str(locked), 0o755)
+    captured = capsys.readouterr()
+    assert rc == want, captured
+    if open_untrusted:
+        assert "owned by uid 1000, not root" in captured.out, captured
+        assert "uninstall dry run refused (exit 3)" in captured.err, captured
+    else:
+        assert ("#   hook: hooks.bash.file %s (enabled): NOT CHECKED: a "
+                "directory above it cannot be searched by this account"
+                % bashrc) in captured.out, captured
+        assert ("%s (paths): could not be checked as this user" % bashrc
+                in captured.out), captured
+
 @pytest.mark.parametrize("rc", [64, 2, 1])
 def test_a_helper_with_no_uninstall_dry_run_is_named_not_checked(
         tmp_path, monkeypatch, capsys, rc):

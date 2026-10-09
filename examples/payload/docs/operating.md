@@ -1081,16 +1081,19 @@ or other, or sits under a directory another account can write; and a
 disabled one's file under such a directory, or carrying a block while not
 owned by root or writable by group or other. For fish only a disabled
 drop-in under such a directory is refused. An enabled drop-in in any of
-those shapes is predicted `remove the drop-in`, since the teardown removes
-it whole without reading it. Otherwise the file is left alone, because it
+those shapes other than a directory is predicted `remove the drop-in`,
+since the teardown removes it whole without reading it; a directory there
+is predicted `FAIL`, as above. Otherwise the file is left alone, because it
 is absent or carries no walk-blocker block; or, for a disabled hook,
 because it is a symlink or not a regular file, is a drop-in without the
 generated header, or is the file an enabled hook names. Through
-`deploy.py`, a hook file, enabled or not, that is a symlink or not a
-regular file, is not owned by root or is writable beyond its owner, or sits
-under a directory another account can write, is refused with exit 6 by its
-own checks before the list is made, so those cases appear in the list only
-when the helper is run on its own.
+`deploy.py`, a hook file the caller can stat, enabled or not, that is a
+symlink or not a regular file, is not owned by root or is writable beyond
+its owner, or sits under a directory another account can write, is refused
+with exit 6 by its own checks before the list is made, so those cases
+appear in the list only when the helper is run on its own. A hook file
+under a directory the caller cannot search is out of those checks: they
+name it `NOT CHECKED`, and the helper's list decides, as below.
 
 The list comes from the deployed helper,
 `<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it
@@ -1098,10 +1101,15 @@ has passed the same checks as for the real run. It decides through the same
 functions the teardown acts with, so the preview and the teardown cannot
 disagree. A hook file the caller cannot read, or cannot reach because a
 directory above it is not searchable, is marked `NOT CHECKED` rather than
-guessed. Re-run as root to see it. Where the helper would refuse or fail on
-a hook file, the dry run exits 6: one that reaches the writing helper is
-refused only after `deploy.py` has removed the units, and the real run ends
-8 with Layer 1 still in place. If the helper cannot be inspected as the
+guessed. Re-run as root to see it. For a bash or zsh hook, or a disabled
+fish drop-in, under such a directory, the directories above it that the
+caller can see are checked first: one another account can write is a
+refusal whatever lies below it, so the file is marked `refuse` and the dry
+run exits 6, as the real run would refuse. An enabled drop-in is never
+refused, so its line stays `NOT CHECKED`. Where the helper would refuse or
+fail on a hook file, the dry run exits 6: one that reaches the writing
+helper is refused only after `deploy.py` has removed the units, and the
+real run ends 8 with Layer 1 still in place. If the helper cannot be inspected as the
 caller, it is not run. If it cannot be run (exit 126 or 127), or answers
 with a status it does not define, as a helper deployed by a release before
 issue #219 does, the hook list is marked `NOT CHECKED` and the dry run
