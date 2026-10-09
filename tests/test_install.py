@@ -4446,3 +4446,37 @@ def test_the_uninstall_preview_does_not_read_under_an_untrusted_directory(
     assert preview.returncode == 3, out
     line = _preview_lines(preview.stdout)["hooks.zsh.file"]
     assert line.startswith("refuse, exit 3"), out
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches every directory")
+@pytest.mark.parametrize("hook", ["bash", "zsh"])
+def test_an_enabled_hook_above_an_unsearchable_directory_is_not_checked(
+        tmp_path, hook):
+    """The unsearchable directory sits ABOVE the file's own parent, and the
+    `stat` the chain walk runs is the real one there, so the walk fails to
+    examine the parent out of this account's permissions. That is not a
+    refusal the writing run (root) would make: it is NOT CHECKED, as for a
+    disabled hook in the same place -- and no NOTE claims a refusal."""
+    locked = tmp_path / "locked"
+    parent = locked / "sub"
+    parent.mkdir(parents=True)
+    kwargs = {"bashrc" if hook == "bash" else "zshenv": parent / "hookfile"}
+    layout = Layout(tmp_path, **kwargs)
+    _hook_path(layout, hook).write_text(PREVIEW_SHAPES["block"])
+    # The real stat under the locked tree, root/0755 everywhere else, so no
+    # other hook's user-owned chain is a refusal here.
+    stat_body = ('#!/bin/sh\ncase "$3" in\n  %s|%s/*) exec %s "$@" ;;\n'
+                 '  *) printf "0 755\\n" ;;\nesac\n'
+                 % (locked, locked, H.REAL_STAT))
+    os.chmod(str(locked), 0)
+    try:
+        preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                      layout=layout, stat_body=stat_body)
+    finally:
+        os.chmod(str(locked), 0o755)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 0, out
+    line = _preview_lines(preview.stdout)["hooks.%s.file" % hook]
+    assert line == ("NOT CHECKED: a directory above it cannot be searched "
+                    "by this account"), out
+    assert "will refuse" not in preview.stdout, out

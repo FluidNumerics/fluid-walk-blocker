@@ -1073,17 +1073,24 @@ enabled or not, with what the teardown would do to it and why
 (issue #219). The block is stripped. The fish drop-in is removed, unless a
 directory sits at its path: the teardown's `rm -f` cannot remove one, so
 the list says `FAIL` (issue #240). A file with an unclosed opening marker is
-left untouched, and the real run ends 8. A file the uninstall would refuse,
-because it is a symlink or not a regular file, is not owned by root, is
-writable by group or other, or sits under a directory another account can
-write, is marked `refuse`, with a `NOTE` giving the reason, and is not read.
-Otherwise the file is left alone, because it is absent or carries no
-walk-blocker block; or, for a disabled hook, because it is a symlink or not
-a regular file, is a drop-in without the generated header, or is the file
-an enabled hook names. Through `deploy.py`, a symlinked or non-regular hook
-file, and one not owned by root or writable beyond its owner, is refused
-with exit 6 by its own checks before the list is made, so those cases
-appear in the list only when the helper is run on its own.
+left untouched, and the real run ends 8. A file the uninstall would refuse
+is marked `refuse`, with a `NOTE` giving the reason, and is not read. The
+refusals are the block hooks' (bash, zsh): an enabled one's file that is a
+symlink or not a regular file, is not owned by root, is writable by group
+or other, or sits under a directory another account can write; and a
+disabled one's file under such a directory, or carrying a block while not
+owned by root or writable by group or other. For fish only a disabled
+drop-in under such a directory is refused. An enabled drop-in in any of
+those shapes is predicted `remove the drop-in`, since the teardown removes
+it whole without reading it. Otherwise the file is left alone, because it
+is absent or carries no walk-blocker block; or, for a disabled hook,
+because it is a symlink or not a regular file, is a drop-in without the
+generated header, or is the file an enabled hook names. Through
+`deploy.py`, a hook file, enabled or not, that is a symlink or not a
+regular file, is not owned by root or is writable beyond its owner, or sits
+under a directory another account can write, is refused with exit 6 by its
+own checks before the list is made, so those cases appear in the list only
+when the helper is run on its own.
 
 The list comes from the deployed helper,
 `<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it

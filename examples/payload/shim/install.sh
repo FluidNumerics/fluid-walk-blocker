@@ -1859,6 +1859,19 @@ uninstall_claim() {
         *" $1 "*)
             UC_NOTED=0
             if [ "$HK_KIND" = block ]; then
+                # A dry run by an account that cannot search a directory
+                # above the file can make none of the checks below: the
+                # chain walk would answer "cannot examine" out of this
+                # account's own permissions and read as a refusal. Said as
+                # not checked, as for a disabled hook in the same place.
+                # Root searches every directory, so a root dry run and the
+                # writing run never take this branch.
+                if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
+                        && ! sg_absent_not_hidden "$HK_FILE"; then
+                    UC_CLAIM=unknown
+                    UC_WHY="a directory above it cannot be searched by this account"
+                    return 0
+                fi
                 uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
             fi
             uninstall_refused && return 0
