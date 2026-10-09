@@ -4281,11 +4281,13 @@ RECORDED = ("rm", "mv", "sed", "awk", "chmod", "chgrp", "chown", "cp", "ln",
             "install", "mktemp", "mkdir", "rmdir", "systemctl", "touch")
 
 
-def test_a_root_uninstall_preview_writes_nothing_and_runs_nothing(tmp_path):
+def test_a_root_uninstall_preview_runs_no_writer_and_changes_no_file(tmp_path):
     """ADR-0021's hazard, here: a dropped negation is a dry run that writes
-    as root. With `id` saying root, every program that could change a file
-    or a unit is a recording stub first on PATH, and none is called; every
-    hook file keeps its bytes and its mtime, and the shim farm stays."""
+    as root. With `id` saying root, each program in RECORDED -- the ones
+    that could change a file or a unit -- is a recording stub first on PATH,
+    and none is called; every hook file keeps its bytes and its mtime, and
+    the shim farm stays. Read-only programs (`stat`, `dirname`, `id`) do
+    run, and are not recorded."""
     layout = Layout(tmp_path)
     layout.bashrc.write_text(PREVIEW_SHAPES["block"])
     layout.zshenv.write_text(PREVIEW_SHAPES["unclosed"])

@@ -4100,9 +4100,9 @@ def system_uninstall(args, env=None):
                     "deploy.py: install.sh's own uninstall dry run refused "
                     "(exit 3) on a hook\n  file named above. The writing "
                     "helper refuses there too, and does so only\n  after the "
-                    "systemd units are removed, so the uninstall would end 8 "
-                    "with\n  Layer 1 still installed. Fix the condition above "
-                    "before uninstalling.\n")
+                    "systemd units are removed, so an uninstall that got that "
+                    "far\n  would end 8 with Layer 1 still installed. Fix the "
+                    "condition above\n  before uninstalling.\n")
                 return 6
             if preview.returncode in (0, UNINSTALL_PREVIEW_LEAVES):
                 hook_preview = (preview.stdout or "").splitlines()
