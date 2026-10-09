@@ -4546,17 +4546,21 @@ def test_roots_view_of_the_untrusted_layout_refuses(tmp_path, hook, enabled):
 
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
-@pytest.mark.parametrize("enabled, want_rc, want_line", [
-    (False, 3, "refuse, exit 3: a directory above it is not trusted"),
-    (True, 0, "NOT CHECKED: a directory above it cannot be searched"),
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("open_untrusted, want_rc, want_line", [
+    (True, 3, "refuse, exit 3: a directory above it is not trusted"),
+    (False, 0, "NOT CHECKED: a directory above it cannot be searched"),
 ])
 def test_a_fish_drop_in_above_an_unsearchable_directory(
-        tmp_path, enabled, want_rc, want_line):
-    """A disabled drop-in under an untrusted directory is the writing run's
-    refusal, as for the block hooks. An enabled one is removed whole, with
-    no chain check to fail, so it is never refused: NOT CHECKED."""
+        tmp_path, enabled, open_untrusted, want_rc, want_line):
+    """On a hidden path the dry run predicts the writing deploy.py, which
+    walks the drop-in's chain whether the hook is enabled or not (Trevor's
+    ruling on round 7). So an untrusted directory above the unsearchable
+    one is a refusal for an enabled drop-in too, although the writing
+    helper on its own would remove it whole; a trusted one is NOT
+    CHECKED."""
     preview, line = _hidden_preview(tmp_path, "fish", enabled,
-                                    open_untrusted=True)
+                                    open_untrusted=open_untrusted)
     out = preview.stdout + preview.stderr
     assert preview.returncode == want_rc, out
     assert line.startswith(want_line), out

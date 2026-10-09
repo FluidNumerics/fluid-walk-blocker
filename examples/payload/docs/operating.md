@@ -1098,15 +1098,20 @@ name it `NOT CHECKED`, and the helper's list decides, as below.
 The list comes from the deployed helper,
 `<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it
 has passed the same checks as for the real run. It decides through the same
-functions the teardown acts with, so the preview and the teardown cannot
-disagree. A hook file the caller cannot read, or cannot reach because a
+functions the teardown acts with, so for every path the caller can reach
+the preview and the teardown cannot disagree. A hook file the caller cannot
+read, or cannot reach because a
 directory above it is not searchable, is marked `NOT CHECKED` rather than
-guessed. Re-run as root to see it. For a bash or zsh hook, or a disabled
-fish drop-in, under such a directory, the directories above it that the
-caller can see are checked first: one another account can write is a
-refusal whatever lies below it, so the file is marked `refuse` and the dry
-run exits 6, as the real run would refuse. An enabled drop-in is never
-refused, so its line stays `NOT CHECKED`. Where the helper would refuse or
+guessed. Re-run as root to see it. For any hook file under such a
+directory, enabled or disabled, the fish drop-in included, the directories
+above it that the caller can see are checked first: one another account can
+write is a refusal whatever lies below it, so the file is marked `refuse`
+and the dry run exits 6, as the real `deploy.py --uninstall` refuses it.
+On such a path the helper predicts `deploy.py`, not its own writing run:
+run on its own, it may refuse a hidden path that its own `--uninstall`
+would clean (an absent file, a dangling symlink, a non-regular file, or an
+enabled drop-in, none of whose directories it checks). That errs on the
+safe side, and `deploy.py` refuses it with 6. Where the helper would refuse or
 fail on a hook file, the dry run exits 6: one that reaches the writing
 helper is refused only after `deploy.py` has removed the units, and the
 real run ends 8 with Layer 1 still in place. If the helper cannot be inspected as the

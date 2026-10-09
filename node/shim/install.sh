@@ -1791,12 +1791,16 @@ uninstall_hidden() {
     # uninstall_hidden -- for a dry run's hook path that
     # sg_absent_not_hidden() has just called hidden: walk the part of the
     # directory chain this account CAN stat, from SG_SEEN_DIR up, before
-    # answering. A directory there another account can write is the
-    # writing run's refusal whatever lies below it -- the writing
-    # deploy.py walks every hook file's chain, present or not -- so it is
-    # a refusal here too (UC_CLAIM refuse, exit 3). Otherwise the rest of
-    # the chain and the file are out of this account's sight, and the
-    # answer is unknown, never a guess.
+    # answering. On a hidden path this predicts the writing deploy.py,
+    # which walks every hook file's chain -- enabled or disabled, drop-in
+    # included, present or not -- and refuses with 6 on an untrusted
+    # directory. So a directory there another account can write is a
+    # refusal here too (UC_CLAIM refuse, exit 3). Run on its own, the
+    # helper may therefore refuse a hidden path that its own writing run
+    # would clean -- an absent file, a dangling symlink, a non-regular file,
+    # or an enabled drop-in, none of which it walks -- which errs on the
+    # safe side. Otherwise the rest of the chain and the file are out of
+    # this account's sight, and the answer is unknown, never a guess.
     uninstall_noted require_trusted_chain "$SG_SEEN_DIR" "Another user could replace what is under it, the hook file included." 0
     if [ "$UC_NOTED" -eq 1 ]; then
         UC_CLAIM=refuse
@@ -1882,19 +1886,20 @@ uninstall_claim() {
     case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
         *" $1 "*)
             UC_NOTED=0
+            # A dry run by an account that cannot search a directory above
+            # the file cannot make the checks below as they stand: the chain
+            # walk would answer "cannot examine" out of this account's own
+            # permissions and read as a refusal. It checks the part of the
+            # chain it can see instead (uninstall_hidden()), as for a
+            # disabled hook in the same place -- the drop-in too, which the
+            # writing helper never walks but the writing deploy.py does.
+            # Never taken by the writing run ($2 is 1).
+            if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
+                    && ! sg_absent_not_hidden "$HK_FILE"; then
+                uninstall_hidden
+                return 0
+            fi
             if [ "$HK_KIND" = block ]; then
-                # A dry run by an account that cannot search a directory
-                # above the file cannot make the checks below as they
-                # stand: the chain walk would answer "cannot examine" out of
-                # this account's own permissions and read as a refusal. It
-                # checks the part of the chain it can see instead
-                # (uninstall_hidden()), as for a disabled hook in the same
-                # place. Never taken by the writing run ($2 is 1).
-                if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
-                        && ! sg_absent_not_hidden "$HK_FILE"; then
-                    uninstall_hidden
-                    return 0
-                fi
                 uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
             fi
             uninstall_refused && return 0
@@ -1982,6 +1987,9 @@ uninstall_outcome() {
     #   remove   the drop-in: `rm -f`, whole
     #   none     nothing there to clean
     #   unknown  a dry run by an account that could not read the file
+    #
+    # A path a dry run cannot reach never gets here: uninstall_claim()
+    # answers it first (uninstall_hidden()).
     hook_select "$1"
     UO_WHY=''
     case $HK_KIND in
@@ -1989,11 +1997,7 @@ uninstall_outcome() {
             if [ ! -f "$HK_FILE" ]; then
                 UO_ACT='none'
                 UO_WHY="the file is absent"
-                if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
-                        && ! sg_absent_not_hidden "$HK_FILE"; then
-                    UO_ACT='unknown'
-                    UO_WHY="a directory above it cannot be searched by this account"
-                elif [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
+                if [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
                     UO_WHY="it is not a regular file"
                 fi
                 return 0
@@ -2023,9 +2027,6 @@ uninstall_outcome() {
         dropin)
             if [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
                 UO_ACT='remove'
-            elif [ "$2" -eq 0 ] && ! sg_absent_not_hidden "$HK_FILE"; then
-                UO_ACT='unknown'
-                UO_WHY="a directory above it cannot be searched by this account"
             else
                 UO_ACT='none'
                 UO_WHY="the file is absent"
