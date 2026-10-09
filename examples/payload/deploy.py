@@ -9,7 +9,8 @@
     python3 deploy.py --uninstall        as root, reverse a --system install
     python3 deploy.py --uninstall --dry-run
                                          make the uninstall's checks and PRINT
-                                         its commands, writing nothing; needs
+                                         its commands, and what it would do to
+                                         each hook file, writing nothing; needs
                                          no privilege, like the install's
     python3 deploy.py --verify          compare the installed files against
                                          the record they were built from
@@ -270,6 +271,13 @@ SERVICE_UNIT = "walk-blocker.service"
 # the post-install ownership check has already cleared, never a payload
 # install.sh refused.
 INSTALL_HOOKS_UNPROVEN = 4
+# install.sh --uninstall --dry-run's two predictions (issue #219): 3, the
+# writing helper would refuse on a hook file; 8, it would leave a file with
+# an unclosed marker untouched and end 8 (issue #218). Any other non-zero
+# status is no prediction at all -- a deployed helper from before the dry
+# run existed answers 64 -- and the hook preview is then not checked.
+UNINSTALL_PREVIEW_REFUSES = 3
+UNINSTALL_PREVIEW_LEAVES = 8
 TIMER_UNIT = "walk-blocker.timer"
 
 # Exactly what this installs under the prefix, and therefore exactly what it
@@ -4067,6 +4075,54 @@ def system_uninstall(args, env=None):
                                                                    root)))
         return 5
 
+    # The dry run's hook preview (issue #219): the deployed helper's own
+    # `--uninstall --dry-run`, which decides each hook file through the very
+    # functions its writing run acts with, so the preview cannot say other
+    # than the teardown does. Run for real, as the caller -- it writes
+    # nothing and needs no privilege -- and only once uninstall_helper() has
+    # proven the file root-owned in a chain only root can write, exactly as
+    # for the run it previews. Made here, with the checks before the first
+    # command, so a predicted refusal is this dry run's refusal (exit 6).
+    hook_preview = None
+    if args.dry_run:
+        if blind is not None:
+            hook_preview = [
+                "# hook preview: NOT CHECKED -- the teardown helper could not",
+                "# be checked as this user, so it was not run; re-run the dry",
+                "# run as root to see which hook files the uninstall changes."]
+        else:
+            preview = run([TRUSTED_SH, helper, "--uninstall", "--dry-run"],
+                          check=False, env=env)
+            if preview.returncode == UNINSTALL_PREVIEW_REFUSES:
+                sys.stdout.write(preview.stdout or "")
+                sys.stderr.write(preview.stderr or "")
+                sys.stderr.write(
+                    "deploy.py: install.sh's own uninstall dry run refused "
+                    "(exit 3) on a hook\n  file named above. The writing "
+                    "helper refuses there too, and does so only\n  after the "
+                    "systemd units are removed, so the uninstall would end 8 "
+                    "with\n  Layer 1 still installed. Fix the condition above "
+                    "before uninstalling.\n")
+                return 6
+            if preview.returncode in (0, UNINSTALL_PREVIEW_LEAVES):
+                hook_preview = (preview.stdout or "").splitlines()
+                if preview.returncode == UNINSTALL_PREVIEW_LEAVES:
+                    hook_preview += [
+                        "# A file above has an unclosed BEGIN marker: the "
+                        "uninstall leaves it",
+                        "# untouched, completes the rest of the teardown, "
+                        "and exits 8 (issue #218)."]
+            else:
+                hook_preview = [
+                    "# hook preview: NOT CHECKED -- the deployed install.sh "
+                    "exited %d to" % preview.returncode,
+                    "# `--uninstall --dry-run`. One from a release before "
+                    "issue #219 has no",
+                    "# uninstall dry run; redeploy to see which hook files "
+                    "the uninstall changes."]
+                if preview.stderr:
+                    sys.stderr.write(preview.stderr)
+
     run(["systemctl", "disable", "--now", TIMER_UNIT],
         check=False, dry_run=args.dry_run, env=env)
     # Disabling the timer does not stop a service instance already running,
@@ -4108,6 +4164,8 @@ def system_uninstall(args, env=None):
                                     "%s" % root)
     removal = run([TRUSTED_SH, helper, "--uninstall"],
                   capture=False, check=False, dry_run=args.dry_run, env=env)
+    for line in hook_preview or ():
+        print(line)
 
     # check=False so that a partial removal still gets past the unit teardown
     # above -- but the status is REPORTED, not discarded. install.sh can fail
