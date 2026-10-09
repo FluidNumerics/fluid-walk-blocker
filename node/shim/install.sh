@@ -1407,6 +1407,16 @@ sg_report() {
     # call naming any other action is a caller bug (issue #189). It used to
     # be accepted, and wrote a record no reader of that action expects.
     #
+    # Each form is checked against the grammar above, and every call outside
+    # it is a caller bug too (issue #211): a long-form state other than
+    # `expensive`, `covered` or `unmounted`; a long-form marker after any
+    # state but `expensive`, the only `uncovered_mount` state re-asserted
+    # (ADR-0030); six or more arguments, which used to be read as the short
+    # form with the rest ignored; and fewer than two, which used to abort the
+    # caller under `set -u` on the unset `$2` instead of reporting. A missing
+    # action or state reads as empty, and the character check below refuses
+    # an empty one, so no path reads an unset argument.
+    #
     # Every `caller-bug` record is at user.warning, whatever its form, so a
     # bug report always shows under `journalctl -p warning` (ADR-0033). The
     # long form's notice is for the fact an `uncovered_mount` reports, and a
@@ -1431,11 +1441,14 @@ sg_report() {
     # bug report. A mount point or type off the mount table gets the same
     # treatment with `unrepresentable`; the octal-escaped rows that could
     # carry whitespace or a backslash are skipped before they get here.
-    _rep_action=$1
-    _rep_state=$2
+    _rep_action=${1-}
+    _rep_state=${2-}
     _rep_extra=''
     _rep_prio=user.warning
     _rep_bug=0
+    if [ $# -gt 5 ]; then
+        _rep_bug=1
+    fi
     # Set on every call: install.sh runs under `set -u`, so a marker left
     # unset by a bad fifth argument would abort the relink, not report it.
     _rep_marker=''
@@ -1461,6 +1474,15 @@ sg_report() {
         _rep_mount=$2
         _rep_fs=$3
         _rep_state=$4
+        # The states the long form reports, and the one it re-asserts.
+        if [ $# -eq 4 ]; then
+            case $_rep_state in
+                expensive|covered|unmounted) ;;
+                *) _rep_bug=1 ;;
+            esac
+        elif [ "$_rep_state" != expensive ]; then
+            _rep_bug=1
+        fi
         case $_rep_mount in
             ''|*[!A-Za-z0-9._/@+,:=-]*) _rep_mount=unrepresentable ;;
         esac

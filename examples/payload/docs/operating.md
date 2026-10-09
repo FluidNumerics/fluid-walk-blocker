@@ -733,6 +733,16 @@ It carries three kinds of record:
   believes is uncovered is in `<spool_dir>/uncovered-mounts.state`,
   readable by the spool's group.
 
+The reconcile's records have one more shape: `action` and `state` both
+`caller-bug`, at warning priority, and no other field. It is not a fact
+about the node. It says a call in the relink's own code did not fit the
+record grammar: an action or state that could not go into JSON as it is, a
+marker other than `reasserted`, an `uncovered_mount` state other than
+`expensive`, `covered` or `unmounted`, a marker after any
+`uncovered_mount` state but `expensive`, another action in the `uncovered_mount` form, or too few or
+too many arguments (ADR-0033, issue #211). No shipped call makes one, so
+report it as a defect.
+
 Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
 so `logger` does not cut it at its 1 KiB default. The fields a caller or the
 mount table can shape are bounded so the record always fits: in the shim's
