@@ -266,6 +266,15 @@ cannot refuse what the dry run accepted:
 - each of them sits in a trust chain that is root-owned end to end, and
   each hook file is a plain, root-owned, not-group-writable regular file —
   not a symlink under a dotfile manager;
+- each bash or zsh hook file that carries a `# >>> walk-blocker >>>` line
+  has its `# <<< walk-blocker <<<` after it, before any further opening
+  marker. Stripping the old block before writing the new one drops every
+  line from an opening marker to the next closing one, so an unclosed
+  opening marker would take lines that are not walk-blocker's with it: the
+  rest of the file, or everything up to a later block's closing marker. `install.sh`
+  refuses such a file with exit 3 and leaves it untouched, and its dry run
+  refuses the same way, so this dry run exits 6. Repair or remove the
+  partial block by hand (issue #218);
 - `[install].spool_dir` is usable: it is not something other than a
   directory (a file, a fifo, a symlink to either, or a dangling symlink,
   which the install's `install -d` fails on outright), its ancestors can be
@@ -433,7 +442,12 @@ What it verifies, and refuses on:
 - **the hook files are plain, root-owned regular files**, not symlinks, not
   group-writable, in a trusted directory chain — they are read and
   rewritten `0644`, and sourced as root to verify the hook, so their owner
-  would otherwise choose what runs during the deploy.
+  would otherwise choose what runs during the deploy;
+- **each hook file's markers are matched**: an opening walk-blocker marker
+  with no closing one before the end of the file or the next opening one
+  is refused before anything is written, the
+  file untouched, and the install stops with `install.sh`'s 3 and the timer
+  disabled (issue #218).
 
 The reaper runs `--report`. Its unit's `ExecStartPre` runs
 `install.sh --relink` — the reconcile — which re-links the farm, re-checks
@@ -495,7 +509,7 @@ it.
 | 5 | `--uninstall`, `--uninstall --dry-run` | the teardown helper's check, before the first command | the deployed `shim/install.sh` or `wrapped_names.sh` failed its checks. Nothing has been touched: the timer and the service are as they were, and the message says how to finish by hand. |
 | 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; a payload file entry is not a regular file, which the install refuses by `lstat` before it copies anything (install only); the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (`--system --dry-run` only, and it ends the preview before the other checks); or a check could not be made with privilege. The install's dry run makes the payload check even when an earlier check refused, and reports both. |
 | 7 | `--system`, `--uninstall` | the units-down check | the timer or service could not be confirmed inactive, or the timer is still enabled, after both were told to stop. Nothing under the prefix was touched. The uninstall reaches this only once its teardown helper has passed its check; with a bad helper it exits 5 before stopping anything. |
-| 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero, or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
+| 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero (8 when it left a hook file untouched because an opening marker in it is not closed, issue #218), or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
 | 9 | `--system` | the ownership check after `install.sh` | the hook blocks and the shim farm are in place, no unit was written and the timer stays disabled |
 | 10 | `--system` | the journal step, last | the journal grant did not land (ADR-0026). The timer is armed and Layer 2 is reporting. |
 | a command's own status | `--system` | `install.sh --system`, or any command whose status the install checks | `install.sh` failed with anything but 4 (its own refusals exit 3), and the timer stays disabled; or a command failed and the run stopped there. While the snapshot is staged (its `install -d`), before the previous units are stopped, they are left as they were. After that and up to `systemctl daemon-reload` — the `rm -rf` that clears a payload directory before its copy, so that a directory that survives is never copied into (issue #221), `cp`, `install`, `chown`, a `chmod` of the ownership pass including the exact mode it sets on each directly-executed script, `daemon-reload` itself — the timer stays disabled. A failed `enable --now` leaves the timer as systemctl left it. In the journal step, after the timer is armed — `systemd-tmpfiles`, `rm` or `setfacl` — it stays armed. A command that could not be started at all has the shell's status: 127 if it was not found, 126 if it was found but could not be run (issue #194). Where the run stops at that command, it is reported as a failed one is, `failed: <cmd>` and then the reason. Where a command's failure does not stop the run, the reason is printed and the step's own outcome follows: the uninstall's teardown exits 7 or 8, a directory copy (`cp -a`) into the snapshot and `install.sh`'s dry run exit 6. A missing `install` stops the snapshot at its `install -d`, with 127. |
@@ -654,7 +668,9 @@ It carries three kinds of record:
   recorded the same way, and only when they changed the outcome;
 - the **reconcile's reports**: `hook_check` when a hook block is missing or
   no longer fires, naming `[hooks.<shell>].package` as the likely conffile
-  actor; `audit_dir` when the spool's mode or group had to be corrected
+  actor — or, for an opening marker that is not closed, which is
+  reported as `block-missing` too, saying the install refuses that file
+  until the partial block is repaired (issue #218); `audit_dir` when the spool's mode or group had to be corrected
   (`mode-corrected`, `group-corrected`) or the correction failed
   (`mode-failed`, `group-failed`), or when it was left alone because it is
   `absent`, a `symlink`, `not-a-directory`, `owner-not-root`, `unreadable`
@@ -1029,7 +1045,12 @@ not, and whether or not that shell still resolves (ADR-0008, issue #196) —
 for a hook the site does not enable, only a block or a drop-in that is
 walk-blocker's, so anything else at that path is left as it was found; and
 removes `<prefix>/bin` and the relink's two memories in
-the spool, `uncovered-mounts.state` and `linked-names.state`. It does not
+the spool, `uncovered-mounts.state` and `linked-names.state`. A hook file
+with an opening walk-blocker marker that no closing marker follows before
+the end of the file or the next opening one is left exactly as it is,
+because stripping it would delete lines that are not walk-blocker's: the
+output names it, the rest of the teardown carries on, and the run exits 8. Remove the partial block by hand
+(issue #218). It does not
 remove the prefix: the payload stays under it. The
 `<file>.walk-blocker.orig` backups and the audit trail under
 `[install].spool_dir` are records; read its output for what it left, and
@@ -1048,7 +1069,11 @@ both units inactive and the timer not enabled. The one timer drives the
 relink and the reaper both, so this stops Layer 2 too, and the output says
 so. It then strips every hook block and removes the fish drop-in, enabled
 or not, and for a disabled hook only a block or drop-in that is
-walk-blocker's; and it removes `<prefix>/bin` and the relink's two memories in the spool. It leaves in
+walk-blocker's; and it removes `<prefix>/bin` and the relink's two memories in the spool. A
+hook file with an opening marker that is not closed before the end of the
+file or the next opening one is left untouched and named, the rest of the teardown carries on, and it exits 8,
+the code `deploy.py --uninstall` gives a teardown that did not fully
+succeed (issue #218). It leaves in
 place the payload under the prefix, the disabled unit files, the journal
 drop-in and the grant it records, the `<file>.walk-blocker.orig` backups,
 and the spool with its audit trail. The only restore is
