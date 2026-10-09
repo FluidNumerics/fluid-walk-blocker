@@ -2,6 +2,8 @@
 
 **Status:** accepted, 2026-09-16
 The Decision's install command below reads `--system`, which is current; the spelling it replaced is recorded under "Superseded wording" below.
+The Decision's exit status for a required hook that fails its proof, edited in place by PR #87, was amended when issue #220 was decided: that edit takes the move-and-note form after the fact. The wording it replaced is recorded under "Superseded wording" below.
+The Consequences bullet on Layer 2 was added by PR #87, replacing nothing. Nothing moved.
 The Decision's exit status for a required hook that fails its proof, with the Consequences bullet on Layer 2, was amended when issue #195 was decided: a failed `systemctl daemon-reload` or `enable --now` after the hook step exits with that command's own status, not 4. The wording it replaced is recorded under "Superseded wording" below.
 The Consequences bullet on uninstall was amended when issue #196 was decided: the uninstall visits every hook file the build knows, enabled or not, and removes only walk-blocker's own block or drop-in. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0008 — see `docs/evidence.md`
@@ -202,6 +204,19 @@ A shell that moves from nested-only to registered moves from `best-effort` to
 Superseded by ADR-0021. The Decision's install command was written as
 `--system --i-have-approval`; the flag is gone, and the spelling was corrected
 in place so that a reader meets the command they would actually run.
+
+Amended when issue #220 was decided. PR #87 edited the Decision in place;
+before it, the Decision read:
+
+> A **required** shell fails the install (`--system` exits
+> non-zero) if `verify_<shell>_hook` cannot prove the file fires under
+> remote-command conditions with the shim directory stripped from `PATH` — the
+> probe must not pass merely because the caller's own `PATH` already carries it.
+
+"Non-zero" left the status unnamed. `install.sh --system` exits 4 when a
+required hook's proof fails, and `deploy.py` exits 4 after it except where the
+Decision names another status. Issue #195 later amended the same sentence, and
+its entry below quotes the wording PR #87 left.
 
 Amended when issue #195 was decided. The Decision above read:
 

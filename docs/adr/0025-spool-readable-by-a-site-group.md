@@ -4,6 +4,7 @@
 **Narrows:** ADR-0012, "**`[install].spool_dir` is `0755`, root-owned: writable by root alone, readable by everyone.**"
 **Narrows:** ADR-0004, "none of it writable by the account being monitored"
 **Narrows:** ADR-0019, "**One root-owned file more in the spool**, world-readable like the rest of the directory (ADR-0012), so the person reading the journal can also read what the relink currently believes is uncovered without waiting for the next change."
+The Consequences bullet on the spool's migration, edited in place by PR #88, was amended when issue #220 was decided: that edit takes the move-and-note form after the fact. The wording it replaced is recorded under "Superseded wording" below.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0025 — see `docs/evidence.md`
 
 ## Context
@@ -207,3 +208,21 @@ names any refusal.
 - `[install].spool_group`
 - `[install].trusted_groups`
 - `[install].audit_filename`
+
+## Superseded wording
+
+Amended when issue #220 was decided. PR #88 edited the Consequences in place;
+before it, the bullet read:
+
+> - **The migration is a repair, not a refusal.** A spool at `0755` or `0750`,
+>   with the wrong group, holding `0644` trail files, is what every node that
+>   installed before this record has; the install sets it right through
+>   no-follow descriptors and the relink keeps it so. A group- or
+>   other-writable spool, a setuid bit, or a setgid bit anywhere below the
+>   spool directory itself still refuses. The spool directory's own setgid
+>   bit is the decision, not a finding.
+
+The bullet did not say when the repair runs. It runs only once every
+preflight refusal has passed and the previous units are down, so a refusal at
+preflight leaves the spool untouched and an old relink cannot undo half the
+repair; a refusal after the payload starts being replaced can follow it.
