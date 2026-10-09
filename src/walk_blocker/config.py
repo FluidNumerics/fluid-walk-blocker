@@ -246,8 +246,11 @@ def check_semantics(schema, data):
     # Two hooks naming one file collide on the node: the fish drop-in is
     # written whole and removed with `rm -f`, so it would replace or delete a
     # shared rc file, and two blocks under the same markers strip each other.
-    # Disabled hooks count too, because the uninstall visits every hook file
-    # the build knows (ADR-0008). Equality is lexical, never resolved: this
+    # Disabled hooks count too: `enabled` is one edit away, and a payload
+    # built with a hook disabled is installed or uninstalled over what a
+    # build with it enabled wrote (issue #224's reproduction installed with
+    # fish off and uninstalled with it on), so a collision latent in one build
+    # is live in the next. Equality is lexical, never resolved: this
     # runs off the node, where the filesystem is not the node's. Every
     # `file` is a `sink_path`, already held to its canonical form above (no
     # `.`, `..`, `//` or trailing slash), so equal spellings are the only

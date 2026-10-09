@@ -243,7 +243,8 @@ def test_two_block_hooks_may_not_share_a_file(tmp_path):
 
 
 def test_a_disabled_hook_may_not_share_a_file_either():
-    # The uninstall visits every hook file the build knows, enabled or not.
+    # `enabled` is one edit away: the next build would install or uninstall
+    # over what this one wrote (issue #224's reproduction flipped fish).
     data = load_example_dict()
     data["hooks"]["fish"] = {"enabled": False, "file": "/etc/zsh/zshenv"}
     with pytest.raises(config.ConfigError) as exc:
@@ -253,9 +254,11 @@ def test_a_disabled_hook_may_not_share_a_file_either():
 
 
 def test_a_non_canonical_spelling_of_a_shared_file_is_refused_too():
-    # Equality is lexical, and every hook file is held to canonical form
-    # first, so an alias spelled with `//` or `.` cannot slip past the
-    # duplicate check by not being byte-equal.
+    # The duplicate check compares spellings, which is sound only because
+    # every hook file is held to canonical form first. This pins that earlier
+    # layer, not the duplicate check: it passes with the duplicate check
+    # removed, and fails if an alias spelled with `//` or `.` ever stops being
+    # refused before it could slip past by not being byte-equal.
     for alias in ("/etc//bash.bashrc", "/etc/./bash.bashrc"):
         data = load_example_dict()
         data["hooks"]["zsh"]["file"] = alias
