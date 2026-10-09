@@ -9,6 +9,7 @@ workstation; the node never sees this file or this module.
 import copy
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -241,6 +242,34 @@ def check_semantics(schema, data):
             raise ConfigError("hooks.%s.file" % shell,
                               "required (even when enabled = false, so uninstall "
                               "can remove a previously written hook)")
+
+    # Two hooks naming one file collide on the node: the fish drop-in is
+    # written whole and removed with `rm -f`, so it would replace or delete a
+    # shared rc file, and two blocks under the same markers strip each other.
+    # Disabled hooks count too: `enabled` is one edit away, and a payload
+    # built with a hook disabled is installed or uninstalled over what a
+    # build with it enabled wrote (issue #224's reproduction installed with
+    # fish off and uninstalled with it on), so a collision latent in one build
+    # is live in the next. Equality is lexical, never resolved: this
+    # runs off the node, where the filesystem is not the node's. Every
+    # `file` is a `sink_path`, already held to its canonical form above (no
+    # `.`, `..`, `//` or trailing slash), so equal spellings are the only
+    # equal paths left to compare; a symlink or bind mount aliasing two
+    # spellings is the node's state, which the installer's own symlink
+    # refusals cover. `normpath` is kept so the comparison stays correct if
+    # that ordering ever changes.
+    seen_files = {}
+    for shell, hook in data["hooks"].items():
+        key = posixpath.normpath(hook["file"])
+        if key in seen_files:
+            raise ConfigError("hooks.%s.file" % shell,
+                              "names the same file as hooks.%s.file (%r); "
+                              "each hook needs a file of its own, enabled or "
+                              "not, because the fish drop-in is written whole "
+                              "and removed on uninstall, and two blocks in "
+                              "one file strip each other"
+                              % (seen_files[key], hook["file"]))
+        seen_files[key] = shell
 
     # The pattern admits `root`, and `root` is the reader set ADR-0012's
     # incident was: a trail nobody but root could read, so the account that

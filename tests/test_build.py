@@ -383,6 +383,16 @@ def test_a_config_error_exits_2_with_the_validate_wording(tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+def test_two_hooks_naming_one_file_are_refused_before_anything_is_written(tmp_path):
+    bad = tmp_path / "site.toml"
+    bad.write_text(open(EXAMPLE).read().replace(
+        'file = "/etc/fish/conf.d/walk-blocker.fish"', 'file = "/etc/bash.bashrc"'))
+    code, out, err = _build(bad, tmp_path / "out")
+    assert code == 2 and out == ""
+    assert "hooks.fish.file" in err and "hooks.bash.file" in err
+    assert not (tmp_path / "out").exists()
+
+
 def test_a_schema_error_exits_2(tmp_path):
     bad = tmp_path / "site.toml"
     bad.write_text(open(EXAMPLE).read().replace('gate = "required"', 'gate = "sometimes"'))

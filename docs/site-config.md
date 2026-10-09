@@ -47,6 +47,15 @@ Then, per shell:
   distribution family may relocate it. `package` is the package that owns
   that file, so the installer can warn that it is a managed conffile. The
   installer verifies the file fires; this table only says where it is.
+- Every hook names a `file` of its own. `validate` and `build` refuse two
+  `[hooks.<shell>]` tables naming the same path: the fish drop-in is
+  written whole and removed on uninstall, so a path it shared with an rc
+  file would replace, then delete, that file, and two blocks in one file
+  strip each other. A disabled hook counts too, because turning it on is
+  one edit, and the next build would then install or uninstall over what
+  this one wrote. The comparison is of the canonical spellings, which every
+  `file` must already be; it does not resolve symlinks, because validation
+  runs off the node.
 
 Keep the census output beside `site.toml`. Re-run it when a shell is added
 to the node's packages or a group of accounts changes its shell.
