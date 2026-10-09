@@ -106,6 +106,13 @@ MIN_USABLE_PAIRS=3
 # measured by each half's `python3 -S` floor. **Empty by default: the check
 # reports and does not discard.**
 #
+# The percentage is capped at 999, and 999 is also what a pair prints when the
+# reference floor read 0.00 and there is nothing to divide by. So 999 reads
+# "999 % or more, or not measured", and an allowance of 999 or more would keep
+# exactly the pairs that are not comparisons: `require_below_cap` refuses one
+# (issue #223). The drift percentage is capped the same way, for the same
+# reason, and DRIFT_MAX_PCT is refused the same way.
+#
 # The reason it is off is the reason it exists. In a ratio run at a reference
 # deployment, ranking the usable pairs by how much busier the machine was
 # during the candidate half ordered their ratios almost exactly -- the ratio
@@ -207,8 +214,10 @@ require_count() {
 require_threshold() {
     [ -n "$2" ] || return 0
     # One leading `-` is allowed, and deliberately: a negative threshold means
-    # "discard everything" here, which is how the drift and floor gates are
-    # driven in tests and how an operator forces a gate on. It fires always,
+    # "discard everything" here -- every pair in ratio mode; single-guard mode
+    # has no pairs, so its drift check refuses the run instead -- which is how
+    # the drift and floor gates are driven in tests and how an operator forces
+    # a gate on. It fires always,
     # which is noisy rather than silent, and noisy gets fixed. A bare `-` is
     # still refused, because `${2#-}` leaves it empty.
     _rt=${2#-}
@@ -223,6 +232,35 @@ require_threshold() {
     esac
 }
 
+# The cap on the drift and floor percentages, and their not-measured reading.
+PCT_CAP=999
+
+# An allowance for a percentage capped at PCT_CAP, after `require_threshold`
+# has vouched for its shape. At PCT_CAP or above it keeps a pair that reads
+# PCT_CAP -- one that disagreed by that much or more, or one whose reference
+# measured nothing -- so the gate would be on and keeping the pairs it exists
+# to throw away. Refused, not clamped: an operator who asked for 1000 believes
+# something this script cannot honour. A negative allowance stays allowed; it
+# is the documented "discard everything" -- every pair in ratio mode, and in
+# single-guard mode, where there are no pairs, a drift refusal of the run.
+# Single-guard mode never reads FLOOR_MAX_PCT, so there it does nothing.
+require_below_cap() {
+    [ -n "$2" ] || return 0
+    if awk -v v="$2" -v c="$PCT_CAP" 'BEGIN{exit !(v+0 >= c)}'; then
+        echo "measure.sh: $1 must be below $PCT_CAP, not '$2'." >&2
+        echo "  The percentage it is compared to stops at $PCT_CAP, which also" >&2
+        echo "  stands for a reading that measured nothing, so this allowance" >&2
+        echo "  would keep that pair. Refused here so it cannot." >&2
+        echo "  The loosest value accepted is just below it, e.g. 998.9; a" >&2
+        if [ "$1" = DRIFT_MAX_PCT ]; then
+            echo "  negative one discards every pair, or refuses a single-guard run." >&2
+        else
+            echo "  negative one discards every pair; single-guard mode does not read it." >&2
+        fi
+        exit 2
+    fi
+}
+
 require_count N "$N"
 # The env knobs carry the identical hazard and were once missed when the
 # positional ones were fixed -- FLOOR_MAX_PCT worst of all, because it was
@@ -232,6 +270,8 @@ require_count N "$N"
 require_count WARMUP "$WARMUP" 0
 require_threshold DRIFT_MAX_PCT "$DRIFT_MAX_PCT"
 require_threshold FLOOR_MAX_PCT "$FLOOR_MAX_PCT"
+require_below_cap DRIFT_MAX_PCT "$DRIFT_MAX_PCT"
+require_below_cap FLOOR_MAX_PCT "$FLOOR_MAX_PCT"
 if [ -n "$REF" ]; then
     require_count PAIRS "$PAIRS"
     require_threshold MAX_RATIO "$MAX_RATIO"
@@ -460,8 +500,11 @@ measure_guard() {
     _baseline2=$BENCH_MS
 
     M_FAST=$(awk -v s="$_shim" -v b="$_baseline" 'BEGIN{printf "%.2f", s-b}')
-    M_DRIFT=$(awk -v a="$_baseline" -v b="$_baseline2" \
-        'BEGIN{d=a-b; if(d<0)d=-d; printf "%.1f", (a>0 ? 100*d/a : 999)}')
+    # Capped at PCT_CAP, which is also the reading of a baseline that printed
+    # 0.00: see FLOOR_MAX_PCT for why the two share a number.
+    M_DRIFT=$(awk -v a="$_baseline" -v b="$_baseline2" -v c="$PCT_CAP" \
+        'BEGIN{d=a-b; if(d<0)d=-d; p=(a>0 ? 100*d/a : c); if(p>c)p=c
+               printf "%.1f", p}')
     M_USABLE=$(awk -v d="$M_DRIFT" -v m="$DRIFT_MAX_PCT" 'BEGIN{print (d>m)?0:1}')
     printf '%-28s %8.2f ms/call\n' "shim overhead" "$M_FAST"
     printf '%-28s %8.1f %%\n' "baseline drift" "$M_DRIFT"
@@ -505,8 +548,8 @@ measure_guard() {
     # and the messages have to say which. Both modes consult it -- single-guard
     # mode had its own degenerate-clock pass, fixed by reading this flag there
     # too, BEFORE the drift check, because a clock that returns the same value
-    # twice makes drift compute as the 999 sentinel and would otherwise refuse
-    # with "the two readings disagree by 999 %" when they agree exactly.
+    # twice makes drift read as the 999 cap and would otherwise refuse with
+    # "the two readings disagree by 999.0 %" when they agree exactly.
     M_POSITIVE=$(awk -v f="$M_FAST" -v g="$M_GUARDED" \
         'BEGIN{print (f > 0 && g > 0) ? 1 : 0}')
     printf '%-28s %8.2f ms/call\n' "guarded overhead" "$M_GUARDED"
@@ -630,10 +673,12 @@ while [ "$_p" -le "$PAIRS" ]; do
         _c_fast=$_f_fast; _c_guarded=$_f_guarded; _c_floor=$_f_floor
     fi
     # How far apart the two halves were about the machine, as a percentage of
-    # the reference half. Reported on every pair; only discards when
-    # FLOOR_MAX_PCT is set.
-    _pr_floor=$(awk -v c="$_c_floor" -v r="$_r_floor" \
-        'BEGIN{d=c-r; if(d<0)d=-d; printf "%.1f", (r > 0 ? 100*d/r : 999)}')
+    # the reference half, capped at PCT_CAP; a reference floor of 0.00 reads
+    # as the cap. Reported on every pair; only discards when FLOOR_MAX_PCT is
+    # set, and FLOOR_MAX_PCT is below the cap, so a pair at it is discarded.
+    _pr_floor=$(awk -v c="$_c_floor" -v r="$_r_floor" -v k="$PCT_CAP" \
+        'BEGIN{d=c-r; if(d<0)d=-d; p=(r > 0 ? 100*d/r : k); if(p>k)p=k
+               printf "%.1f", p}')
 
     if [ "$_f_positive" -eq 0 ] || [ "$_s_positive" -eq 0 ]; then
         echo "pair $_p DISCARDED: an overhead at or below zero" \
