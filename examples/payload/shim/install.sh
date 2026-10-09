@@ -26,6 +26,13 @@
 #                                      hooks and remove the shim farm. The
 #                                      unit files stay; `deploy.py --system`
 #                                      restores both layers.
+#   install.sh --uninstall --dry-run   PRINT, per hook file, what an
+#                                      uninstall would do to it, and why;
+#                                      writes nothing, stops nothing and
+#                                      needs no privilege. Exits 3 where
+#                                      the uninstall would refuse or fail on
+#                                      a hook file, 8 where it would end 8
+#                                      (issue #219).
 #   install.sh --version
 #   install.sh --help
 #
@@ -87,7 +94,7 @@ sg_banner() {
 sg_usage() {
     sg_banner
     printf '%s\n' \
-        'usage: install.sh --system [--dry-run] | --relink | --uninstall | --version' \
+        'usage: install.sh --system [--dry-run] | --relink | --uninstall [--dry-run] | --version' \
         '' \
         '  --system              as root, install' \
         '  --system --dry-run    print what an install would do and exit;' \
@@ -97,6 +104,8 @@ sg_usage() {
         '  --uninstall           as root, stop and disable the timer -- which stops' \
         '                        the reaper too -- then reverse a --system install;' \
         '                        `python3 deploy.py --system` restores both layers' \
+        '  --uninstall --dry-run print what an uninstall would do to each hook file;' \
+        '                        writes nothing and needs no privilege' \
         '  --version             the walk-blocker version this was built from' \
         '' \
         'There are no path flags: every location is stamped in from site.toml.'
@@ -125,17 +134,26 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MODE" ] || { echo "install.sh: need --system, --relink or --uninstall" >&2; exit 64; }
 # --dry-run is parsed before the mode is known, so it is accepted syntactically
-# in every mode -- but only the --system arm reads it. `--relink` rebuilds the
-# shim farm and `--uninstall` strips the hook blocks, both unconditionally and
-# both as root. Accepting the flag there and writing anyway is worse than
-# refusing it, because the caller believes they asked for a dry run and got
-# one. Refused, not ignored, for the same reason `deploy.py` refuses
-# `--verify --dry-run`. Before ADR-0021 this argv did not parse at all: the
-# flag did not exist here, so it fell to the unknown-argument arm above.
-if [ "$WILL_WRITE" -eq 0 ] && [ "$MODE" != system ]; then
-    echo "install.sh: --dry-run applies to --system only; --$MODE has no dry run" >&2
+# in every mode -- but only the --system and --uninstall arms read it.
+# `--relink` rebuilds the shim farm as root, unconditionally, and has no dry
+# run. Accepting the flag there and writing anyway is worse than refusing it,
+# because the caller believes they asked for a dry run and got one. Refused,
+# not ignored, for the same reason `deploy.py` refuses `--verify --dry-run`.
+# Before ADR-0021 this argv did not parse at all: the flag did not exist here,
+# so it fell to the unknown-argument arm above. `--uninstall --dry-run`
+# arrived with issue #219: it previews the hook files the teardown would
+# change, through the very functions the teardown decides with, and is
+# honoured rather than ignored -- see uninstall_preview().
+if [ "$WILL_WRITE" -eq 0 ] && [ "$MODE" = relink ]; then
+    echo "install.sh: --dry-run applies to --system and --uninstall only; --$MODE has no dry run" >&2
     exit 64
 fi
+# Set by a preview's note in place of a refusal (require_trusted_chain(),
+# require_plain_hook_file()), so the uninstall's dry run can exit 3 where the
+# writing run would refuse. Not by require_plain_dropin(): the uninstall
+# never calls it -- it removes the drop-in, link or not -- and the --system
+# dry run reads its notes, not this flag.
+SG_WOULD_REFUSE=0
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 # Generated next to this script by the build; sets SG_WRAPPED_NAMES.
@@ -483,8 +501,9 @@ require_trusted_chain() {
             echo "  Use: python3 deploy.py --system" >&2
             exit 3
         fi
+        SG_WOULD_REFUSE=1
         echo "# NOTE: $_bad,"
-        echo "# so --system will refuse. $2"
+        echo "# so --$MODE will refuse. $2"
         echo
     fi
 }
@@ -598,15 +617,35 @@ require_plain_hook_file() {
     #
     # -L before -e: a dangling link fails -e, and the write would then create
     # a regular file at the link's TARGET rather than at this path.
+    #
+    # The uninstall's dry run notes these two, as it does the leaf checks
+    # below, so its listing reaches every hook and its "not checked" line
+    # (issue #219); nothing after the note is checked for this file, since
+    # every later check would stat or read through what is not a plain file.
+    # The --system dry run still refuses here, as it always has.
+    _ptype=''
     if [ -L "$1" ]; then
-        echo "install.sh: refusing $3 $1: it is a symlink." >&2
-        echo "  This file is read and rewritten 0644, which would publish the" >&2
-        echo "  link target's contents to every user on the node." >&2
-        exit 3
+        _ptype="a symlink"
+        if [ "$2" -eq 1 ] || [ "$MODE" != uninstall ]; then
+            echo "install.sh: refusing $3 $1: it is a symlink." >&2
+            echo "  This file is read and rewritten 0644, which would publish the" >&2
+            echo "  link target's contents to every user on the node." >&2
+            exit 3
+        fi
+    elif [ -e "$1" ] && [ ! -f "$1" ]; then
+        _ptype="not a regular file"
+        if [ "$2" -eq 1 ] || [ "$MODE" != uninstall ]; then
+            echo "install.sh: refusing $3 $1: not a regular file." >&2
+            exit 3
+        fi
     fi
-    if [ -e "$1" ] && [ ! -f "$1" ]; then
-        echo "install.sh: refusing $3 $1: not a regular file." >&2
-        exit 3
+    if [ -n "$_ptype" ]; then
+        SG_WOULD_REFUSE=1
+        echo "# NOTE: $3 $1 is $_ptype, so --uninstall will refuse."
+        echo "# The uninstall reads this file and rewrites it 0644, so it"
+        echo "# refuses a link or a special file rather than read through it."
+        echo
+        return 0
     fi
     # The LEAF's own ownership and mode, not just its type and its ancestors.
     # prepend_block PRESERVES the existing contents, and the verify functions
@@ -642,8 +681,9 @@ require_plain_hook_file() {
                 echo "  so its owner would be choosing what runs during the deploy." >&2
                 exit 3
             fi
+            SG_WOULD_REFUSE=1
             echo "# NOTE: $3 $1 is $_lbad,"
-            echo "# so --system will refuse. It is sourced as root to"
+            echo "# so --$MODE will refuse. It is sourced as root to"
             echo "# verify the hook fires, so its owner would choose what runs."
             echo
         fi
@@ -673,7 +713,7 @@ require_plain_dropin() {
             echo "install.sh: refusing $3 $1: it is $_dbad." >&2
             exit 3
         fi
-        echo "# NOTE: $3 $1 is $_dbad, so --system will refuse."
+        echo "# NOTE: $3 $1 is $_dbad, so --$MODE will refuse."
         echo
     fi
 }
@@ -1719,6 +1759,356 @@ report_hook() {
     esac
 }
 
+# --------------------------------------------------------------------------
+# The uninstall's per-hook decision (issue #219): one pair of functions,
+# called by the writing `--uninstall` and by `--uninstall --dry-run`, so the
+# preview IS the decision rather than a second account of it that could
+# drift from the code that acts.
+# --------------------------------------------------------------------------
+
+sg_absent_not_hidden() {
+    # sg_absent_not_hidden PATH -- for a PATH that neither -e nor -L finds:
+    # 0 when it is really absent, 1 when this account was not permitted to
+    # look. `-e` answers false for a directory above it this account cannot
+    # search as well as for a path that is not there. The nearest ancestor
+    # `-d` finds was stat'ed, so every directory above IT is searchable, and
+    # whether it is searchable itself decides. It is left in SG_SEEN_DIR:
+    # the deepest directory this account can stat, where the part of the
+    # chain it can check begins (uninstall_hidden()). On a local filesystem
+    # root is never refused a search, so there only an ordinary account's
+    # dry run gets 1; root refused one (root squashing on NFS) gets 1 too,
+    # and the answer, not checked, is as honest for it. The schema admits
+    # only absolute paths, and `dirname /` is `/`, which `-d` always finds.
+    _ah=$(dirname "$1")
+    while [ ! -d "$_ah" ]; do
+        _ah=$(dirname "$_ah")
+    done
+    SG_SEEN_DIR=$_ah
+    [ -x "$_ah" ]
+}
+
+uninstall_hidden() {
+    # uninstall_hidden -- for a dry run's hook path that
+    # sg_absent_not_hidden() has just called hidden: walk the part of the
+    # directory chain this account CAN stat, from SG_SEEN_DIR up, before
+    # answering. On a hidden path this predicts the writing deploy.py,
+    # which walks every hook file's chain -- enabled or disabled, drop-in
+    # included, present or not -- and refuses with 6 on an untrusted
+    # directory. So a directory there another account can write is a
+    # refusal here too (UC_CLAIM refuse, exit 3). Run on its own, the
+    # helper may therefore refuse a hidden path that its own writing run
+    # would clean -- an absent file, a dangling symlink, a non-regular file,
+    # or an enabled drop-in, none of which it walks -- which errs on the
+    # safe side. Otherwise the rest of the chain and the file are out of
+    # this account's sight, and the answer is unknown, never a guess.
+    uninstall_noted require_trusted_chain "$SG_SEEN_DIR" "Another user could replace what is under it, the hook file included." 0
+    if [ "$UC_NOTED" -eq 1 ]; then
+        UC_CLAIM=refuse
+        UC_WHY="a directory above it is not trusted (see the NOTE above), and one below that cannot be searched by this account"
+        return 0
+    fi
+    UC_CLAIM=unknown
+    UC_WHY="a directory above it cannot be searched by this account"
+}
+
+uninstall_enabled_files() {
+    # The enabled hooks' files, newline-delimited so a path with a space in
+    # it still matches whole, into SG_ENABLED_FILES: a disabled hook naming
+    # the same file has nothing of its own to say about it (the enabled
+    # visit handles it). Since issue #224 the build refuses two hooks naming
+    # one file, so this matches only in a hand-edited copy.
+    SG_ENABLED_FILES='
+'
+    for _ef in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
+        hook_select "$_ef"
+        SG_ENABLED_FILES="$SG_ENABLED_FILES$HK_FILE
+"
+    done
+}
+
+uninstall_noted() {
+    # uninstall_noted REQUIRE_FN ARGS... -- run one of the require_*
+    # functions and set UC_NOTED to 1 when it noted a refusal for THIS call
+    # (a dry run's note in place of exit 3), else 0. SG_WOULD_REFUSE keeps
+    # every earlier note. Always returns 0, and is never called as an `if`
+    # condition, which would switch off `set -e` inside the function it
+    # runs; a writing run's refusal is that function's own `exit 3`.
+    _un_was=$SG_WOULD_REFUSE
+    SG_WOULD_REFUSE=0
+    "$@"
+    UC_NOTED=$SG_WOULD_REFUSE
+    [ "$_un_was" -eq 0 ] || SG_WOULD_REFUSE=1
+    return 0
+}
+
+uninstall_refused() {
+    # True, with UC_CLAIM and UC_WHY set, when the last uninstall_noted()
+    # noted a refusal. Used as `uninstall_refused && return 0`, an AND-OR
+    # list, which `set -e` does not end the script on when it is false.
+    [ "$UC_NOTED" -eq 1 ] || return 1
+    UC_CLAIM=refuse
+    UC_WHY="the uninstall refuses this file: see the NOTE above"
+    return 0
+}
+
+uninstall_claim() {
+    # uninstall_claim SHELL WILL_WRITE -- does `--uninstall` clean this
+    # hook's file at all? Run for every hook before the units go down, so a
+    # refusal lands before any teardown. Sets:
+    #
+    #   UC_CLAIM  yes      cleaned; uninstall_outcome() says how
+    #             no       nothing to clean, or not walk-blocker's to clean
+    #             unknown  a dry run by an account that could not read what
+    #                      decides it -- said, never guessed
+    #             refuse   a dry run only: the writing run refuses this file,
+    #                      and the note above says why. Nothing after the note
+    #                      is checked or read for it: a file under a chain
+    #                      another account can write could be swapped for a
+    #                      FIFO before the read, and a link or a special file
+    #                      is not read through at all
+    #   UC_WHY    why, for every answer but an enabled hook's `yes`
+    #   UC_SAY    1 when the writing run prints UC_WHY as a "left in place"
+    #             line
+    #
+    # WILL_WRITE 1 refuses, exit 3, as the uninstall always has; 0 notes
+    # each refusal instead and sets SG_WOULD_REFUSE (see the require_*
+    # functions), so a dry run can name every one and still exit 3.
+    #
+    # An enabled hook is walk-blocker's by this configuration's say-so, so
+    # on a path this account can reach it gets exactly the install's
+    # refusals; on a hidden one a dry run predicts the writing deploy.py
+    # instead, the drop-in included (uninstall_hidden()). A disabled one has
+    # no such claim: the file at its path may never have been ours, so it
+    # has to prove it is -- a marked block in a shared file, the generated
+    # header on the drop-in -- and anything else there is left as it was found
+    # (ADR-0008, issue #196).
+    hook_select "$1"
+    UC_WHY=''
+    UC_SAY=0
+    case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
+        *" $1 "*)
+            UC_NOTED=0
+            # A dry run by an account that cannot search a directory above
+            # the file cannot make the checks below as they stand: the chain
+            # walk would answer "cannot examine" out of this account's own
+            # permissions and read as a refusal. It checks the part of the
+            # chain it can see instead (uninstall_hidden()), as for a
+            # disabled hook in the same place -- the drop-in too, which the
+            # writing helper never walks but the writing deploy.py does.
+            # Never taken by the writing run ($2 is 1).
+            if [ "$2" -eq 0 ] && [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ] \
+                    && ! sg_absent_not_hidden "$HK_FILE"; then
+                uninstall_hidden
+                return 0
+            fi
+            if [ "$HK_KIND" = block ]; then
+                uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+            fi
+            uninstall_refused && return 0
+            UC_CLAIM=yes
+            return 0
+            ;;
+    esac
+    case $SG_ENABLED_FILES in
+        *"
+$HK_FILE
+"*)
+            UC_CLAIM=no
+            UC_WHY="hooks.$1 is disabled, and an enabled hook names the same file"
+            return 0
+            ;;
+    esac
+    # Disabled, and nothing there: nothing to clean, and nothing to check --
+    # its directory may not exist at all on a node without that shell, which
+    # is no reason to refuse an uninstall.
+    if [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
+        if [ "$2" -eq 0 ] && ! sg_absent_not_hidden "$HK_FILE"; then
+            uninstall_hidden
+            return 0
+        fi
+        UC_CLAIM=no
+        UC_WHY="hooks.$1 is disabled, and the file is absent"
+        return 0
+    fi
+    # A symlink or a non-regular file was never walk-blocker's: every write
+    # here leaves a regular file renamed into place, and refuses a link. Left
+    # alone and never read, since a FIFO would hang the read; refusing the
+    # uninstall over a file the site said not to touch would be worse.
+    if [ -L "$HK_FILE" ] || [ ! -f "$HK_FILE" ]; then
+        UC_CLAIM=no
+        UC_WHY="hooks.$1 is disabled, and a symlink or non-regular file there is not one walk-blocker wrote"
+        UC_SAY=1
+        return 0
+    fi
+    # Read only once nobody else can swap it for a FIFO between this check
+    # and the read.
+    uninstall_noted require_trusted_chain "$(dirname "$HK_FILE")" "Another user could replace that file between this check and the read." "$2"
+    uninstall_refused && return 0
+    # Root reads every regular file, so only an ordinary account's dry run
+    # can stop here; the writing run is root's alone.
+    if [ "$2" -eq 0 ] && [ ! -r "$HK_FILE" ]; then
+        UC_CLAIM=unknown
+        UC_WHY="it is not readable to this account"
+        return 0
+    fi
+    case $HK_KIND in
+        block)
+            # No block, nothing of ours: never rewritten, so its owner and
+            # mode are not this uninstall's business.
+            block_shape "$HK_FILE"
+            if [ "$SG_BLOCK_SHAPE" = none ]; then
+                UC_CLAIM=no
+                UC_WHY="hooks.$1 is disabled, and the file carries no walk-blocker block"
+                return 0
+            fi
+            uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+            uninstall_refused && return 0
+            ;;
+        dropin)
+            _dh_first=''
+            IFS= read -r _dh_first < "$HK_FILE" || :
+            if [ "$_dh_first" != "$FISH_HEADER" ]; then
+                UC_CLAIM=no
+                UC_WHY="hooks.$1 is disabled, and the file does not open with the drop-in's generated header"
+                UC_SAY=1
+                return 0
+            fi
+            ;;
+    esac
+    UC_CLAIM=yes
+}
+
+uninstall_outcome() {
+    # uninstall_outcome SHELL WILL_WRITE -- for a hook uninstall_claim()
+    # said yes to, what the teardown does to its file, decided at the moment
+    # it acts. Sets UO_ACT and UO_WHY:
+    #
+    #   strip    a matched block: strip_block() removes it
+    #   leave    an unclosed BEGIN marker (block_shape()): left exactly as
+    #            it is, said, and the run ends 8 (issue #218)
+    #   remove   the drop-in: `rm -f`, whole
+    #   none     nothing there to clean
+    #   unknown  a dry run by an account that could not read the file
+    #
+    # A path a dry run cannot reach never gets here: uninstall_claim()
+    # answers it first (uninstall_hidden()).
+    hook_select "$1"
+    UO_WHY=''
+    case $HK_KIND in
+        block)
+            if [ ! -f "$HK_FILE" ]; then
+                UO_ACT='none'
+                UO_WHY="the file is absent"
+                if [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
+                    UO_WHY="it is not a regular file"
+                fi
+                return 0
+            fi
+            if [ "$2" -eq 0 ] && [ ! -r "$HK_FILE" ]; then
+                UO_ACT='unknown'
+                UO_WHY="it is not readable to this account"
+                return 0
+            fi
+            block_shape "$HK_FILE"
+            case $SG_BLOCK_SHAPE in
+                matched) UO_ACT='strip' ;;
+                unmatched)
+                    UO_ACT='leave'
+                    UO_WHY="it has an unclosed BEGIN marker ($BEGIN), with no END marker ($END) before the end of the file or the next BEGIN, and stripping it would delete lines that are not walk-blocker's"
+                    ;;
+                *)
+                    UO_ACT='none'
+                    UO_WHY="the file carries no walk-blocker block"
+                    ;;
+            esac
+            ;;
+        # Plain `rm -f`, not strip_block: there are no markers to strip out
+        # of shared content, because the drop-in was never shared content --
+        # see write_fish_conf(). A symlink there is just removed, not
+        # followed.
+        dropin)
+            if [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
+                UO_ACT='remove'
+            else
+                UO_ACT='none'
+                UO_WHY="the file is absent"
+            fi
+            ;;
+    esac
+}
+
+uninstall_preview() {
+    # `--uninstall --dry-run` (issue #219): the hook half of the teardown,
+    # decided by the same two functions the writing run calls, printed one
+    # hook per line, and nothing else. Writes nothing, runs no systemctl,
+    # needs no root, and never sources wrapped_names.sh: none of what it
+    # decides depends on the wrapped names. Exits 3 when the writing run
+    # would refuse or fail on a hook file (it refuses before stopping a
+    # unit, so 3 outranks 8), 8 when it would leave a file with an unclosed
+    # marker and end 8, else 0. The checks that are not about a hook file
+    # -- root, the helper's own wrapped_names.sh, the units stopping -- are
+    # not made here, and the output says so.
+    SG_WOULD_REFUSE=0
+    _pv_left=0
+    _pv_fails=0
+    uninstall_enabled_files
+    echo "# The hook files \`install.sh --uninstall\` visits -- every hook this"
+    echo "# build knows, enabled or not (issue #196) -- and what it would do:"
+    for _uh in $SG_HOOKS_KNOWN; do
+        uninstall_claim "$_uh" 0
+        _pv_state=disabled
+        case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
+            *" $_uh "*) _pv_state=enabled ;;
+        esac
+        _pv_head="#   hook: $HK_KEY $HK_FILE ($_pv_state):"
+        case $UC_CLAIM in
+            no) echo "$_pv_head leave alone: $UC_WHY" ;;
+            unknown) echo "$_pv_head NOT CHECKED: $UC_WHY" ;;
+            refuse) echo "$_pv_head refuse, exit 3: $UC_WHY" ;;
+            yes)
+                uninstall_outcome "$_uh" 0
+                case $UO_ACT in
+                    strip) echo "$_pv_head strip walk-blocker's block" ;;
+                    remove)
+                        # A directory there is removed by the same `rm -f`
+                        # as anything else, which fails on it, and under
+                        # `set -e` that stops the writing run with the units
+                        # already down. Predicted rather than reported as a
+                        # removal; issue #240 is the writing side.
+                        if [ -d "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
+                            echo "$_pv_head FAIL: it is a directory, which the uninstall's \`rm -f\` cannot remove, so the run would stop there with the units already down"
+                            _pv_fails=1
+                        else
+                            echo "$_pv_head remove the drop-in"
+                        fi
+                        ;;
+                    leave)
+                        echo "$_pv_head leave untouched, and exit 8: $UO_WHY"
+                        _pv_left=1
+                        ;;
+                    none) echo "$_pv_head leave alone: $UO_WHY" ;;
+                    unknown) echo "$_pv_head NOT CHECKED: $UO_WHY" ;;
+                esac
+                ;;
+        esac
+    done
+    echo "# Not checked here, because none is about a hook file: root, the"
+    echo "# helper's own wrapped_names.sh (\`deploy.py --uninstall --dry-run\`"
+    echo "# checks it before it runs this), and whether systemd stops the units."
+    if [ "$SG_WOULD_REFUSE" -eq 1 ]; then
+        echo "# install.sh --uninstall would refuse, exit 3, before it stops a"
+        echo "# unit or touches a file: see each NOTE above."
+        exit 3
+    fi
+    if [ "$_pv_fails" -eq 1 ]; then
+        echo "# install.sh --uninstall would fail on a hook file above, after"
+        echo "# it has stopped the units: see FAIL."
+        exit 3
+    fi
+    [ "$_pv_left" -eq 0 ] || exit 8
+    exit 0
+}
+
 sg_find_linked_probe() {
     # Print the first wrapped name that is actually linked under $BIN, or
     # fail if none is. Shared by every verify function -- identical either
@@ -2739,93 +3129,36 @@ SYS
         fi
         ;;
     uninstall)
+        # The preview first: it needs no root and writes nothing, so it must
+        # not reach a line below, every one of which is the writing run's.
+        if [ "$WILL_WRITE" -eq 0 ]; then
+            uninstall_preview
+        fi
         if ! is_root; then
             echo "install.sh: --uninstall must run as root" >&2
             exit 3
         fi
         # ALWAYS 1: strip_block() rewrites the file, so every check that
-        # protects a write applies here. Not $WILL_WRITE -- this arm writes
-        # whatever the --system arm was told, which is exactly why the
-        # parameter is passed rather than read from the global. Uninstall
-        # already requires root, so this path is as privileged as the
-        # install.
+        # protects a write applies here. Not $WILL_WRITE, which the branch
+        # above has already taken when it is 0. Uninstall already requires
+        # root, so this path is as privileged as the install.
         #
         # Every hook this build knows, enabled or not, and not gated on the
         # shell still resolving: an uninstall cleans up what was written; it
         # does not condition that on the reader still being around, or on the
         # site still enabling the hook that wrote it (ADR-0008, issue #196).
-        #
-        # An enabled hook is walk-blocker's by this configuration's say-so,
-        # so it gets exactly the install's refusals. A disabled one has no
-        # such claim: the file at its path may never have been ours, so it
-        # has to prove it is -- a marked block in a shared file, the
-        # generated header on the drop-in -- and anything else there is left
-        # as it was found. Decided here, before the units go down, so every
-        # refusal still lands before any teardown.
+        # Decided by uninstall_claim() here, before the units go down, so
+        # every refusal still lands before any teardown.
         _removed=''
         _uninstall_hooks=''
-        # The enabled hooks' files, newline-delimited so a path with a space
-        # in it still matches whole: a disabled hook naming the same file has
-        # nothing of its own to say about it (the enabled visit handles it).
-        _enabled_files='
-'
-        for _uh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
-            hook_select "$_uh"
-            _enabled_files="$_enabled_files$HK_FILE
-"
-        done
+        uninstall_enabled_files
         for _uh in $SG_HOOKS_KNOWN; do
-            hook_select "$_uh"
-            case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
-                *" $_uh "*)
-                    if [ "$HK_KIND" = block ]; then
-                        require_plain_hook_file "$HK_FILE" 1 "$HK_KEY"
-                    fi
-                    _uninstall_hooks="$_uninstall_hooks $_uh"
-                    continue
-                    ;;
-            esac
-            case $_enabled_files in
-                *"
-$HK_FILE
-"*) continue ;;
-            esac
-            # Disabled, and nothing there: nothing to clean, and nothing to
-            # check -- its directory may not exist at all on a node without
-            # that shell, which is no reason to refuse an uninstall.
-            if [ ! -e "$HK_FILE" ] && [ ! -L "$HK_FILE" ]; then
-                continue
+            uninstall_claim "$_uh" 1
+            if [ "$UC_CLAIM" = yes ]; then
+                _uninstall_hooks="$_uninstall_hooks $_uh"
+            elif [ "$UC_SAY" -eq 1 ]; then
+                echo "walk-blocker: $HK_FILE left in place: $UC_WHY"
             fi
-            # A symlink or a non-regular file was never walk-blocker's: every
-            # write here leaves a regular file renamed into place, and refuses
-            # a link. Left alone and never read, since a FIFO would hang the
-            # read; refusing the uninstall over a file the site said not to
-            # touch would be worse.
-            if [ -L "$HK_FILE" ] || [ ! -f "$HK_FILE" ]; then
-                echo "walk-blocker: $HK_FILE left in place: hooks.$_uh is disabled, and a symlink or non-regular file there is not one walk-blocker wrote"
-                continue
-            fi
-            # Read only once nobody else can swap it for a FIFO between this
-            # check and the read.
-            require_trusted_chain "$(dirname "$HK_FILE")" "Another user could replace that file between this check and the read." 1
-            case $HK_KIND in
-                block)
-                    # No block, nothing of ours: never rewritten, so its
-                    # owner and mode are not this uninstall's business.
-                    block_shape "$HK_FILE"
-                    [ "$SG_BLOCK_SHAPE" != none ] || continue
-                    require_plain_hook_file "$HK_FILE" 1 "$HK_KEY"
-                    ;;
-                dropin)
-                    _dh_first=''
-                    IFS= read -r _dh_first < "$HK_FILE" || :
-                    if [ "$_dh_first" != "$FISH_HEADER" ]; then
-                        echo "walk-blocker: $HK_FILE left in place: hooks.$_uh is disabled, and the file does not open with the drop-in's generated header"
-                        continue
-                    fi
-                    ;;
-            esac
-            _uninstall_hooks="$_uninstall_hooks $_uh"
         done
         load_wrapped_names
         # The units FIRST, before anything is stripped. The service's
@@ -2860,31 +3193,19 @@ $HK_FILE
         # any non-zero status from this script.
         _left=''
         for _uh in $_uninstall_hooks; do
-            hook_select "$_uh"
-            case $HK_KIND in
-                block)
-                    [ -f "$HK_FILE" ] || continue
-                    block_shape "$HK_FILE"
-                    case $SG_BLOCK_SHAPE in
-                        matched)
-                            strip_block "$HK_FILE"
-                            _removed="$_removed $HK_FILE,"
-                            ;;
-                        unmatched)
-                            echo "walk-blocker: $HK_FILE left untouched: it has an unclosed BEGIN marker ($BEGIN), with no END marker ($END) before the end of the file or the next BEGIN, and stripping it would delete lines that are not walk-blocker's. Remove the partial block by hand." >&2
-                            _left="$_left $HK_FILE,"
-                            ;;
-                    esac
+            uninstall_outcome "$_uh" 1
+            case $UO_ACT in
+                strip)
+                    strip_block "$HK_FILE"
+                    _removed="$_removed $HK_FILE,"
                     ;;
-                # Plain `rm -f`, not strip_block: there are no markers to
-                # strip out of shared content, because the drop-in was never
-                # shared content -- see write_fish_conf(). A symlink there is
-                # just removed, not followed.
-                dropin)
-                    if [ -e "$HK_FILE" ] || [ -L "$HK_FILE" ]; then
-                        rm -f "$HK_FILE"
-                        _removed="$_removed $HK_FILE,"
-                    fi
+                leave)
+                    echo "walk-blocker: $HK_FILE left untouched: $UO_WHY. Remove the partial block by hand." >&2
+                    _left="$_left $HK_FILE,"
+                    ;;
+                remove)
+                    rm -f "$HK_FILE"
+                    _removed="$_removed $HK_FILE,"
                     ;;
             esac
         done

@@ -2,6 +2,7 @@
 
 **Status:** accepted, 2026-09-18
 The Consequences bullet on the dry-run asymmetry was amended when issue #53 was decided: `--uninstall --dry-run` no longer needs root. The wording it replaced is recorded under "Superseded wording" below.
+The Consequences bullet on the dry run reaching the child installer was extended when issue #219 was decided: `deploy.py --uninstall --dry-run` runs the deployed `install.sh --uninstall --dry-run` for its hook preview. The sentences were added, replacing nothing. Nothing moved.
 **Narrows:** ADR-0004, "plus explicit authorization (`--i-have-approval`), it self-executes"
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0021 — see `docs/evidence.md`
 
@@ -95,7 +96,11 @@ still refuses a writing run from anywhere but the deployed copy.
   invokes `install.sh --system --dry-run` for the relayed report. The flag is
   load-bearing: without it that call installs Layer 1 out of the checkout,
   which is the worst failure available to a command whose whole purpose is to
-  not do anything.
+  not do anything. `deploy.py --uninstall --dry-run` likewise runs the
+  deployed `install.sh --uninstall --dry-run` (issue #219), which prints what
+  the teardown would do to each hook file and writes nothing. There too the
+  flag is load-bearing, since without it the call is the teardown. The
+  helper's `--relink` still has no dry run and refuses the flag.
 - **The relay filter is keyed on `--system`, not on the removed flag.**
   `deploy.py` strips `install.sh`'s own standalone command out of the relayed
   output, because run directly it copies nothing and points every shim back

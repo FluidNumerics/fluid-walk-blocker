@@ -536,12 +536,18 @@ def test_the_uninstall_dry_run_needs_no_root_and_writes_nothing(
     dry = []
 
     def dry_only(cmd, check=True, capture=True, dry_run=False, env=None):
-        dry.append(dry_run)
+        dry.append((cmd, dry_run))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(deploy, "run", dry_only)
     assert deploy.system_uninstall(args) == 0
-    assert dry and all(dry), dry
+    # Every command is a dry run but one: the helper's own hook preview
+    # (issue #219), which is itself a dry run and writes nothing.
+    real = [cmd for cmd, was_dry in dry if not was_dry]
+    assert real == [[deploy.TRUSTED_SH,
+                     os.path.join(args.prefix, "shim", "install.sh"),
+                     "--uninstall", "--dry-run"]], dry
+    assert len(dry) > 1, dry
     assert sorted(os.walk(str(tmp_path))) == before, "a dry run wrote"
     out = capsys.readouterr().out
     assert "NOT CHECKED" not in out
@@ -590,6 +596,232 @@ def test_an_uninstall_dry_run_names_what_it_could_not_check(
         assert "could not be made even as root" in capsys.readouterr().err
     finally:
         os.chmod(str(locked), 0o700)
+
+
+# --------------------------------------------------------------------------
+# the uninstall dry run's hook preview (issue #219)
+# --------------------------------------------------------------------------
+
+UNINSTALL_PREVIEW_BEGIN = "# >>> walk-blocker >>>"
+UNINSTALL_PREVIEW_END = "# <<< walk-blocker <<<"
+
+
+def _stage_real_helper(tmp_path, stat_body=None):
+    """The deployed helper as a REAL stamped install.sh under the prefix,
+    for a fictional site whose hook files are the ones this module's
+    constants name, and a closed PATH for it to run on. Returns
+    `(layout, env)`. `stat_body` replaces the stand-in `stat`, which
+    otherwise answers root 0755 for every path, the post-install state a
+    tmp tree cannot have."""
+    import _install_helpers as H
+    layout = stamped_install(tmp_path)
+    assert str(layout.bashrc) == deploy.DEFAULT_BASHRC_FILE
+    assert str(layout.prefix) == deploy.DEFAULT_PREFIX
+    H.populate_bin(layout.toolbin, stat_body=stat_body or H.STAT_ROOT_755)
+    return layout, H.sandbox_env(layout, layout.toolbin)
+
+
+def _uninstall_dry_run(tmp_path, monkeypatch, env):
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    return deploy.system_uninstall(args, env=env)
+
+
+def test_the_uninstall_dry_run_previews_each_hook_file(
+        tmp_path, monkeypatch, capsys):
+    """End to end through the deployed helper: each hook file the build
+    knows, with what the teardown would do to it. The unclosed marker is
+    predicted, and the dry run still exits 0: the teardown completes
+    around it, and a dry run never claims the units were removed."""
+    pass_uninstall_checks(monkeypatch, deploy.DEFAULT_PREFIX)
+    layout, env = _stage_real_helper(tmp_path)
+    layout.bashrc.write_text("%s\nx\n%s\n# stock\n"
+                             % (UNINSTALL_PREVIEW_BEGIN, UNINSTALL_PREVIEW_END))
+    layout.zshenv.write_text("# stock\n%s\nx\n" % UNINSTALL_PREVIEW_BEGIN)
+    before = sorted(os.walk(str(tmp_path)))
+    contents = [p.read_bytes() for p in (layout.bashrc, layout.zshenv)]
+
+    assert _uninstall_dry_run(tmp_path, monkeypatch, env) == 0
+    out = capsys.readouterr().out
+    assert sorted(os.walk(str(tmp_path))) == before, "a dry run wrote"
+    assert [p.read_bytes() for p in (layout.bashrc, layout.zshenv)] == contents
+    assert ("#   hook: hooks.bash.file %s (enabled): strip walk-blocker's "
+            "block" % layout.bashrc) in out, out
+    assert ("#   hook: hooks.zsh.file %s (enabled): leave untouched, and "
+            "exit 8" % layout.zshenv) in out, out
+    assert ("#   hook: hooks.fish.file %s (enabled): leave alone: the file "
+            "is absent" % layout.fishconf) in out, out
+    assert "exits 8 (issue #218)" in out, out
+    # After the command the real run executes, which is still printed.
+    teardown = out.index("would run: %s %s --uninstall"
+                         % (deploy.TRUSTED_SH, layout.script))
+    assert teardown < out.index("#   hook: "), out
+    assert "dry run: nothing was changed" in out, out
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root reads every file")
+def test_the_uninstall_dry_run_names_a_hook_file_it_could_not_read(
+        tmp_path, monkeypatch, capsys):
+    pass_uninstall_checks(monkeypatch, deploy.DEFAULT_PREFIX)
+    layout, env = _stage_real_helper(tmp_path)
+    layout.bashrc.write_text("%s\nx\n%s\n" % (UNINSTALL_PREVIEW_BEGIN,
+                                              UNINSTALL_PREVIEW_END))
+    os.chmod(str(layout.bashrc), 0)
+    try:
+        assert _uninstall_dry_run(tmp_path, monkeypatch, env) == 0
+    finally:
+        os.chmod(str(layout.bashrc), 0o644)
+    out = capsys.readouterr().out
+    assert ("#   hook: hooks.bash.file %s (enabled): NOT CHECKED: it is not "
+            "readable to this account" % layout.bashrc) in out, out
+
+
+def test_the_uninstall_dry_run_refuses_where_the_helper_would(
+        tmp_path, monkeypatch, capsys):
+    """A refusal predicted by the helper is this dry run's refusal, 6, like
+    the install's dry run when install.sh's refuses -- not a clean preview
+    with a note in it. Nothing after the check is printed as a command."""
+    pass_uninstall_checks(monkeypatch, deploy.DEFAULT_PREFIX)
+    owned = ('#!/bin/sh\ncase "$3" in\n  %s) printf "1000 644\\n" ;;\n'
+             '  *) printf "0 755\\n" ;;\nesac\n'
+             % os.path.join(str(tmp_path), "bashrc"))
+    layout, env = _stage_real_helper(tmp_path, stat_body=owned)
+    layout.bashrc.write_text("%s\nx\n%s\n" % (UNINSTALL_PREVIEW_BEGIN,
+                                              UNINSTALL_PREVIEW_END))
+
+    assert _uninstall_dry_run(tmp_path, monkeypatch, env) == 6
+    captured = capsys.readouterr()
+    assert "owned by uid 1000, not root" in captured.out, captured
+    assert "uninstall dry run refused (exit 3)" in captured.err, captured
+    assert "would run" not in captured.out, captured
+    assert "dry run: nothing was changed" not in captured.out, captured
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root searches a mode-0 directory")
+@pytest.mark.parametrize("hook", ["bash", "fish"])
+@pytest.mark.parametrize("open_untrusted, want", [(True, 6), (False, 0)])
+def test_the_uninstall_dry_run_agrees_with_the_helper_under_a_hidden_path(
+        tmp_path, monkeypatch, capsys, hook, open_untrusted, want):
+    """`open/locked/sub/<hook file>`, `locked` unsearchable to this account,
+    for the bash hook and the ENABLED fish drop-in. deploy.py cannot stat
+    the hook path, so it names it NOT CHECKED and keeps it out of its own
+    path checks; the helper's preview walks the part of the chain this
+    account can see, predicting the writing deploy.py, which walks every
+    hook file's chain, the enabled drop-in's included. An untrusted `open`
+    is then a refusal through the helper (6, root's answer too), and a
+    trusted one is NOT CHECKED in both places (0)."""
+    import _install_helpers as H
+    opn = tmp_path / "open"
+    locked = opn / "locked"
+    (locked / "sub").mkdir(parents=True)
+    path = locked / "sub" / ("bashrc" if hook == "bash" else "walk.fish")
+    if hook == "bash":
+        path.write_text("%s\nx\n%s\n" % (UNINSTALL_PREVIEW_BEGIN,
+                                         UNINSTALL_PREVIEW_END))
+        monkeypatch.setattr(deploy, "DEFAULT_BASHRC_FILE", str(path))
+        layout = Layout(tmp_path, bashrc=path)
+    else:
+        path.write_text("# walk-blocker -- generated by install.sh, do not "
+                        "edit by hand.\n")
+        monkeypatch.setattr(deploy, "DEFAULT_FISH_CONF_FILE", str(path))
+        layout = Layout(tmp_path, fishconf=path)
+    pass_uninstall_checks(monkeypatch, deploy.DEFAULT_PREFIX)
+    stamped_install(tmp_path, layout=layout)
+    assert layout.values["site.toml:hooks.%s.enabled" % hook] is True
+    stat_body = ('#!/bin/sh\ncase "$3" in\n'
+                 '  %s) printf "%s\\n" ;;\n'
+                 '  %s) printf "0 0\\n" ;;\n'
+                 '  %s/*) exec %s "$@" ;;\n'
+                 '  *) printf "0 755\\n" ;;\nesac\n'
+                 % (opn, "1000 777" if open_untrusted else "0 755",
+                    locked, locked, H.REAL_STAT))
+    H.populate_bin(layout.toolbin, stat_body=stat_body)
+    env = H.sandbox_env(layout, layout.toolbin)
+    os.chmod(str(locked), 0)
+    try:
+        rc = _uninstall_dry_run(tmp_path, monkeypatch, env)
+    finally:
+        os.chmod(str(locked), 0o755)
+    captured = capsys.readouterr()
+    assert rc == want, captured
+    if open_untrusted:
+        assert "owned by uid 1000, not root" in captured.out, captured
+        assert ("#   hook: hooks.%s.file %s (enabled): refuse, exit 3"
+                % (hook, path)) in captured.out, captured
+        assert "uninstall dry run refused (exit 3)" in captured.err, captured
+    else:
+        assert ("#   hook: hooks.%s.file %s (enabled): NOT CHECKED: a "
+                "directory above it cannot be searched by this account"
+                % (hook, path)) in captured.out, captured
+        assert ("%s (paths): could not be checked as this user" % path
+                in captured.out), captured
+
+
+@pytest.mark.parametrize("rc", [64, 2, 1])
+def test_a_helper_with_no_uninstall_dry_run_is_named_not_checked(
+        tmp_path, monkeypatch, capsys, rc):
+    """A deployed helper from before issue #219 answers 64. That is no
+    prediction either way, so it is said, and the dry run carries on."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if dry_run:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, rc, "", "")
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.system_uninstall(args) == 0
+    out = capsys.readouterr().out
+    assert "hook preview: NOT CHECKED" in out, out
+    assert "exited %d" % rc in out, out
+
+
+@pytest.mark.parametrize("rc", [126, 127])
+def test_a_helper_that_could_not_be_run_is_not_blamed_on_its_release(
+        tmp_path, monkeypatch, capsys, rc):
+    """126 and 127 are the shell's numbers for a command it could not run
+    (issue #194), not an answer from an older helper; the NOT CHECKED text
+    says which, and relays the reason."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if dry_run:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, rc, "", "sh: cannot run\n")
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.system_uninstall(args) == 0
+    captured = capsys.readouterr()
+    assert "hook preview: NOT CHECKED" in captured.out, captured
+    assert "could not be run" in captured.out, captured
+    assert "(exit %d)" % rc in captured.out, captured
+    assert "release before issue #219" not in captured.out, captured
+    assert "sh: cannot run" in captured.err, captured
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root is not denied a stat")
+def test_a_helper_this_account_cannot_inspect_is_not_run(
+        tmp_path, monkeypatch, capsys):
+    """Run only once uninstall_helper() has proven it, as the writing run
+    does. A helper this account may not even stat is not proven, so it is
+    not run, and the hook preview is named as not checked."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+    shim = os.path.join(args.prefix, "shim")
+    calls = []
+    monkeypatch.setattr(deploy, "run", recording_run(calls))
+    os.chmod(shim, 0)
+    try:
+        assert deploy.system_uninstall(args) == 0
+    finally:
+        os.chmod(shim, 0o755)
+    assert ["--uninstall", "--dry-run"] not in [c[-2:] for c in calls], calls
+    out = capsys.readouterr().out
+    assert "hook preview: NOT CHECKED" in out, out
 
 
 def test_the_cli_refuses_the_path_flags_it_used_to_accept():

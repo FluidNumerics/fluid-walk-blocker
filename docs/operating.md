@@ -499,7 +499,7 @@ it.
 
 | Exit | Mode | Step that produces it | What it means |
 |---|---|---|---|
-| 0 | every mode | the end of the run | `--system`: installed. A dry run: nothing would refuse, and the commands are printed. `--uninstall`: removed. `--verify`: every installed file matches its record. |
+| 0 | every mode | the end of the run | `--system`: installed. A dry run: nothing would refuse, and the commands are printed; `--uninstall --dry-run` also prints what the teardown would do to each hook file, and exits 0 when it predicts a hook file left untouched with the run ending 8, since the teardown completes around it. `--uninstall`: removed. `--verify`: every installed file matches its record. |
 | 1 | `--verify` | the comparison | drift: an installed file differs from its record, is missing, or is extra |
 | 2 | every mode | argument parsing | a usage error: no mode, two modes, `--verify --dry-run`, or an unknown argument, which includes every path flag such as `--prefix` (ADR-0005) |
 | 3 | `--system`, `--uninstall` | the root gate, before any check | a writing run as an ordinary user. Its dry run needs no root. |
@@ -507,7 +507,7 @@ it.
 | 4 | `--verify` | reading the record and the files | no answer: the prefix is not a directory, `site.lock.json` is missing or not a record it can read, or a file could not be read. Not a clean result. |
 | 5 | `--system` | after the payload is copied | a copied entry is a symlink, the prefix fails the ownership check before `install.sh` runs, or the spool could not be created. No unit is written and the timer stays disabled. On the first two, the entries this run copied are removed. An entry whose `rm -rf` fails is named on stderr as not removed, and the ownership refusal then says the named entries were NOT removed instead of that the payload was (issue #221). |
 | 5 | `--uninstall`, `--uninstall --dry-run` | the teardown helper's check, before the first command | the deployed `shim/install.sh` or `wrapped_names.sh` failed its checks. Nothing has been touched: the timer and the service are as they were, and the message says how to finish by hand. |
-| 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; a payload file entry is not a regular file, which the install refuses by `lstat` before it copies anything (install only); the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (`--system --dry-run` only, and it ends the preview before the other checks); or a check could not be made with privilege. The install's dry run makes the payload check even when an earlier check refused, and reports both. |
+| 6 | `--system`, `--system --dry-run`, `--uninstall`, `--uninstall --dry-run` | the checks before the first command | a refusal: a root-write path, group, spool, prefix, hook file or journal drop-in failed its check; the prefix carries no payload marker (uninstall only); the payload does not match its own record (ADR-0029), which the install also checks on its snapshot once it is staged; a payload file entry is not a regular file, which the install refuses by `lstat` before it copies anything (install only); the installed `site.toml` is not this build's (ADR-0027, uninstall only); `install.sh`'s own dry run refused (`--system --dry-run` only, and it ends the preview before the other checks); `install.sh`'s own uninstall dry run refused on a hook file (`--uninstall --dry-run` only, issue #219), which the writing helper would refuse only after the units are removed; or a check could not be made with privilege. The install's dry run makes the payload check even when an earlier check refused, and reports both. |
 | 7 | `--system`, `--uninstall` | the units-down check | the timer or service could not be confirmed inactive, or the timer is still enabled, after both were told to stop. Nothing under the prefix was touched. The uninstall reaches this only once its teardown helper has passed its check; with a bad helper it exits 5 before stopping anything. |
 | 8 | `--uninstall` | the teardown | the units were removed, but `install.sh --uninstall` exited non-zero (8 when it left a hook file untouched because an opening marker in it is not closed, issue #218), or removing a unit file or the journal drop-in, `systemctl daemon-reload`, or a journal revoke failed |
 | 9 | `--system` | the ownership check after `install.sh` | the hook blocks and the shim farm are in place, no unit was written and the timer stays disabled |
@@ -1067,6 +1067,67 @@ remove the prefix: the payload stays under it. The
 `[install].spool_dir` are records; read its output for what it left, and
 copy the trail somewhere before removing it if the evidence is still
 wanted.
+
+The uninstall's dry run also lists every hook file the build knows,
+enabled or not, with what the teardown would do to it and why
+(issue #219). The block is stripped. The fish drop-in is removed, unless a
+directory sits at its path: the teardown's `rm -f` cannot remove one, so
+the list says `FAIL` (issue #240). A file with an unclosed opening marker is
+left untouched, and the real run ends 8. A file the uninstall would refuse
+is marked `refuse`, with a `NOTE` giving the reason, and is not read. The
+refusals are the block hooks' (bash, zsh): an enabled one's file that is a
+symlink or not a regular file, is not owned by root, is writable by group
+or other, or sits under a directory another account can write; and a
+disabled one's file under such a directory, or carrying a block while not
+owned by root or writable by group or other. For fish, on a path the
+caller can reach, only a disabled drop-in under such a directory is
+refused. An enabled drop-in there in any of those shapes other than a
+directory is predicted `remove the drop-in`, since the teardown removes it
+whole without reading it; a directory there is predicted `FAIL`, as above.
+Otherwise the file is left alone, because it is absent or carries no
+walk-blocker block; or, for a disabled hook, because it is a symlink or
+not a regular file, is a drop-in without the generated header, or is the
+file an enabled hook names. Under a directory the caller cannot search,
+any hook may be refused, the enabled drop-in included, as below. Through
+`deploy.py`, a hook file the caller can stat, enabled or not, that is a
+symlink or not a regular file, is not owned by root or is writable beyond
+its owner, or sits under a directory another account can write, is refused
+with exit 6 by its own checks before the list is made, so those cases
+appear in the list only when the helper is run on its own. A hook file
+under a directory the caller cannot search is out of those checks: they
+name it `NOT CHECKED`, and the helper's list decides, as below.
+
+The list comes from the deployed helper,
+`<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it
+has passed the same checks as for the real run. It decides through the same
+functions the teardown acts with, so for every path the caller can reach
+the preview and the teardown cannot disagree. A hook file the caller cannot
+read, or cannot reach because a
+directory above it is not searchable, is marked `NOT CHECKED` rather than
+guessed. Re-run as root to see it. For any hook file under such a
+directory, enabled or disabled, the fish drop-in included, the directories
+above it that the caller can see are checked first: one another account can
+write is a refusal whatever lies below it, so the file is marked `refuse`
+and the dry run exits 6, as the real `deploy.py --uninstall` refuses it.
+On such a path the helper predicts `deploy.py`, not its own writing run:
+run on its own, it may refuse a hidden path that its own `--uninstall`
+would clean (an absent file, a dangling symlink, a non-regular file, or an
+enabled drop-in, none of whose directories it checks). That errs on the
+safe side, and `deploy.py` refuses it with 6. Where the helper would refuse or
+fail on a hook file, the dry run exits 6: one that reaches the writing
+helper is refused only after `deploy.py` has removed the units, and the
+real run ends 8 with Layer 1 still in place. If the helper cannot be inspected as the
+caller, it is not run. If it cannot be run (exit 126 or 127), or answers
+with a status it does not define, as a helper deployed by a release before
+issue #219 does, the hook list is marked `NOT CHECKED` and the dry run
+carries on.
+
+`sh <prefix>/shim/install.sh --uninstall --dry-run` gives the same list on
+its own. It exits 3 where the uninstall would refuse or fail on a hook file,
+8 where it would leave a file untouched, and 0 otherwise. It makes no check
+that is not about a hook file, and says so: root, the helper's own
+`wrapped_names.sh`, which `deploy.py`'s dry run checks before running it,
+and whether systemd stops the units.
 
 `install.sh --uninstall` exists too, and takes Layer 1 off but removes
 less: the unit files, and the journal drop-in with its grant, stay until
