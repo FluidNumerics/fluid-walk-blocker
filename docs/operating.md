@@ -738,8 +738,8 @@ The reconcile's records have one more shape: `action` and `state` both
 about the node. It says a call in the relink's own code did not fit the
 record grammar: an action or state that could not go into JSON as it is, a
 marker other than `reasserted`, an `uncovered_mount` state other than
-`expensive`, `covered` or `unmounted`, a marker after any state but
-`expensive`, another action in the `uncovered_mount` form, or too few or
+`expensive`, `covered` or `unmounted`, a marker after any
+`uncovered_mount` state but `expensive`, another action in the `uncovered_mount` form, or too few or
 too many arguments (ADR-0033, issue #211). No shipped call makes one, so
 report it as a defect.
 

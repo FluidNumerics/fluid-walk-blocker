@@ -1409,12 +1409,13 @@ sg_report() {
     #
     # Each form is checked against the grammar above, and every call outside
     # it is a caller bug too (issue #211): a long-form state other than
-    # `expensive`, `covered` or `unmounted`; a marker after any state but
-    # `expensive`, since only that one is re-asserted (ADR-0030); six or more
-    # arguments, which used to be read as the short form with the rest
-    # ignored; and fewer than two, which used to abort the caller under
-    # `set -u` on the unset `$2` instead of reporting. The missing arguments
-    # read as empty, so no path reads an unset one.
+    # `expensive`, `covered` or `unmounted`; a long-form marker after any
+    # state but `expensive`, the only `uncovered_mount` state re-asserted
+    # (ADR-0030); six or more arguments, which used to be read as the short
+    # form with the rest ignored; and fewer than two, which used to abort the
+    # caller under `set -u` on the unset `$2` instead of reporting. A missing
+    # action or state reads as empty, and the character check below refuses
+    # an empty one, so no path reads an unset argument.
     #
     # Every `caller-bug` record is at user.warning, whatever its form, so a
     # bug report always shows under `journalctl -p warning` (ADR-0033). The
@@ -1445,7 +1446,7 @@ sg_report() {
     _rep_extra=''
     _rep_prio=user.warning
     _rep_bug=0
-    if [ $# -lt 2 ] || [ $# -gt 5 ]; then
+    if [ $# -gt 5 ]; then
         _rep_bug=1
     fi
     # Set on every call: install.sh runs under `set -u`, so a marker left
