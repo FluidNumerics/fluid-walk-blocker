@@ -342,6 +342,61 @@ def test_files_from_stdin_scans_only_the_named_files(sandbox):
     assert r.stdout.strip() == "named.md:1: ipv4"
 
 
+def run_list(tree, terms, data, via):
+    """Run the gate over a --files-from list given as raw bytes, from a file
+    or from stdin. Bytes, not text: the test is about what the bytes say."""
+    args = [sys.executable, os.path.join(TOOLS, "check_no_site_literals.py"),
+            "--root", str(tree), "--terms", str(terms), "--quiet", "--files-from"]
+    if via == "file":
+        lst = tree.parent / "list"
+        lst.write_bytes(data)
+        return subprocess.run(args + [str(lst)], capture_output=True)
+    return subprocess.run(args + ["-"], input=data, capture_output=True)
+
+
+@pytest.mark.parametrize("data", [b"a.md\nb.md\n", b"a.md\r\nb.md\r\n", b"a.md\r\nb.md",
+                                  b"a.md\rb.md\r", b"a.md\0b.md\0", b"a.md\0b.md"],
+                         ids=["lf", "crlf", "crlf-unterminated", "bare-cr", "nul", "nul-unterminated"])
+def test_files_from_reads_the_same_names_from_a_file_and_from_stdin(sandbox, data):
+    # Issue #216: stdin kept "\r" on every name of a CRLF list, so the same
+    # list named two files read from a file and two missing paths from stdin.
+    # Both sources must now read both files and say the same thing about them.
+    tree, terms = sandbox
+    (tree / "a.md").write_text("10.0.0.1\n", encoding="utf-8")
+    (tree / "b.md").write_text("10.0.0.2\n", encoding="utf-8")
+    (tree / "c.md").write_text("10.0.0.3\n", encoding="utf-8")
+    by_file = run_list(tree, terms, data, "file")
+    by_stdin = run_list(tree, terms, data, "stdin")
+    for r in (by_file, by_stdin):
+        assert r.returncode == gate.EXIT_FINDINGS, r.stderr
+        assert r.stdout.decode().splitlines() == ["a.md:1: ipv4", "b.md:1: ipv4"]
+        assert r.stderr.decode().startswith("2 file(s) under ")
+    assert (by_file.returncode, by_file.stdout, by_file.stderr) == \
+        (by_stdin.returncode, by_stdin.stdout, by_stdin.stderr)
+
+
+@pytest.mark.parametrize("via", ["file", "stdin"])
+def test_a_nul_separated_list_keeps_cr_and_lf_inside_a_name(sandbox, via):
+    # The pre-commit hook's `git diff -z` list is exact: a name may contain
+    # "\r" or "\n", and splitting there would turn one real file into two
+    # names that do not exist.
+    tree, terms = sandbox
+    (tree / "cr\rname.md").write_text("10.0.0.1\n", encoding="utf-8")
+    (tree / "lf\nname.md").write_text("10.0.0.2\n", encoding="utf-8")
+    r = run_list(tree, terms, b"cr\rname.md\0lf\nname.md\0", via)
+    assert r.returncode == gate.EXIT_FINDINGS, r.stderr
+    assert r.stderr.decode().startswith("2 file(s) under ")
+
+
+def test_parse_names_splits_one_way_per_list():
+    assert gate.parse_names(b"") == []
+    assert gate.parse_names(b"a\r\nb\rc\n\nd") == ["a", "b", "c", "d"]
+    # Any NUL makes the whole list NUL-separated, and nothing else splits it.
+    assert gate.parse_names(b"a\r\nb\0c\rd\0") == ["a\r\nb", "c\rd"]
+    # A name that is not UTF-8 keeps its own bytes.
+    assert os.fsencode(gate.parse_names(b"\xff.md\n")[0]) == b"\xff.md"
+
+
 EXEMPLARS = [
     ("ipv4", "connect to 10.0.0.1 now"),
     ("uid-literal", "process uid=12345 ran"),
