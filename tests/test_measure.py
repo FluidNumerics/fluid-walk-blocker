@@ -973,6 +973,10 @@ def test_an_allowance_at_or_over_the_cap_is_refused(
     assert r.returncode == 2, r.stdout + r.stderr
     assert "measure.sh: %s must be below 999, not '%s'." % (name, allowance) \
         in r.stderr.splitlines(), r.stderr
+    # An operator who used a huge value to switch drift off is told what to
+    # set instead; unsetting it only restores the default.
+    assert "  The loosest value accepted is just below it, e.g. 998.9; a" \
+        in r.stderr.splitlines(), r.stderr
     assert "ms/call" not in r.stdout, "it measured something first"
 
 

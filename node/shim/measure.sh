@@ -247,6 +247,8 @@ require_below_cap() {
         echo "  The percentage it is compared to stops at $PCT_CAP, which also" >&2
         echo "  stands for a reading that measured nothing, so this allowance" >&2
         echo "  would keep that pair. Refused here so it cannot." >&2
+        echo "  The loosest value accepted is just below it, e.g. 998.9; a" >&2
+        echo "  negative one discards every pair." >&2
         exit 2
     fi
 }
