@@ -3874,6 +3874,28 @@ def test_a_call_outside_the_grammar_is_a_caller_bug(tmp_path, shell, args):
 
 
 @pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("args", [
+    ("expensive",),
+    ("expensive", "reasserted"),
+    ("covered",),
+    ("unmounted",),
+    ("archive",),
+    ("archive", "reasserted"),
+], ids=lambda a: "-".join(a))
+def test_a_short_form_uncovered_mount_call_is_a_caller_bug(tmp_path, shell,
+                                                           args):
+    """Issue #234, the converse of issue #189: `uncovered_mount` takes the
+    long form alone, so a two- or three-argument call is a caller bug at
+    warning. Mutation: drop the check, and each writes an
+    `uncovered_mount` record with no `mount` or `fstype`."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, "uncovered_mount", *args,
+                                    shell=shell)
+    assert record == CALLER_BUG, (args, record)
+    assert prio == "user.warning", (args, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
 @pytest.mark.parametrize("state,prio", [
     ("unwrapped-1", "user.warning"),
     ("unknown", "user.err"),
