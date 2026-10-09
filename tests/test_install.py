@@ -4314,3 +4314,31 @@ def test_a_root_uninstall_preview_runs_no_writer_and_changes_no_file(tmp_path):
         assert (path.read_bytes(),
                 os.stat(str(path)).st_mtime_ns) == before[path]
     assert os.path.islink(str(layout.bin / "find"))
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_the_uninstall_preview_exits_3_over_an_untrusted_directory(
+        tmp_path, enabled):
+    """The chain refusal's note sets the flag too: a hook file whose
+    directory another account owns is refused by the writing run, enabled
+    (through require_plain_hook_file()) or disabled and carrying a block
+    (directly), so the preview exits 3, not 0 over a NOTE."""
+    zdir = tmp_path / "zdir"
+    zdir.mkdir()
+    layout = Layout(tmp_path, zshenv=zdir / "zshenv")
+    layout.zshenv.write_text(PREVIEW_SHAPES["block"])
+    stat_body = stat_stub_uid_for(str(zdir), "1000 755")
+    overrides = {"hooks.zsh.enabled": enabled}
+    preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                  fake_uid=0, layout=layout,
+                                  stat_body=stat_body, **overrides)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 3, out
+    assert "%s is owned by uid 1000, not root" % zdir in preview.stdout, out
+    assert "so --uninstall will refuse" in preview.stdout, out
+
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout, stat_body=stat_body,
+                                 **overrides)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert layout.zshenv.read_text() == PREVIEW_SHAPES["block"]

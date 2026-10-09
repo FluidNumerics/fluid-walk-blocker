@@ -1076,7 +1076,9 @@ unclosed opening marker is left untouched, and the real run ends 8. Or the
 file is left alone, because it is absent, carries no walk-blocker block, or
 is not a regular file; or, for a disabled hook, because it is a symlink, is
 a drop-in without the generated header, or is the file an enabled hook
-names. The list comes from the deployed helper,
+names. Through `deploy.py`, a symlinked or non-regular hook file, enabled or
+not, is refused with exit 6 by its own checks before the list is made, so
+those two reasons appear only when the helper is run on its own. The list comes from the deployed helper,
 `<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it
 has passed the same checks as for the real run. It decides through the same
 functions the teardown acts with, so the preview and the teardown cannot

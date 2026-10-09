@@ -148,8 +148,10 @@ if [ "$WILL_WRITE" -eq 0 ] && [ "$MODE" = relink ]; then
     exit 64
 fi
 # Set by a preview's note in place of a refusal (require_trusted_chain(),
-# require_plain_hook_file(), require_plain_dropin()), so the uninstall's dry
-# run can exit 3 where the writing run would refuse.
+# require_plain_hook_file()), so the uninstall's dry run can exit 3 where the
+# writing run would refuse. Not by require_plain_dropin(): the uninstall
+# never calls it -- it removes the drop-in, link or not -- and the --system
+# dry run reads its notes, not this flag.
 SG_WOULD_REFUSE=0
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -690,7 +692,6 @@ require_plain_dropin() {
             echo "install.sh: refusing $3 $1: it is $_dbad." >&2
             exit 3
         fi
-        SG_WOULD_REFUSE=1
         echo "# NOTE: $3 $1 is $_dbad, so --$MODE will refuse."
         echo
     fi
