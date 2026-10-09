@@ -3,6 +3,7 @@
 **Status:** accepted, 2026-09-18
 The Decision's paragraph on where superseded wording moves, with the Consequences' count of the narrowings, was amended when issue #139 was decided: an issue's decision may now amend an accepted record without a record of its own. The wording it replaced is recorded under "Superseded wording" below.
 The Decision's paragraph licensing edits to accepted records was amended when issue #199 was decided: the text under "Superseded wording" that says what holds instead is live, and is corrected in place with a Status note, moving nothing. The wording it replaced is recorded under "Superseded wording" below.
+The Decision's paragraph on edits that only add text, with the Consequences bullet on them, was added when issue #220 was decided: such an edit takes a Status note and moves nothing. Nothing moved.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -111,6 +112,14 @@ reads that line, not the edit, so review alone catches a correction made
 without one, or with one the test cannot read: worded without "corrected", or
 placed outside the Status block.
 
+An edit that only adds text to a record's `## Decision` or `## Consequences`
+— a new sentence or bullet, with nothing in the record replaced — moves
+nothing either, because nothing is superseded. It is still an edit to an
+accepted record, so the Status block gains one line naming what was added, the
+issue or pull request it came from, and that nothing moved. That line says
+neither "was amended when issue #N was decided", which promises moved wording,
+nor "corrected", which is reserved for the note above.
+
 ## Consequences
 
 - **ADR-0018 rejected "edit ADR-0015's Decision in place" and that ground still
@@ -143,6 +152,9 @@ placed outside the Status block.
   re-wraps a line or drops a backtick passes. Review is the only thing that
   catches it, which is why the move is specified as verbatim rather than as
   faithful.
+- **An addition is seen only by its note.** No test reads an added sentence:
+  the checks read moved wording and the notes that point at it. A Status note
+  left off an addition is caught by review alone.
 - **ADR-0005 carries the closing paragraph**, which `TEMPLATE.md` puts last and
   which is a citation target quoted verbatim elsewhere. The new section goes
   above it, and the closing paragraph stays the file's final words.
