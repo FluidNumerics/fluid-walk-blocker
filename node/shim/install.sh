@@ -1875,10 +1875,12 @@ uninstall_claim() {
     # functions), so a dry run can name every one and still exit 3.
     #
     # An enabled hook is walk-blocker's by this configuration's say-so, so
-    # it gets exactly the install's refusals. A disabled one has no such
-    # claim: the file at its path may never have been ours, so it has to
-    # prove it is -- a marked block in a shared file, the generated header on
-    # the drop-in -- and anything else there is left as it was found
+    # on a path this account can reach it gets exactly the install's
+    # refusals; on a hidden one a dry run predicts the writing deploy.py
+    # instead, the drop-in included (uninstall_hidden()). A disabled one has
+    # no such claim: the file at its path may never have been ours, so it
+    # has to prove it is -- a marked block in a shared file, the generated
+    # header on the drop-in -- and anything else there is left as it was found
     # (ADR-0008, issue #196).
     hook_select "$1"
     UC_WHY=''
