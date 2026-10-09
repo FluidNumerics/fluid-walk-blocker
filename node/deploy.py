@@ -4112,16 +4112,28 @@ def system_uninstall(args, env=None):
                         "uninstall leaves it",
                         "# untouched, completes the rest of the teardown, "
                         "and exits 8 (issue #218)."]
+            elif preview.returncode in (126, 127):
+                # The shell's numbers for a command it could not run, as
+                # run() reports a start failure (issue #194): no answer
+                # from the helper at all, so nothing about its release.
+                hook_preview = [
+                    "# hook preview: NOT CHECKED -- the deployed install.sh "
+                    "could not be run",
+                    "# (exit %d); its reason is on stderr above."
+                    % preview.returncode]
             else:
                 hook_preview = [
                     "# hook preview: NOT CHECKED -- the deployed install.sh "
                     "exited %d to" % preview.returncode,
-                    "# `--uninstall --dry-run`. One from a release before "
-                    "issue #219 has no",
-                    "# uninstall dry run; redeploy to see which hook files "
-                    "the uninstall changes."]
-                if preview.stderr:
-                    sys.stderr.write(preview.stderr)
+                    "# `--uninstall --dry-run`, a status that dry run does "
+                    "not define. One from",
+                    "# a release before issue #219 has no uninstall dry run "
+                    "and exits 64;",
+                    "# redeploy to see which hook files the uninstall "
+                    "changes."]
+            if hook_preview is not None and preview.returncode not in (
+                    0, UNINSTALL_PREVIEW_LEAVES) and preview.stderr:
+                sys.stderr.write(preview.stderr)
 
     run(["systemctl", "disable", "--now", TIMER_UNIT],
         check=False, dry_run=args.dry_run, env=env)

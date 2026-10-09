@@ -718,6 +718,30 @@ def test_a_helper_with_no_uninstall_dry_run_is_named_not_checked(
     assert "exited %d" % rc in out, out
 
 
+@pytest.mark.parametrize("rc", [126, 127])
+def test_a_helper_that_could_not_be_run_is_not_blamed_on_its_release(
+        tmp_path, monkeypatch, capsys, rc):
+    """126 and 127 are the shell's numbers for a command it could not run
+    (issue #194), not an answer from an older helper; the NOT CHECKED text
+    says which, and relays the reason."""
+    monkeypatch.setattr(deploy, "_is_root", lambda: False)
+    args = _args(tmp_path, dry_run=True)
+    pass_uninstall_checks(monkeypatch, args.prefix)
+
+    def fake_run(cmd, check=True, capture=True, dry_run=False, env=None):
+        if dry_run:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, rc, "", "sh: cannot run\n")
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.system_uninstall(args) == 0
+    captured = capsys.readouterr()
+    assert "hook preview: NOT CHECKED" in captured.out, captured
+    assert "could not be run" in captured.out, captured
+    assert "(exit %d)" % rc in captured.out, captured
+    assert "release before issue #219" not in captured.out, captured
+    assert "sh: cannot run" in captured.err, captured
+
 @pytest.mark.skipif(os.getuid() == 0, reason="root is not denied a stat")
 def test_a_helper_this_account_cannot_inspect_is_not_run(
         tmp_path, monkeypatch, capsys):

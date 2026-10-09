@@ -4384,3 +4384,65 @@ def test_the_uninstall_preview_names_what_it_does_not_check(tmp_path):
                                  layout=layout, stat_body=stat_body)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "wrapped_names.sh" in result.stderr
+
+
+@pytest.mark.parametrize("hook, shape", [("bash", "symlink"),
+                                         ("zsh", "directory")])
+def test_a_by_hand_uninstall_preview_lists_every_hook_past_a_refused_file(
+        tmp_path, hook, shape):
+    """An enabled block-style hook file that is a symlink or not a regular
+    file is refused by the writing run. The dry run notes it, as it notes
+    an owner or mode refusal, and carries on: every hook is listed, the
+    "not checked" line is printed, and the exit is the refusal's 3."""
+    layout = Layout(tmp_path)
+    path = _hook_path(layout, hook)
+    if shape == "symlink":
+        target = tmp_path / "target"
+        target.write_text(PREVIEW_SHAPES["block"])
+        os.symlink(str(target), str(path))
+    else:
+        path.mkdir()
+    preview, layout = run_install(tmp_path, ["--uninstall", "--dry-run"],
+                                  fake_uid=0, layout=layout)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 3, out
+    said = _preview_lines(preview.stdout)
+    assert set(said) == {"hooks.bash.file", "hooks.zsh.file",
+                         "hooks.fish.file"}, out
+    assert said["hooks.%s.file" % hook].startswith("refuse, exit 3"), out
+    noted = "a symlink" if shape == "symlink" else "not a regular file"
+    assert ("NOTE: hooks.%s.file %s is %s, so --uninstall will refuse"
+            % (hook, path, noted)) in preview.stdout, out
+    assert "Not checked here" in preview.stdout, out
+    assert preview.stderr == "", out
+
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout)
+    assert result.returncode == 3, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root reads every file")
+@pytest.mark.parametrize("enabled", [True, False])
+def test_the_uninstall_preview_does_not_read_under_an_untrusted_directory(
+        tmp_path, enabled):
+    """Under a directory another account can write, a regular file can be
+    swapped for a FIFO between the type test and the read, which would hang
+    the dry run. The writing run refuses there before reading, so the dry
+    run stops at its note too. Observed through a file this account cannot
+    read: a read attempt would say NOT CHECKED, not refuse."""
+    zdir = tmp_path / "zdir"
+    zdir.mkdir()
+    layout = Layout(tmp_path, zshenv=zdir / "zshenv")
+    layout.zshenv.write_text(PREVIEW_SHAPES["block"])
+    os.chmod(str(layout.zshenv), 0)
+    try:
+        preview, layout = run_install(
+            tmp_path, ["--uninstall", "--dry-run"], fake_uid=None,
+            layout=layout, stat_body=stat_stub_uid_for(str(zdir), "1000 755"),
+            **{"hooks.zsh.enabled": enabled})
+    finally:
+        os.chmod(str(layout.zshenv), 0o644)
+    out = preview.stdout + preview.stderr
+    assert preview.returncode == 3, out
+    line = _preview_lines(preview.stdout)["hooks.zsh.file"]
+    assert line.startswith("refuse, exit 3"), out

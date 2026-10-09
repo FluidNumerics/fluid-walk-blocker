@@ -1070,36 +1070,42 @@ wanted.
 
 The uninstall's dry run also lists every hook file the build knows,
 enabled or not, with what the teardown would do to it and why
-(issue #219). There are four
-outcomes. The block is stripped. The fish drop-in is removed. A file with an
-unclosed opening marker is left untouched, and the real run ends 8. Or the
-file is left alone, because it is absent, carries no walk-blocker block, or
-is not a regular file; or, for a disabled hook, because it is a symlink, is
-a drop-in without the generated header, or is the file an enabled hook
-names. Through `deploy.py`, a symlinked or non-regular hook file, enabled or
-not, is refused with exit 6 by its own checks before the list is made, so
-those two reasons appear only when the helper is run on its own. The list comes from the deployed helper,
+(issue #219). The block is stripped. The fish drop-in is removed, unless a
+directory sits at its path: the teardown's `rm -f` cannot remove one, so
+the list says `FAIL` (issue #240). A file with an unclosed opening marker is
+left untouched, and the real run ends 8. A file the uninstall would refuse,
+because it is a symlink or not a regular file, is not owned by root, is
+writable by group or other, or sits under a directory another account can
+write, is marked `refuse`, with a `NOTE` giving the reason, and is not read.
+Otherwise the file is left alone, because it is absent or carries no
+walk-blocker block; or, for a disabled hook, because it is a symlink or not
+a regular file, is a drop-in without the generated header, or is the file
+an enabled hook names. Through `deploy.py`, a symlinked or non-regular hook
+file, and one not owned by root or writable beyond its owner, is refused
+with exit 6 by its own checks before the list is made, so those cases
+appear in the list only when the helper is run on its own.
+
+The list comes from the deployed helper,
 `<prefix>/shim/install.sh --uninstall --dry-run`, run as the caller once it
 has passed the same checks as for the real run. It decides through the same
 functions the teardown acts with, so the preview and the teardown cannot
 disagree. A hook file the caller cannot read, or cannot reach because a
 directory above it is not searchable, is marked `NOT CHECKED` rather than
-guessed. Re-run as root to see it. Where the helper would refuse a hook file,
-the dry run exits 6. `deploy.py`'s own checks on the hook files normally
-refuse such a file first; one that reaches the writing helper is refused
-only after `deploy.py` has removed the units, and the real run ends 8 with
-Layer 1 still in place.
-If the helper cannot be inspected as the caller, it is not run. A helper
-deployed by a release before issue #219 has no uninstall dry run. In both
-cases the hook list is marked `NOT CHECKED`, and the dry run carries on.
+guessed. Re-run as root to see it. Where the helper would refuse or fail on
+a hook file, the dry run exits 6: one that reaches the writing helper is
+refused only after `deploy.py` has removed the units, and the real run ends
+8 with Layer 1 still in place. If the helper cannot be inspected as the
+caller, it is not run. If it cannot be run (exit 126 or 127), or answers
+with a status it does not define, as a helper deployed by a release before
+issue #219 does, the hook list is marked `NOT CHECKED` and the dry run
+carries on.
+
 `sh <prefix>/shim/install.sh --uninstall --dry-run` gives the same list on
 its own. It exits 3 where the uninstall would refuse or fail on a hook file,
-8 where it would leave a file untouched, and 0 otherwise. A failure it
-predicts is an enabled drop-in path that is a directory, which the
-teardown's `rm -f` cannot remove (issue #240). It makes no check that is not
-about a hook file, and says so: root, the helper's own `wrapped_names.sh`,
-which `deploy.py`'s dry run checks before running it, and whether systemd
-stops the units.
+8 where it would leave a file untouched, and 0 otherwise. It makes no check
+that is not about a hook file, and says so: root, the helper's own
+`wrapped_names.sh`, which `deploy.py`'s dry run checks before running it,
+and whether systemd stops the units.
 
 `install.sh --uninstall` exists too, and takes Layer 1 off but removes
 less: the unit files, and the journal drop-in with its grant, stay until

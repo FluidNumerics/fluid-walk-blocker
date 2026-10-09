@@ -617,15 +617,35 @@ require_plain_hook_file() {
     #
     # -L before -e: a dangling link fails -e, and the write would then create
     # a regular file at the link's TARGET rather than at this path.
+    #
+    # The uninstall's dry run notes these two, as it does the leaf checks
+    # below, so its listing reaches every hook and its "not checked" line
+    # (issue #219); nothing after the note is checked for this file, since
+    # every later check would stat or read through what is not a plain file.
+    # The --system dry run still refuses here, as it always has.
+    _ptype=''
     if [ -L "$1" ]; then
-        echo "install.sh: refusing $3 $1: it is a symlink." >&2
-        echo "  This file is read and rewritten 0644, which would publish the" >&2
-        echo "  link target's contents to every user on the node." >&2
-        exit 3
+        _ptype="a symlink"
+        if [ "$2" -eq 1 ] || [ "$MODE" != uninstall ]; then
+            echo "install.sh: refusing $3 $1: it is a symlink." >&2
+            echo "  This file is read and rewritten 0644, which would publish the" >&2
+            echo "  link target's contents to every user on the node." >&2
+            exit 3
+        fi
+    elif [ -e "$1" ] && [ ! -f "$1" ]; then
+        _ptype="not a regular file"
+        if [ "$2" -eq 1 ] || [ "$MODE" != uninstall ]; then
+            echo "install.sh: refusing $3 $1: not a regular file." >&2
+            exit 3
+        fi
     fi
-    if [ -e "$1" ] && [ ! -f "$1" ]; then
-        echo "install.sh: refusing $3 $1: not a regular file." >&2
-        exit 3
+    if [ -n "$_ptype" ]; then
+        SG_WOULD_REFUSE=1
+        echo "# NOTE: $3 $1 is $_ptype, so --uninstall will refuse."
+        echo "# The uninstall reads this file and rewrites it 0644, so it"
+        echo "# refuses a link or a special file rather than read through it."
+        echo
+        return 0
     fi
     # The LEAF's own ownership and mode, not just its type and its ancestors.
     # prepend_block PRESERVES the existing contents, and the verify functions
@@ -1778,6 +1798,31 @@ uninstall_enabled_files() {
     done
 }
 
+uninstall_noted() {
+    # uninstall_noted REQUIRE_FN ARGS... -- run one of the require_*
+    # functions and set UC_NOTED to 1 when it noted a refusal for THIS call
+    # (a dry run's note in place of exit 3), else 0. SG_WOULD_REFUSE keeps
+    # every earlier note. Always returns 0, and is never called as an `if`
+    # condition, which would switch off `set -e` inside the function it
+    # runs; a writing run's refusal is that function's own `exit 3`.
+    _un_was=$SG_WOULD_REFUSE
+    SG_WOULD_REFUSE=0
+    "$@"
+    UC_NOTED=$SG_WOULD_REFUSE
+    [ "$_un_was" -eq 0 ] || SG_WOULD_REFUSE=1
+    return 0
+}
+
+uninstall_refused() {
+    # True, with UC_CLAIM and UC_WHY set, when the last uninstall_noted()
+    # noted a refusal. Used as `uninstall_refused && return 0`, an AND-OR
+    # list, which `set -e` does not end the script on when it is false.
+    [ "$UC_NOTED" -eq 1 ] || return 1
+    UC_CLAIM=refuse
+    UC_WHY="the uninstall refuses this file: see the NOTE above"
+    return 0
+}
+
 uninstall_claim() {
     # uninstall_claim SHELL WILL_WRITE -- does `--uninstall` clean this
     # hook's file at all? Run for every hook before the units go down, so a
@@ -1787,6 +1832,12 @@ uninstall_claim() {
     #             no       nothing to clean, or not walk-blocker's to clean
     #             unknown  a dry run by an account that could not read what
     #                      decides it -- said, never guessed
+    #             refuse   a dry run only: the writing run refuses this file,
+    #                      and the note above says why. Nothing after the note
+    #                      is checked or read for it: a file under a chain
+    #                      another account can write could be swapped for a
+    #                      FIFO before the read, and a link or a special file
+    #                      is not read through at all
     #   UC_WHY    why, for every answer but an enabled hook's `yes`
     #   UC_SAY    1 when the writing run prints UC_WHY as a "left in place"
     #             line
@@ -1806,9 +1857,11 @@ uninstall_claim() {
     UC_SAY=0
     case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
         *" $1 "*)
+            UC_NOTED=0
             if [ "$HK_KIND" = block ]; then
-                require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+                uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
             fi
+            uninstall_refused && return 0
             UC_CLAIM=yes
             return 0
             ;;
@@ -1847,7 +1900,8 @@ $HK_FILE
     fi
     # Read only once nobody else can swap it for a FIFO between this check
     # and the read.
-    require_trusted_chain "$(dirname "$HK_FILE")" "Another user could replace that file between this check and the read." "$2"
+    uninstall_noted require_trusted_chain "$(dirname "$HK_FILE")" "Another user could replace that file between this check and the read." "$2"
+    uninstall_refused && return 0
     # Root reads every regular file, so only an ordinary account's dry run
     # can stop here; the writing run is root's alone.
     if [ "$2" -eq 0 ] && [ ! -r "$HK_FILE" ]; then
@@ -1865,7 +1919,8 @@ $HK_FILE
                 UC_WHY="hooks.$1 is disabled, and the file carries no walk-blocker block"
                 return 0
             fi
-            require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+            uninstall_noted require_plain_hook_file "$HK_FILE" "$2" "$HK_KEY"
+            uninstall_refused && return 0
             ;;
         dropin)
             _dh_first=''
@@ -1971,6 +2026,7 @@ uninstall_preview() {
         case $UC_CLAIM in
             no) echo "$_pv_head leave alone: $UC_WHY" ;;
             unknown) echo "$_pv_head NOT CHECKED: $UC_WHY" ;;
+            refuse) echo "$_pv_head refuse, exit 3: $UC_WHY" ;;
             yes)
                 uninstall_outcome "$_uh" 0
                 case $UO_ACT in
