@@ -208,6 +208,70 @@ def test_a_partial_hook_table_is_filled_but_needs_its_file():
     assert config.from_dict(data).lookup("hooks.bash.gate") == "required"
 
 
+def _site_with_hook_files(tmp_path, **files):
+    data = load_example_dict()
+    for shell, path in files.items():
+        data["hooks"][shell]["file"] = path
+    site_file = tmp_path / "site.toml"
+    site_file.write_text(dump_toml(data), encoding="utf-8")
+    return site_file
+
+
+def test_the_fish_drop_in_may_not_share_the_bash_rc_file(tmp_path, capsys):
+    # Issue #224's reproduction: the drop-in is written whole and removed with
+    # `rm -f`, so sharing a path would replace, then delete, the bash rc file.
+    site_file = _site_with_hook_files(tmp_path, fish="/etc/bash.bashrc")
+    with pytest.raises(config.ConfigError) as exc:
+        config.load_site(str(site_file))
+    assert exc.value.path == "hooks.fish.file"
+    assert "hooks.bash.file" in exc.value.message
+    assert "/etc/bash.bashrc" in exc.value.message
+
+    assert cli.main(["validate", "--site", str(site_file)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "hooks.fish.file" in captured.err
+    assert "hooks.bash.file" in captured.err
+
+
+def test_two_block_hooks_may_not_share_a_file(tmp_path):
+    site_file = _site_with_hook_files(tmp_path, zsh="/etc/bash.bashrc")
+    with pytest.raises(config.ConfigError) as exc:
+        config.load_site(str(site_file))
+    assert exc.value.path == "hooks.zsh.file"
+    assert "hooks.bash.file" in exc.value.message
+
+
+def test_a_disabled_hook_may_not_share_a_file_either():
+    # The uninstall visits every hook file the build knows, enabled or not.
+    data = load_example_dict()
+    data["hooks"]["fish"] = {"enabled": False, "file": "/etc/zsh/zshenv"}
+    with pytest.raises(config.ConfigError) as exc:
+        config.from_dict(data)
+    assert exc.value.path == "hooks.fish.file"
+    assert "hooks.zsh.file" in exc.value.message
+
+
+def test_a_non_canonical_spelling_of_a_shared_file_is_refused_too():
+    # Equality is lexical, and every hook file is held to canonical form
+    # first, so an alias spelled with `//` or `.` cannot slip past the
+    # duplicate check by not being byte-equal.
+    for alias in ("/etc//bash.bashrc", "/etc/./bash.bashrc"):
+        data = load_example_dict()
+        data["hooks"]["zsh"]["file"] = alias
+        with pytest.raises((config.ConfigError, jsonschema.ValidationError)):
+            config.from_dict(data)
+
+
+def test_distinct_hook_files_pass(tmp_path):
+    site_file = _site_with_hook_files(
+        tmp_path, bash="/etc/bashrc", zsh="/etc/zshenv",
+        fish="/etc/fish/conf.d/walk-blocker.fish")
+    site = config.load_site(str(site_file))
+    assert sorted(site.data["hooks"][s]["file"] for s in ("bash", "zsh", "fish")) \
+        == ["/etc/bashrc", "/etc/fish/conf.d/walk-blocker.fish", "/etc/zshenv"]
+
+
 def test_policy_matches_the_rule_table_signature():
     search_rules = pytest.importorskip("walk_blocker.search_rules")
     policy = config.load_site(EXAMPLE).policy()

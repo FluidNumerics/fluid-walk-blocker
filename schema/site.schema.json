@@ -260,7 +260,7 @@
     "hooks": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One table per shell whose startup file gets the hook block. Which shells appear, and which are `required`, is a census result at the site (ADR-0008).",
+      "description": "One table per shell whose startup file gets the hook block. Which shells appear, and which are `required`, is a census result at the site (ADR-0008). No two tables may name the same `file`, enabled or not; that is checked semantically.",
       "properties": {
         "bash": {
           "type": "object",
