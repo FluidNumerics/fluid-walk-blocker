@@ -50,7 +50,7 @@
     "shim/guard.sh": "7a75230a7e887d6584fa963a1a69e87510b18c37a14ca9278b37b4286e8a770a",
     "shim/install.sh": "e58a828c0e534f1d4baf6c0df354127ad46a80e7dc3070f09c5c1f1f8171dc9c",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
-    "shim/measure.sh": "2553985b5ae1e9877b68a84bce562a3d7d7cba9b96ee70d06ad034331b7448eb",
+    "shim/measure.sh": "151d975305aa8e25c93a95ab8d0bfa702bfaaeeec628b4779c5fa9c75df81af0",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "b8a9380cc8894977fc6f0573bcf80cd50ff6e1d7d6fdd1a28a5df9c0173c7644",
     "survey.py": "a94fe88a991d71ced3972d91f9257524b868bdb613a4f3ae8f6209df104648ec",

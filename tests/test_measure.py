@@ -977,6 +977,13 @@ def test_an_allowance_at_or_over_the_cap_is_refused(
     # set instead; unsetting it only restores the default.
     assert "  The loosest value accepted is just below it, e.g. 998.9; a" \
         in r.stderr.splitlines(), r.stderr
+    # Single-guard mode has no pairs: there a negative drift allowance
+    # refuses the run, and the floor allowance is never read.
+    tail = {"DRIFT_MAX_PCT": "discards every pair, or refuses a single-guard"
+                             " run.",
+            "FLOOR_MAX_PCT": "discards every pair; single-guard mode does not"
+                             " read it."}[name]
+    assert "  negative one " + tail in r.stderr.splitlines(), r.stderr
     assert "ms/call" not in r.stdout, "it measured something first"
 
 

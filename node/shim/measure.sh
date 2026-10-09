@@ -214,8 +214,10 @@ require_count() {
 require_threshold() {
     [ -n "$2" ] || return 0
     # One leading `-` is allowed, and deliberately: a negative threshold means
-    # "discard everything" here, which is how the drift and floor gates are
-    # driven in tests and how an operator forces a gate on. It fires always,
+    # "discard everything" here -- every pair in ratio mode; single-guard mode
+    # has no pairs, so its drift check refuses the run instead -- which is how
+    # the drift and floor gates are driven in tests and how an operator forces
+    # a gate on. It fires always,
     # which is noisy rather than silent, and noisy gets fixed. A bare `-` is
     # still refused, because `${2#-}` leaves it empty.
     _rt=${2#-}
@@ -239,7 +241,9 @@ PCT_CAP=999
 # measured nothing -- so the gate would be on and keeping the pairs it exists
 # to throw away. Refused, not clamped: an operator who asked for 1000 believes
 # something this script cannot honour. A negative allowance stays allowed; it
-# is the documented "discard everything".
+# is the documented "discard everything" -- every pair in ratio mode, and in
+# single-guard mode, where there are no pairs, a drift refusal of the run.
+# Single-guard mode never reads FLOOR_MAX_PCT, so there it does nothing.
 require_below_cap() {
     [ -n "$2" ] || return 0
     if awk -v v="$2" -v c="$PCT_CAP" 'BEGIN{exit !(v+0 >= c)}'; then
@@ -248,7 +252,11 @@ require_below_cap() {
         echo "  stands for a reading that measured nothing, so this allowance" >&2
         echo "  would keep that pair. Refused here so it cannot." >&2
         echo "  The loosest value accepted is just below it, e.g. 998.9; a" >&2
-        echo "  negative one discards every pair." >&2
+        if [ "$1" = DRIFT_MAX_PCT ]; then
+            echo "  negative one discards every pair, or refuses a single-guard run." >&2
+        else
+            echo "  negative one discards every pair; single-guard mode does not read it." >&2
+        fi
         exit 2
     fi
 }
