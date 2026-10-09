@@ -3839,6 +3839,58 @@ def test_a_correct_short_form_call_is_unchanged(tmp_path, shell, action,
 
 
 @pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("args", [
+    # A fourth argument outside the long form's states.
+    ("uncovered_mount", "/archive", "nfs4", "unknown"),
+    ("uncovered_mount", "/archive", "nfs4", "reasserted"),
+    ("uncovered_mount", "/archive", "nfs4", "Expensive"),
+    # A marker after a state that is never re-asserted (ADR-0030).
+    ("uncovered_mount", "/archive", "nfs4", "covered", "reasserted"),
+    ("uncovered_mount", "/archive", "nfs4", "unmounted", "reasserted"),
+    ("uncovered_mount", "/archive", "nfs4", "unknown", "reasserted"),
+    # Six or more arguments: no longer read as the short form.
+    # A mount with no slash, so the short form's character check passes it.
+    ("uncovered_mount", "archive", "nfs4", "expensive", "reasserted", "x"),
+    ("coverage_change", "unknown", "reasserted", "a", "b", "c"),
+    ("hook_check", "present", "a", "b", "c", "d", "e"),
+    # Fewer than two: no longer an abort under `set -u`.
+    ("hook_check",),
+    ("uncovered_mount",),
+    (),
+], ids=lambda a: "-".join(a) or "none")
+def test_a_call_outside_the_grammar_is_a_caller_bug(tmp_path, shell, args):
+    """Issue #211, ADR-0033 as amended by issue #189: a long-form state
+    outside `expensive|covered|unmounted`, a marker after any state but
+    `expensive`, six or more arguments, and fewer than two are each a
+    caller bug at warning. The call returns 0 under `set -eu` and writes
+    exactly one record (the driver asserts both). Mutation: drop the count
+    check, and the six-argument calls log as their short form; read `$1`
+    and `$2` bare, and the short calls abort; drop the state check, and
+    the bad states log at notice."""
+    _need(shell)
+    prio, record = _drive_sg_report(tmp_path, *args, shell=shell)
+    assert record == CALLER_BUG, (args, record)
+    assert prio == "user.warning", (args, prio)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("state,prio", [
+    ("unwrapped-1", "user.warning"),
+    ("unknown", "user.err"),
+])
+def test_a_correct_marked_short_form_call_is_unchanged(tmp_path, shell,
+                                                       state, prio):
+    """Issue #211 changes misuse only: a marked short-form call keeps its
+    record and its change record's priority (ADR-0033)."""
+    _need(shell)
+    got, record = _drive_sg_report(tmp_path, "coverage_change", state,
+                                   "reasserted", shell=shell)
+    assert record == {"layer": "shim", "action": "coverage_change",
+                      "state": state, "reasserted": True}, record
+    assert got == prio, (state, got)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
 def test_a_caller_bug_with_unknown_is_not_raised_to_err(tmp_path, shell):
     """A bad third argument makes a caller-bug record, and that keeps the
     warning: the raise is for the fact `unknown` reports, not for a call
