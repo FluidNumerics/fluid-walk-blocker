@@ -739,9 +739,10 @@ about the node. It says a call in the relink's own code did not fit the
 record grammar: an action or state that could not go into JSON as it is, a
 marker other than `reasserted`, an `uncovered_mount` state other than
 `expensive`, `covered` or `unmounted`, a marker after any
-`uncovered_mount` state but `expensive`, another action in the `uncovered_mount` form, or too few or
-too many arguments (ADR-0033, issue #211). No shipped call makes one, so
-report it as a defect.
+`uncovered_mount` state but `expensive`, another action in the
+`uncovered_mount` form, `uncovered_mount` in the short form, or too few or
+too many arguments (ADR-0033, issues #211 and #234). No shipped call makes
+one, so report it as a defect.
 
 Every record's `MESSAGE` is one JSON object, sent with `logger --size 8192`
 so `logger` does not cut it at its 1 KiB default. The fields a caller or the

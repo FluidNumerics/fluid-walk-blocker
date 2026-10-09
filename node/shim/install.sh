@@ -1405,7 +1405,9 @@ sg_report() {
     #
     # The long form is `uncovered_mount`'s alone: a four- or five-argument
     # call naming any other action is a caller bug (issue #189). It used to
-    # be accepted, and wrote a record no reader of that action expects.
+    # be accepted, and wrote a record no reader of that action expects. The
+    # converse holds as well: a two- or three-argument `uncovered_mount` call
+    # is a caller bug (issue #234).
     #
     # Each form is checked against the grammar above, and every call outside
     # it is a caller bug too (issue #211): a long-form state other than
@@ -1517,6 +1519,12 @@ sg_report() {
         # place where a repeating line goes to be ignored.
         _rep_prio=user.notice
         [ "$#" -eq 4 ] || _rep_extra=$_rep_extra$_rep_marker
+    elif [ "$_rep_action" = uncovered_mount ]; then
+        # And the converse: `uncovered_mount` takes the long form alone
+        # (issue #234). A short-form call has no mount and no fstype, and
+        # used to write that record at warning, a priority the action never
+        # otherwise has.
+        _rep_bug=1
     fi
     for _rep_arg in "$_rep_action" "$_rep_state"; do
         case $_rep_arg in
