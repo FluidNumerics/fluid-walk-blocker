@@ -2673,8 +2673,10 @@ LINKED_NAME=linked-names.state
 # The marker that dates PATH injection itself (ADR-0035): the one line
 # `injected <epoch>` -- wall-clock seconds, taken before the first hook is
 # written -- or `unknown`, where a hook was already on disk when this install
-# began and no marker had been kept. Written once, by --system only, and
-# removed by --uninstall, so it dates the CURRENT unbroken run of injection:
+# began and no marker had been kept. Written by --system only, kept while a
+# hook of ours stands, and removed by --uninstall, so it dates the CURRENT
+# unbroken run of injection; an install that finds no hook on disk replaces a
+# marker left from an ended run (an uninstall that could not reach the spool):
 # a hook file's own times move on every install (each write is a new inode)
 # and the prefix's birth predates the first hook. A relink never writes it.
 # Its NAME is relative, like the memories above: every write of it happens in
@@ -2698,11 +2700,12 @@ hook_on_disk() {
 }
 
 first_hook_seed() {
-    # first_hook_seed NAME LINE -- inside in_spool(): keep the marker an
-    # earlier install of this run wrote, or write LINE as a new inode
-    # renamed over whatever has the name (ADR-0025). A link or other
-    # non-file at the name is not a marker and is replaced.
-    if [ -f "./$1" ] && [ ! -L "./$1" ]; then
+    # first_hook_seed NAME LINE KEEP -- inside in_spool(): with KEEP 1 (a
+    # hook already stood), keep the marker an earlier install of this run
+    # wrote; otherwise write LINE as a new inode renamed over whatever has the
+    # name (ADR-0025). A link or other non-directory at the name is not a
+    # marker and is replaced; a directory is left, and no marker is written.
+    if [ "$3" -eq 1 ] && [ -f "./$1" ] && [ ! -L "./$1" ]; then
         return 0
     fi
     sg_spool_new "$1"
@@ -3091,22 +3094,20 @@ case $MODE in
             fi
             # Dated before the first write, so the marker is early by the
             # write and never late. Any hook already on disk makes the date
-            # unknowable here: an earlier install wrote it and kept no
-            # marker, and "now" would put the cutoff after sessions that
-            # were already covered (ADR-0035).
+            # unknowable here unless an earlier install kept a marker, and
+            # "now" would put the cutoff after sessions that were already
+            # covered (ADR-0035).
             _fh_line='unknown'
             _fh_when=$(date +%s 2>/dev/null) || _fh_when=''
             case $_fh_when in
                 ''|*[!0-9]*) _fh_when='' ;;
             esac
+            # A best-effort hook counts whether or not its shell is on this
+            # PATH: the hook on disk is the fact, and --uninstall strips it
+            # either way.
             _fh_prior=0
-            for _wh in $SG_HOOKS_REQUIRED; do
+            for _wh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
                 if hook_on_disk "$_wh"; then _fh_prior=1; fi
-            done
-            for _wh in $SG_HOOKS_BEST_EFFORT; do
-                if command -v "$_wh" >/dev/null 2>&1 && hook_on_disk "$_wh"; then
-                    _fh_prior=1
-                fi
             done
             if [ "$_fh_prior" -eq 0 ] && [ -n "$_fh_when" ]; then
                 _fh_line="injected $_fh_when"
@@ -3115,7 +3116,7 @@ case $MODE in
                 write_hook "$_wh"
             done
             if spool_fit "$SG_SPOOL_DIR"; then
-                in_spool first_hook_seed "$FIRST_HOOK_NAME" "$_fh_line" || :
+                in_spool first_hook_seed "$FIRST_HOOK_NAME" "$_fh_line" "$_fh_prior" || :
             fi
             # The timer notice on both ways out of a writing install: a
             # failed hook proof leaves Layer 1 half-written, and Layer 2's

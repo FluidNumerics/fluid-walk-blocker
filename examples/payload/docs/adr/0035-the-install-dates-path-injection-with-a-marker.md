@@ -5,8 +5,9 @@
 
 ## Context
 
-Layer 1 covers a shell only if the shell started after the hook was written
-(ADR-0001: "a session that started before the install"). A reader that wants
+Layer 1 covers a shell only if the shell started after the hook was written:
+`docs/operating.md` lists "a session that started before the install" among
+what goes around it, and ADR-0001 keeps Layer 1 advisory. A reader that wants
 the share of a node's processes that predate the injection needs the moment
 the first hook was written, and nothing on the node records it. Every
 nearby marker dates something else:
@@ -47,18 +48,22 @@ The alternatives for the marker itself:
 
 ## Decision
 
-`install.sh --system` writes `<spool>/first-hook.state`, one line, once:
+`install.sh --system` writes `<spool>/first-hook.state`, one line:
 `injected <epoch>`, where `<epoch>` is `date +%s` read before the first hook
 is written; or `unknown`, where any hook of ours was already on disk when
 the install began and no marker stood. It is a new inode renamed over the
 name, mode 0640, from the pinned spool, as ADR-0025 writes everything there.
-A marker that is a regular file is kept; a link or any other entry is
-replaced, never followed.
+A marker that is a regular file is kept while a hook of ours stands. With
+no hook on disk the run it dated has ended (an uninstall that could not reach
+the spool leaves it behind), so the install replaces it. A link or any other
+non-directory at the name is replaced, never followed; a directory there is
+left as it is, and no marker is written.
 
 `install.sh --relink` never writes it. `install.sh --uninstall` removes it,
 with its write-and-rename file, because the injection it dates has ended: a
 later install begins a new run and dates it anew. It is an installer-owned
-spool name, so `deploy.py` repairs and checks it like the rest.
+spool name: `deploy.py` repairs a regular file there and refuses a link,
+like the rest.
 
 ## Consequences
 
@@ -75,8 +80,10 @@ spool name, so `deploy.py` repairs and checks it like the rest.
   recorded, and it is the cost of refusing to guess.
 - `date +%s` joins the installer's coreutils (`docs/node-requirements.md`).
   An unreadable answer records `unknown` and does not fail the install.
-- Pinned by `tests/test_install.py` (first install, reinstall, install over
-  existing hooks, relink, uninstall, a planted link) and by
+- Pinned by `tests/test_install.py` (first install, the date read before
+  the hook writes, reinstall, install over existing hooks including a
+  best-effort shell's alone, a stale marker with no hook on disk, relink,
+  uninstall, a planted link, a planted directory) and by
   `tests/test_deploy.py` (the literal agrees across the two files).
 
 ## Re-measure when

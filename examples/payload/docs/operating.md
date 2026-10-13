@@ -372,9 +372,9 @@ account (ADR-0004):
   keeps `uncovered-mounts.state` there too, its memory of which mounts it has
   reported (ADR-0019), and `linked-names.state`, its memory of which wrapped
   names have been linked since the install, which the install seeds
-  (ADR-0031); the install also writes `first-hook.state` there once, the
-  time just before its first hook write, or `unknown` where hooks already
-  stood and no marker did (ADR-0035);
+  (ADR-0031); the install also writes `first-hook.state` there when a run
+  of injection begins, the time just before its first hook write, or
+  `unknown` where hooks already stood and no marker did (ADR-0035);
 - a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —

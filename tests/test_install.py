@@ -4581,7 +4581,6 @@ def _marker(layout):
 def test_a_first_install_writes_the_injection_marker(tmp_path, shell):
     """No hook on disk at the start: `injected <epoch>`, taken no later than
     the install and no earlier than the test began, mode 0640. Mutation:
-    take the date after the hook writes, and a slow install is dated late;
     drop the seed, and this fails."""
     import time
     before = int(time.time())
@@ -4654,3 +4653,71 @@ def test_the_marker_is_never_written_through_a_link(tmp_path, shell):
     assert _sentinel_state(sentinel) == before
     assert not (layout.spool / FIRST_HOOK).is_symlink()
     assert _marker(layout)[0].startswith("injected ")
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_marker_is_dated_before_the_first_hook_write(
+        tmp_path, shell, monkeypatch):
+    """A `date` that answers 1000 while the bash hook file has no block of
+    ours and 2000 once it has one: the marker must say 1000. Mutation: read
+    the date after the hook writes, and it says 2000."""
+    layout = H.Layout(tmp_path)
+    stub = tmp_path / "date-stub"
+    stub.write_text(
+        "#!/bin/sh\nif %s -qF '# >>> walk-blocker >>>' '%s' 2>/dev/null; "
+        "then echo 2000; else echo 1000; fi\n"
+        % (H._which("grep"), layout.bashrc))
+    stub.chmod(0o755)
+    real_which = H._which
+    monkeypatch.setattr(
+        H, "_which", lambda name: str(stub) if name == "date" else real_which(name))
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert _marker(layout) == ["injected 1000"], _marker(layout)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_best_effort_hook_alone_records_unknown(tmp_path, shell):
+    """Only the fish drop-in stands, from an install that kept no marker, and
+    fish is not on this install's PATH: the drop-in still puts the shim on
+    PATH wherever fish runs, so the marker says `unknown`. Mutation: drop the
+    best-effort shells from the prior-hook scan, or gate them on `command
+    -v`, and this fails."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    layout.bashrc.unlink()
+    layout.zshenv.unlink()
+    assert layout.fishconf.is_file()
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 fish_absent=True, shell=_sh(shell))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _marker(layout) == ["unknown"], _marker(layout)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_marker_with_no_hook_on_disk_is_replaced(tmp_path, shell):
+    """An uninstall that could not reach the spool strips the hooks and
+    leaves the marker. With no hook on disk the run it dated has ended, so
+    the next install dates its own. Mutation: keep any regular file at the
+    name, and `injected 1` survives."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).write_text("injected 1\n")
+    for hook in (layout.bashrc, layout.zshenv, layout.fishconf):
+        hook.unlink()
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    lines = _marker(layout)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+    assert lines != ["injected 1"], lines
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_directory_at_the_marker_name_is_left(tmp_path, shell):
+    """A directory at the name is not replaced and nothing is written into
+    it; the install still succeeds, and a reader finds no marker."""
+    layout = _stateful_layout(tmp_path)
+    H.stage_spool(layout)
+    (layout.spool / FIRST_HOOK).mkdir()
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert (layout.spool / FIRST_HOOK).is_dir()
+    assert os.listdir(str(layout.spool / FIRST_HOOK)) == []
+    assert not os.path.lexists(str(layout.spool / (FIRST_HOOK + ".new")))
