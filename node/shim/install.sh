@@ -2670,6 +2670,51 @@ uncovered_report() {
 # same literal as LINKED_NAME, and a test pins that they agree.
 LINKED_NAME=linked-names.state
 
+# The marker that dates PATH injection itself (ADR-0035): the one line
+# `injected <epoch>` -- wall-clock seconds, taken before the first hook is
+# written -- or `unknown`, where a hook was already on disk when this install
+# began and no marker had been kept. Written by --system only, kept while a
+# hook of ours stands, and removed by --uninstall, so it dates the CURRENT
+# unbroken run of injection; an install that finds no hook on disk replaces a
+# marker left from an ended run (an uninstall that could not reach the spool):
+# a hook file's own times move on every install (each write is a new inode)
+# and the prefix's birth predates the first hook. A relink never writes it.
+# Its NAME is relative, like the memories above: every write of it happens in
+# a working directory in_spool() pinned. deploy.py carries the same literal as
+# FIRST_HOOK_NAME, and a test pins that they agree.
+FIRST_HOOK_NAME=first-hook.state
+
+hook_on_disk() {
+    # hook_on_disk SHELL -- is walk-blocker's hook already in SHELL's file?
+    # A block counts by its BEGIN marker (matched or not: either way an
+    # earlier install wrote it); a drop-in by its file.
+    hook_select "$1"
+    case $HK_KIND in
+        block)
+            [ -f "$HK_FILE" ] || return 1
+            block_shape "$HK_FILE"
+            [ "$SG_BLOCK_SHAPE" != none ]
+            ;;
+        dropin) [ -f "$HK_FILE" ] ;;
+    esac
+}
+
+first_hook_seed() {
+    # first_hook_seed NAME LINE KEEP -- inside in_spool(): with KEEP 1 (a
+    # hook already stood), keep the marker an earlier install of this run
+    # wrote; otherwise write LINE as a new inode renamed over whatever has the
+    # name (ADR-0025). A link or other non-directory at the name is not a
+    # marker and is replaced; a directory is left, and no marker is written.
+    if [ "$3" -eq 1 ] && [ -f "./$1" ] && [ ! -L "./$1" ]; then
+        return 0
+    fi
+    sg_spool_new "$1"
+    [ -n "$sg_new" ] || return 0
+    printf '%s\n' "$2" > "$sg_new"
+    sg_spool_commit "$1"
+    return 0
+}
+
 linked_in_list() {
     # linked_in_list NAME "LIST" -- is NAME one of LIST's words? Quoted in
     # the pattern, so a glob character matches only itself.
@@ -3047,9 +3092,32 @@ case $MODE in
             if spool_fit "$SG_SPOOL_DIR"; then
                 in_spool linked_seed "$LINKED_NAME" || :
             fi
+            # Dated before the first write, so the marker is early by the
+            # write and never late. Any hook already on disk makes the date
+            # unknowable here unless an earlier install kept a marker, and
+            # "now" would put the cutoff after sessions that were already
+            # covered (ADR-0035).
+            _fh_line='unknown'
+            _fh_when=$(date +%s 2>/dev/null) || _fh_when=''
+            case $_fh_when in
+                ''|*[!0-9]*) _fh_when='' ;;
+            esac
+            # A best-effort hook counts whether or not its shell is on this
+            # PATH: the hook on disk is the fact, and --uninstall strips it
+            # either way.
+            _fh_prior=0
+            for _wh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
+                if hook_on_disk "$_wh"; then _fh_prior=1; fi
+            done
+            if [ "$_fh_prior" -eq 0 ] && [ -n "$_fh_when" ]; then
+                _fh_line="injected $_fh_when"
+            fi
             for _wh in $SG_HOOKS_REQUIRED; do
                 write_hook "$_wh"
             done
+            if spool_fit "$SG_SPOOL_DIR"; then
+                in_spool first_hook_seed "$FIRST_HOOK_NAME" "$_fh_line" "$_fh_prior" || :
+            fi
             # The timer notice on both ways out of a writing install: a
             # failed hook proof leaves Layer 1 half-written, and Layer 2's
             # state is as much worth saying there.
@@ -3215,12 +3283,14 @@ SYS
         # since the rmdir below would then fail into its own `|| true`.
         sweep_unclaimed "$BIN" ""
         rmdir "$BIN" 2>/dev/null || true
-        # The two memories are upkeep state, not records; the spool stays
-        # for the audit trail it holds. Removed from the pinned spool, never
+        # The two memories and the injection marker are upkeep state, not
+        # records, and the marker must go: the injection it dates has ended.
+        # The spool stays for the audit trail it holds. Removed from the pinned spool, never
         # through a link at their names: `rm -f` on a link removes the link.
         if spool_fit "$SG_SPOOL_DIR"; then
             in_spool rm -f -- "./$UNCOVERED_NAME" "./$UNCOVERED_NAME.new" || :
             in_spool rm -f -- "./$LINKED_NAME" "./$LINKED_NAME.new" || :
+            in_spool rm -f -- "./$FIRST_HOOK_NAME" "./$FIRST_HOOK_NAME.new" || :
         fi
         if [ -n "$_removed" ]; then
             echo "walk-blocker: removed from$_removed and $BIN"

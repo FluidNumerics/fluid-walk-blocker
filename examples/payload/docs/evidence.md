@@ -70,6 +70,7 @@ the ADR it bears on.
 | 0032 The node has declared requirements, and a fault only below one is unsupported | n/a: upstream documentation and measurements on the tool; no site evidence |
 | 0033 A coverage change the relink cannot judge is logged at err, above real drift | n/a: structural |
 | 0034 The reaper's action is a site value compiled into the unit | n/a: structural |
+| 0035 The install dates PATH injection with a marker in the spool | n/a: structural |
 
 ## What this file is not
 

@@ -123,7 +123,7 @@ export EDITOR=vim
 # it with fake_uid.
 UTILITIES = ("sh", "dirname", "pwd", "mkdir", "rm", "rmdir", "ln", "mv",
              "cat", "touch", "awk", "id", "install", "mktemp", "chmod", "sed",
-             "stat", "chgrp")
+             "stat", "chgrp", "date")
 
 # Real bash's SSH_SOURCE_BASHRC feature reads a HARDCODED path -- never a file
 # named by configuration -- so it cannot be pointed at a sandboxed hook file.

@@ -1423,6 +1423,10 @@ UNCOVERED_NAME = "uncovered-mounts.state"
 # literal as LINKED_NAME, and a test pins that they agree.
 LINKED_NAME = "linked-names.state"
 
+# The marker that dates PATH injection (ADR-0035). install.sh carries the
+# same literal as FIRST_HOOK_NAME, and a test pins that they agree.
+FIRST_HOOK_NAME = "first-hook.state"
+
 INSTALLER_OWNED_SPOOL_NAMES = (
     SPOOL_MARKER,                   # the spool's identity, above
     "reaper-state.json",            # Layer 2's latch
@@ -1433,6 +1437,8 @@ INSTALLER_OWNED_SPOOL_NAMES = (
     UNCOVERED_NAME + ".new",        # ...and its write-and-rename
     LINKED_NAME,                    # the linked-set memory (ADR-0031)
     LINKED_NAME + ".new",           # ...and its write-and-rename
+    FIRST_HOOK_NAME,                # the injection marker (ADR-0035)
+    FIRST_HOOK_NAME + ".new",       # ...and its write-and-rename
 )
 
 
@@ -4057,13 +4063,14 @@ def system_uninstall(args, env=None):
             "  `systemctl disable --now %s`, `systemctl stop %s`, remove\n"
             "  both unit files from %s and `systemctl daemon-reload`;\n"
             "%s"
-            "  then remove %s and the relink's two memories,\n"
-            "  %s and %s.\n"
+            "  then remove %s, the relink's two memories,\n"
+            "  %s and %s, and the injection marker, %s.\n"
             % (helper_dir, TIMER_UNIT, SERVICE_UNIT, args.unit_dir,
                hook_steps,
                os.path.join(args.prefix, "bin"),
                os.path.join(args.spool_dir, UNCOVERED_NAME),
-               os.path.join(args.spool_dir, LINKED_NAME)))
+               os.path.join(args.spool_dir, LINKED_NAME),
+               os.path.join(args.spool_dir, FIRST_HOOK_NAME)))
         if granted:
             sys.stderr.write(
                 "  Then remove %s and revoke the journal read it\n"
