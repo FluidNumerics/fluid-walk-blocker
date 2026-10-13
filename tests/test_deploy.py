@@ -3295,6 +3295,8 @@ def test_a_refused_uninstall_helper_names_the_spool_memory(
     assert os.path.join(args.spool_dir, deploy.UNCOVERED_NAME) in err, err
     # And the linked-set memory beside it (ADR-0031).
     assert os.path.join(args.spool_dir, deploy.LINKED_NAME) in err, err
+    # And the injection marker (ADR-0035).
+    assert os.path.join(args.spool_dir, deploy.FIRST_HOOK_NAME) in err, err
 
 
 def test_deploy_and_install_name_the_same_spool_memory():
@@ -3313,6 +3315,16 @@ def test_deploy_and_install_name_the_same_linked_memory():
     assert "\nLINKED_NAME=%s\n" % deploy.LINKED_NAME in text
     assert deploy.LINKED_NAME in deploy.INSTALLER_OWNED_SPOOL_NAMES
     assert deploy.LINKED_NAME + ".new" in deploy.INSTALLER_OWNED_SPOOL_NAMES
+
+
+def test_deploy_and_install_name_the_same_injection_marker():
+    """ADR-0035's marker: one literal in install.sh, one in deploy.py, and
+    both it and its write-and-rename are installer-owned spool names."""
+    with open(os.path.join(ROOT, "node", "shim", "install.sh")) as fh:
+        text = fh.read()
+    assert "\nFIRST_HOOK_NAME=%s\n" % deploy.FIRST_HOOK_NAME in text
+    assert deploy.FIRST_HOOK_NAME in deploy.INSTALLER_OWNED_SPOOL_NAMES
+    assert deploy.FIRST_HOOK_NAME + ".new" in deploy.INSTALLER_OWNED_SPOOL_NAMES
 
 
 def test_a_refused_uninstall_helper_gives_the_journal_revoke_commands(

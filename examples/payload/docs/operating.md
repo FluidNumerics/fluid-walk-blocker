@@ -372,7 +372,9 @@ account (ADR-0004):
   keeps `uncovered-mounts.state` there too, its memory of which mounts it has
   reported (ADR-0019), and `linked-names.state`, its memory of which wrapped
   names have been linked since the install, which the install seeds
-  (ADR-0031);
+  (ADR-0031); the install also writes `first-hook.state` there once, the
+  time just before its first hook write, or `unknown` where hooks already
+  stood and no marker did (ADR-0035);
 - a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
@@ -1055,8 +1057,9 @@ and removes the fish drop-in, for every hook the build knows, enabled or
 not, and whether or not that shell still resolves (ADR-0008, issue #196) —
 for a hook the site does not enable, only a block or a drop-in that is
 walk-blocker's, so anything else at that path is left as it was found; and
-removes `<prefix>/bin` and the relink's two memories in
-the spool, `uncovered-mounts.state` and `linked-names.state`. A hook file
+removes `<prefix>/bin`, the relink's two memories in
+the spool, `uncovered-mounts.state` and `linked-names.state`, and the
+injection marker `first-hook.state` (ADR-0035). A hook file
 with an opening walk-blocker marker that no closing marker follows before
 the end of the file or the next opening one is left exactly as it is,
 because stripping it would delete lines that are not walk-blocker's: the

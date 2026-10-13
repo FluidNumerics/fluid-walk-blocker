@@ -4564,3 +4564,93 @@ def test_a_fish_drop_in_above_an_unsearchable_directory(
     out = preview.stdout + preview.stderr
     assert preview.returncode == want_rc, out
     assert line.startswith(want_line), out
+
+
+# --------------------------------------------------------------------------
+# the marker that dates PATH injection (ADR-0035)
+# --------------------------------------------------------------------------
+
+FIRST_HOOK = "first-hook.state"
+
+
+def _marker(layout):
+    return (layout.spool / FIRST_HOOK).read_text().splitlines()
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_first_install_writes_the_injection_marker(tmp_path, shell):
+    """No hook on disk at the start: `injected <epoch>`, taken no later than
+    the install and no earlier than the test began, mode 0640. Mutation:
+    take the date after the hook writes, and a slow install is dated late;
+    drop the seed, and this fails."""
+    import time
+    before = int(time.time())
+    layout = _drift_install(tmp_path, shell)
+    lines = _marker(layout)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+    when = int(lines[0].split()[1])
+    assert before <= when <= int(time.time()), (before, when)
+    assert stat.S_IMODE((layout.spool / FIRST_HOOK).stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_reinstall_keeps_the_first_marker(tmp_path, shell):
+    """The marker is written once. Mutation: rewrite it on every --system,
+    and the second install's time replaces the first's."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).write_text("injected 1\n")
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert _marker(layout) == ["injected 1"], _marker(layout)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_an_install_over_hooks_with_no_marker_records_unknown(tmp_path, shell):
+    """The hooks are on disk from an install that kept no marker: now would
+    be a cutoff after sessions that were already covered, so the marker says
+    `unknown`. Mutation: write `injected <now>` regardless, and this
+    fails."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert _marker(layout) == ["unknown"], _marker(layout)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_relink_never_writes_the_marker(tmp_path, shell):
+    """Only --system dates the injection. Mutation: seed it in the relink,
+    and an upgraded node gains a cutoff at its first poll."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    _drift_relink(tmp_path, layout, shell)
+    assert not (layout.spool / FIRST_HOOK).exists()
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_uninstall_removes_the_marker_and_a_reinstall_dates_anew(
+        tmp_path, shell):
+    """The injection the marker dates ended at the uninstall."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).write_text("injected 1\n")
+    result, layout = run_install(tmp_path, ["--uninstall"], fake_uid=0,
+                                 layout=layout, script=layout.script,
+                                 shell=_sh(shell))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not os.path.lexists(str(layout.spool / FIRST_HOOK))
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert _marker(layout)[0].startswith("injected ")
+    assert _marker(layout) != ["injected 1"]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_marker_is_never_written_through_a_link(tmp_path, shell):
+    """A link at the name is replaced, never followed: the sentinel's bytes
+    are unchanged. Mutation: `: > "./$1"`, and the sentinel is overwritten."""
+    layout = _stateful_layout(tmp_path)
+    H.stage_spool(layout)
+    sentinel = _sentinel(tmp_path)
+    before = _sentinel_state(sentinel)
+    os.symlink(str(sentinel), str(layout.spool / FIRST_HOOK))
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    assert _sentinel_state(sentinel) == before
+    assert not (layout.spool / FIRST_HOOK).is_symlink()
+    assert _marker(layout)[0].startswith("injected ")
