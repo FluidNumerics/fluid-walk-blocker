@@ -2,7 +2,7 @@
   "files": {
     "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
     "README.md": "55ea267433d00a6d3d40541dcff4676278604e9c3d76ad772b206c4db819e826",
-    "deploy.py": "09e9f61dbf55ce0ecb12bca0699ce445a3efda68126cd8835dd83e1344e4306b",
+    "deploy.py": "ce1651ba4c3e60d5c3ab36b99059b85766a9adb08f6b4e60a5332bd388b0b767",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "b84d631d0916e0a5073d7dd7c4fa7fd018a11a1f810fedd86514706be2c94285",
     "docs/adr/0003-psi-at-the-user-slice.md": "83ed05d2b0de1f9417ae1788d1ce71bcc6538f415f7d737ef2da5fddca0f7110",
@@ -45,20 +45,20 @@
     "docs/operating.md": "befd070a7ebc583ca00b6131b71142c1c9838f490f1a6b0ad64d92778c90ff04",
     "docs/plan.md": "05ad7a4f079fa36f740fe462e0afbc2f94fe7aa3bdacf36d83d1565c94a1cafa",
     "docs/site-config.md": "b7196a87197c36080a362a4329f65c850171e5d092e88b80cbaf05663a5ae03d",
-    "docs/what-to-run-instead.md": "f8595e56c061873a79f494b59d14179db80b54306496d77367e344b21bb14ad8",
-    "reaper.py": "e169afacfb7fef02650000645a08982da0568500004da0e0f21da1e6e8e71e3a",
+    "docs/what-to-run-instead.md": "07d1ff18f828d49f912b983fc1217e83e97a2fe18cbe3603f3f8ca80e48edc0f",
+    "reaper.py": "60390b2ab31d227cacbf328792ec8bf781d2a1b30fe5d05acbe2c2fe0a5a1d60",
     "search_rules.py": "b631a311c2b8cbdeaa17d7a316b066e8fd1c0318645ff61b129d89aa656be8af",
-    "shim/guard.sh": "7a75230a7e887d6584fa963a1a69e87510b18c37a14ca9278b37b4286e8a770a",
-    "shim/install.sh": "74af15f546e01b16cb17a896ba9f88bf00d473a9643029f7fda208d26171e5a2",
+    "shim/guard.sh": "a050d162e1133c70bc888831e958e541420b1cccb155f0472434d69b312c52e0",
+    "shim/install.sh": "73abd80214cbba923b41e6bd4d67f426c5738671cf975d401c23583bcf7ec297",
     "shim/measure-flags.sh": "e64e6fc0ef48aa488c785b380c967f9b1d069a364ca6e3f692c6f6cb5f23e9e8",
     "shim/measure.sh": "151d975305aa8e25c93a95ab8d0bfa702bfaaeeec628b4779c5fa9c75df81af0",
     "shim/wrapped_names.sh": "c274ebd34f0f885f0068c367b2ed206633888726d08e5e9c0d77334bb3a5d90c",
     "site.toml": "b8a9380cc8894977fc6f0573bcf80cd50ff6e1d7d6fdd1a28a5df9c0173c7644",
     "survey.py": "a94fe88a991d71ced3972d91f9257524b868bdb613a4f3ae8f6209df104648ec",
-    "walk-job": "eeb3314aa6d2ea902ee255a4b38fa86e8e91f37de27759c96990f489aedead35"
+    "walk-job": "a29ac56706a7c726cb178978430dd0df8235ccb0a939dfcf6267dd2488f8b85c"
   },
   "schema_version": 1,
   "site_sha256": "b8a9380cc8894977fc6f0573bcf80cd50ff6e1d7d6fdd1a28a5df9c0173c7644",
-  "version": "0.3.3",
-  "walk_blocker_version": "0.3.3"
+  "version": "0.4.0",
+  "walk_blocker_version": "0.4.0"
 }
