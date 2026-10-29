@@ -71,6 +71,7 @@ the ADR it bears on.
 | 0033 A coverage change the relink cannot judge is logged at err, above real drift | n/a: structural |
 | 0034 The reaper's action is a site value compiled into the unit | n/a: structural |
 | 0035 The install dates PATH injection with a marker in the spool | n/a: structural |
+| 0036 An agent hook carries Layer 1's rule table to Claude Code, compiled like the shim, and it denies but never rewrites | n/a: structural; the bypass is a property of the tool |
 
 ## What this file is not
 
