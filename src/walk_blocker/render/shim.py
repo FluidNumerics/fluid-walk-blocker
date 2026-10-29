@@ -132,6 +132,8 @@ def profile_case(profile):
         "        sg_value='%s'\n"
         "        sg_cluster='%s'\n"
         "        sg_pat='%s'\n"
+        "        sg_nopat='%s'\n"
+        "        sg_nopatoff='%s'\n"
         "        sg_exact='%s'\n"
         "        sg_abbrev=%d\n"
         "        sg_execflags='%s'\n"
@@ -169,6 +171,8 @@ def profile_case(profile):
         " ".join(profile.value_flags),
         "".join(sorted(profile.cluster_letters or "")),
         " ".join(profile.pat_flags),
+        " ".join(profile.nopat_flags),
+        " ".join(profile.nopat_off_flags),
         " ".join(profile.exact_flags),
         1 if profile.abbreviates else 0,
         " ".join(profile.exec_flags),
