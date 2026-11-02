@@ -242,6 +242,8 @@ sg_devoff=''
 sg_value=''
 sg_cluster=''
 sg_pat=''
+sg_nopat=''
+sg_nopatoff=''
 sg_exact=''
 sg_abbrev=0
 sg_execflags=''
@@ -1939,6 +1941,7 @@ sg_rootscan() {
     # depending on -- every latch it sets is cleared here, in one place.
     sg_nroots=0
     sg_saw_pat=0
+    sg_nopat_on=0
     sg_want_value=0
     sg_want_root=0
     sg_seen_pos=0
@@ -2137,6 +2140,18 @@ sg_rootscan() {
                 continue
             fi
 
+            # A mode with NO pattern (`rg --files DIR`), last-wins against the
+            # search modes; see nopat_flags in search_rules.py. Read only by
+            # the dry pass below, which is what frees the first positional.
+            if sg_in "$sg_a" "$sg_nopat"; then
+                sg_nopat_on=1
+                continue
+            fi
+            if sg_in "$sg_a" "$sg_nopatoff"; then
+                sg_nopat_on=0
+                continue
+            fi
+
             if sg_in "$sg_a" "$sg_pat"; then
                 sg_saw_pat=1
                 sg_want_value=1
@@ -2171,12 +2186,24 @@ sg_rootscan() {
             case "$sg_a" in
                 --*) ;;
                 -?*)
-                    if sg_parse_cluster "$sg_a" && [ -n "$sg_cl_vflag" ]; then
-                        if sg_in "$sg_cl_vflag" "$sg_pat"; then
-                            sg_saw_pat=1
+                    if sg_parse_cluster "$sg_a"; then
+                        # `-il` is `-i -l`: an off letter inside a cluster
+                        # brings the search mode back too.
+                        sg_cl_check=$sg_cl_letters
+                        while [ -n "$sg_nopatoff" ] && [ -n "$sg_cl_check" ]; do
+                            sg_cl_c=${sg_cl_check%"${sg_cl_check#?}"}
+                            sg_cl_check=${sg_cl_check#?}
+                            if sg_in "-$sg_cl_c" "$sg_nopatoff"; then
+                                sg_nopat_on=0
+                            fi
+                        done
+                        if [ -n "$sg_cl_vflag" ]; then
+                            if sg_in "$sg_cl_vflag" "$sg_pat"; then
+                                sg_saw_pat=1
+                            fi
+                            [ "$sg_cl_next" -eq 1 ] && sg_want_value=1
+                            continue
                         fi
-                        [ "$sg_cl_next" -eq 1 ] && sg_want_value=1
-                        continue
                     fi
                     ;;
             esac
@@ -2241,13 +2268,13 @@ sg_rootscan() {
 # exist AND a positional has to be skipped, which is grep, rgrep and rg. One
 # extra argv pass of shell builtins, no fork, and off the fast path.
 sg_dry=0
-if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
     sg_dry=1
     sg_rootscan "$@"
     sg_dry=0
     # A pattern flag was found somewhere, so nothing is skipped on the real
     # pass and every positional is a path.
-    [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+    { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
 fi
 sg_rootscan "$@"
 
@@ -2302,11 +2329,11 @@ if [ -z "$sg_reason" ] && [ -n "$WALK_BLOCKER_MOUNTS" ]; then
         sg_hit_fs=''
         sg_hit_root=''
         sg_dry=0
-        if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+        if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
             sg_dry=1
             sg_rootscan "$@"
             sg_dry=0
-            [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+            { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
         fi
         sg_rootscan "$@"
         if [ "$sg_nroots" -eq 0 ] && [ -z "$sg_reason" ]; then
@@ -2385,11 +2412,11 @@ if [ -z "$sg_reason" ] && [ -n "$WALK_BLOCKER_FSTYPES$WALK_BLOCKER_DEPTH_BY_MOUN
         sg_hit_fs=''
         sg_hit_root=''
         sg_dry=0
-        if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+        if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
             sg_dry=1
             sg_rootscan "$@"
             sg_dry=0
-            [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+            { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
         fi
         sg_rootscan "$@"
         if [ "$sg_nroots" -eq 0 ] && [ -z "$sg_reason" ]; then
