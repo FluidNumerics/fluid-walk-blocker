@@ -1816,7 +1816,8 @@ uninstall_enabled_files() {
     # it still matches whole, into SG_ENABLED_FILES: a disabled hook naming
     # the same file has nothing of its own to say about it (the enabled
     # visit handles it). Since issue #224 the build refuses two hooks naming
-    # one file, so this matches only in a hand-edited copy.
+    # one file, so this matches only in a hand-edited copy. The --system
+    # arm's marker scan skips such a hook on the same ground (ADR-0038).
     SG_ENABLED_FILES='
 '
     for _ef in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
@@ -1934,7 +1935,7 @@ $HK_FILE
     # here leaves a regular file renamed into place, and refuses a link. Left
     # alone and never read, since a FIFO would hang the read; refusing the
     # uninstall over a file the site said not to touch would be worse.
-    if [ -L "$HK_FILE" ] || [ ! -f "$HK_FILE" ]; then
+    if ! hook_file_plain; then
         UC_CLAIM=no
         UC_WHY="hooks.$1 is disabled, and a symlink or non-regular file there is not one walk-blocker wrote"
         UC_SAY=1
@@ -1955,8 +1956,7 @@ $HK_FILE
         block)
             # No block, nothing of ours: never rewritten, so its owner and
             # mode are not this uninstall's business.
-            block_shape "$HK_FILE"
-            if [ "$SG_BLOCK_SHAPE" = none ]; then
+            if ! hook_content_ours; then
                 UC_CLAIM=no
                 UC_WHY="hooks.$1 is disabled, and the file carries no walk-blocker block"
                 return 0
@@ -1965,9 +1965,7 @@ $HK_FILE
             uninstall_refused && return 0
             ;;
         dropin)
-            _dh_first=''
-            IFS= read -r _dh_first < "$HK_FILE" || :
-            if [ "$_dh_first" != "$FISH_HEADER" ]; then
+            if ! hook_content_ours; then
                 UC_CLAIM=no
                 UC_WHY="hooks.$1 is disabled, and the file does not open with the drop-in's generated header"
                 UC_SAY=1
@@ -2699,6 +2697,58 @@ hook_on_disk() {
     esac
 }
 
+hook_file_plain() {
+    # hook_file_plain -- is $HK_FILE (hook_select() first) a regular file,
+    # and not a link? Every write of a hook leaves a regular file renamed
+    # into place and refuses a link, so nothing else there was ever
+    # walk-blocker's. The first half of the proof a disabled hook's file
+    # makes (uninstall_claim(), hook_proven_ours()).
+    [ -f "$HK_FILE" ] && [ ! -L "$HK_FILE" ]
+}
+
+hook_content_ours() {
+    # hook_content_ours -- does $HK_FILE's content say walk-blocker wrote
+    # it? A block file by its BEGIN marker (block_shape(), which it leaves
+    # set: matched or not, an install wrote it), the drop-in by its first
+    # line, FISH_HEADER. The second half of the proof. Quiet: no output, no
+    # exit. Its caller has already shown the file plain and its directory's
+    # chain trusted, so the read cannot be swapped for a FIFO and hang.
+    case $HK_KIND in
+        block)
+            block_shape "$HK_FILE"
+            [ "$SG_BLOCK_SHAPE" != none ]
+            ;;
+        dropin)
+            _hc_first=''
+            IFS= read -r _hc_first < "$HK_FILE" || :
+            [ "$_hc_first" = "$FISH_HEADER" ]
+            ;;
+    esac
+}
+
+hook_proven_ours() {
+    # hook_proven_ours SHELL -- is walk-blocker's hook in SHELL's file, by
+    # the proof `--uninstall` asks of a disabled hook before it strips one
+    # (uninstall_claim())? For the marker's scan of the hooks the site has
+    # disabled (issue #246). Quiet: no output, no exit, no refusal.
+    #
+    # The chain is checked here, as uninstall_claim() checks it, and not left
+    # to an earlier step: an enabled hook's file was walked by
+    # check_hook_file() before anything read it, and a disabled one's never
+    # is. A chain another account can write is not refused -- the install
+    # does not write this file -- but the file under it is not read either,
+    # and the answer is no.
+    hook_select "$1"
+    hook_file_plain || return 1
+    _hp_was=$SG_WOULD_REFUSE
+    SG_WOULD_REFUSE=0
+    require_trusted_chain "$(dirname "$HK_FILE")" '' 0 >/dev/null
+    _hp_bad=$SG_WOULD_REFUSE
+    SG_WOULD_REFUSE=$_hp_was
+    [ "$_hp_bad" -eq 0 ] || return 1
+    hook_content_ours
+}
+
 first_hook_seed() {
     # first_hook_seed NAME LINE KEEP -- inside in_spool(): with KEEP 1 (a
     # hook already stood), keep the marker an earlier install of this run
@@ -3093,10 +3143,11 @@ case $MODE in
                 in_spool linked_seed "$LINKED_NAME" || :
             fi
             # Dated before the first write, so the marker is early by the
-            # write and never late. Any hook already on disk makes the date
-            # unknowable here unless an earlier install kept a marker, and
-            # "now" would put the cutoff after sessions that were already
-            # covered (ADR-0035).
+            # write and never late. Any hook of ours already on disk, an
+            # enabled shell's or a disabled one's, makes the date unknowable
+            # here unless an earlier install kept a marker, and "now" would
+            # put the cutoff after sessions that were already covered
+            # (ADR-0035, ADR-0038).
             _fh_line='unknown'
             _fh_when=$(date +%s 2>/dev/null) || _fh_when=''
             case $_fh_when in
@@ -3104,10 +3155,28 @@ case $MODE in
             esac
             # A best-effort hook counts whether or not its shell is on this
             # PATH: the hook on disk is the fact, and --uninstall strips it
-            # either way.
+            # either way. So does a hook the site has since disabled, which
+            # still puts the shim on PATH for its shell -- but only where its
+            # file proves it ours, as --uninstall proves it before stripping
+            # one: that file may be shared, or the administrator's (ADR-0038).
+            # One naming an enabled hook's file is skipped, as --uninstall
+            # skips it: the enabled scan has answered for that file.
             _fh_prior=0
             for _wh in $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT; do
                 if hook_on_disk "$_wh"; then _fh_prior=1; fi
+            done
+            uninstall_enabled_files
+            for _wh in $SG_HOOKS_KNOWN; do
+                case " $SG_HOOKS_REQUIRED $SG_HOOKS_BEST_EFFORT " in
+                    *" $_wh "*) continue ;;
+                esac
+                hook_select "$_wh"
+                case $SG_ENABLED_FILES in
+                    *"
+$HK_FILE
+"*) continue ;;
+                esac
+                if hook_proven_ours "$_wh"; then _fh_prior=1; fi
             done
             if [ "$_fh_prior" -eq 0 ] && [ -n "$_fh_when" ]; then
                 _fh_line="injected $_fh_when"
