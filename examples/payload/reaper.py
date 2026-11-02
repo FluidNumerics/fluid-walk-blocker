@@ -94,6 +94,14 @@ SLICE_SUFFIX = '.slice'  # GENERATED from site.toml:reaper.slice_suffix
 # is a fact about the site, so the table is config (ADR-0003).
 ORIGINS = ({'pattern': '^session-\\d+\\.scope$', 'label': 'ssh_seated'}, {'pattern': '^session-c\\d+\\.scope$', 'label': 'ssh_seatless'}, {'pattern': '^docker-[0-9a-f]+\\.scope$', 'label': 'container'}, {'pattern': '^[^/]+\\.service$', 'label': 'systemd_service'}, {'pattern': '^init\\.scope$', 'label': 'init'})  # GENERATED from site.toml:reaper.origins
 
+# Unit leaf name -> origin label, for the service units that carry logins
+# without registering a logind session: an ssh transport that starts the
+# session shell itself, so the whole session stays in the daemon's own unit.
+# A process in one of these units takes the label only when a login shell is
+# found among itself and its ancestors inside that unit; anything else falls
+# through to ORIGINS, so the daemon itself stays a service (ADR-0039).
+LOGIN_UNITS = {'tailscaled.service': 'ssh_tailscale_unregistered'}  # GENERATED from site.toml:reaper.login_units
+
 # Classification thresholds. Age and fan-out are process-table facts; the two
 # stall fractions select which findings carry `stalling_slice: true` and
 # never suppress a record (ADR-0009).
@@ -388,12 +396,56 @@ _ORIGIN_RULES = tuple((re.compile(row["pattern"]), row["label"])
                       for row in ORIGINS)
 
 
-def classify_origin(leaf):
+# How far up the ancestry a login-unit lookup may climb. The walk is bounded
+# by the unit's cgroup long before this in any real tree; the cap is for a
+# snapshot whose ppid links are inconsistent, read mid-fork across the scan.
+LOGIN_SHELL_MAX_HOPS = 64
+
+
+def login_shell_in_unit(proc, procs, leaf):
+    """Whether `proc`, or an ancestor still inside the unit `leaf`, is a login
+    shell (argv[0] starting with "-", the convention login(1) and sshd use
+    to tell a shell it is a login shell).
+
+    Read from the snapshot `scan_procs()` already took: no further /proc read
+    and no fork. A missing ancestor or an empty argv is "not found", which
+    leaves the process to the ORIGINS table rather than guessing.
+
+    The unit's cgroup is the boundary, so the unit's main pid is not needed.
+    Asking for it -- `systemctl show -p MainPID` -- looks simpler and is wrong
+    here: a fork per finding on the reaper's poll, and a D-Bus round trip on
+    a node that may be wedged. Everything the unit holds, the daemon
+    included, is in its cgroup, so the walk ends at the first ancestor
+    outside it -- pid 1, or whichever subreaper adopted an orphan. A login
+    shell above that boundary is evidence about a different cgroup and does
+    not count.
+    """
+    seen = set()
+    current = proc
+    hops = 0
+    while (current is not None and current.leaf_cgroup == leaf
+           and current.pid not in seen and hops <= LOGIN_SHELL_MAX_HOPS):
+        seen.add(current.pid)
+        if current.argv and current.argv[0].startswith("-"):
+            return True
+        current = procs.get(current.ppid)
+        hops += 1
+    return False
+
+
+def classify_origin(leaf, proc=None, procs=None):
     """How a process got onto the node, from its leaf cgroup name.
 
     Coarse on purpose. The full cgroup path carries another user's session id,
     and the audit log has to stay a document that can be shown to the person
     whose process is in it.
+
+    A leaf named in `[reaper].login_units` is a service unit known to carry
+    logins without a logind session. It takes the unit's label only when
+    `proc` is a login inside it -- a login shell among itself and its
+    ancestors in that unit (`login_shell_in_unit`) -- and otherwise falls
+    through, so the daemon and its own children stay `systemd_service` or
+    whatever the table says (ADR-0039). With no `proc` the lookup is skipped.
 
     First matching `[reaper].origins` row wins; no match is `other`, which is
     the honest answer for a shape the table has not seen rather than a guess
@@ -411,6 +463,10 @@ def classify_origin(leaf):
     """
     if not leaf:
         return "unknown"
+    label = LOGIN_UNITS.get(leaf)
+    if (label is not None and proc is not None
+            and login_shell_in_unit(proc, procs or {}, leaf)):
+        return label
     for pattern, label in _ORIGIN_RULES:
         if pattern.match(leaf):
             return label
@@ -764,7 +820,10 @@ class Finding(object):
         self.detail = detail
         self.action = "reported"
 
-    def record(self, io_fraction=None, stalling_slice=None):
+    def record(self, io_fraction=None, stalling_slice=None, procs=None):
+        # `procs` is the poll's snapshot, for the login-unit ancestry lookup
+        # in classify_origin(); without it a login-unit leaf falls through to
+        # the origins table.
         proc = self.proc
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -789,7 +848,7 @@ class Finding(object):
             # scheduler step or a container is one Layer 1 never applied to.
             # Without this the audit log cannot tell those apart, which is
             # most of what reading it for a few days is meant to answer.
-            "origin": classify_origin(proc.leaf_cgroup),
+            "origin": classify_origin(proc.leaf_cgroup, proc, procs),
             "leaf_cgroup": proc.leaf_cgroup,
         }
         entry.update(self.detail)
@@ -1708,7 +1767,8 @@ def run(args, out=sys.stdout, err=sys.stderr, sleep=time.sleep, killer=os.kill,
         measured = finding.proc.uid in io_by_uid
         entry = finding.record(
             io_by_uid.get(finding.proc.uid),
-            stalling_slice=(finding.proc.uid in stalling) if measured else None)
+            stalling_slice=(finding.proc.uid in stalling) if measured else None,
+            procs=all_procs)
         entries.append(entry)
         # Written when the action changed, OR a real kill attempt just
         # happened regardless of whether it changed: a standing REPORTED

@@ -26,6 +26,7 @@ REQUIRED_SOURCES = (
     "site.toml:reaper.slice_prefix",
     "site.toml:reaper.slice_suffix",
     "site.toml:reaper.origins",
+    "site.toml:reaper.login_units",
     "site.toml:reaper.traversal_budget_s",
     "site.toml:reaper.fanout_n",
     "site.toml:reaper.io_stall_fraction",

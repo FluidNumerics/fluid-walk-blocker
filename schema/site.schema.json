@@ -565,6 +565,19 @@
             }
           }
         },
+        "login_units": {
+          "type": "object",
+          "default": {},
+          "description": "Service units that carry logins without registering a logind session, keyed by the bare unit leaf name (for example an ssh transport's own daemon unit) and mapping to an origin label. A process in that unit takes the label only when a login shell (argv[0] starting with `-`) is among itself and its ancestors inside the unit; otherwise the `origins` table decides, so the daemon itself stays a service. Use a label distinct from the generic service label. Origin never feeds the kill decision (ADR-0039).",
+          "propertyNames": {
+            "pattern": "^[^/]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z_]+$",
+            "description": "The origin label recorded for a login inside this unit, lower-case with underscores."
+          }
+        },
         "traversal_budget_s": {
           "type": "integer",
           "minimum": 60,

@@ -1,6 +1,7 @@
 # ADR-0003: Read PSI at the user slice, never per-scope; a finding's origin is descriptive
 
 **Status:** accepted, 2026-09-16
+The Consequences bullet on logins inside a service unit was added by ADR-0039, for issue #248, replacing nothing. Nothing moved.
 **Evidence:** held privately by Fluid Numerics, keyed ADR-0003 — see `docs/evidence.md`
 
 ## Context
@@ -79,6 +80,11 @@ spawned the shell.
   logind's two session forms are the only universal ones. Which container
   runtimes, scheduler adapters or transports produce which leaves is a fact
   about a site, and the labels a site wants to see in its trail are its own.
+- A login whose transport registers no logind session never reaches a
+  session scope: it stays in the transport daemon's own unit, and the table
+  alone labels it a service. `[reaper].login_units` names such units, and a
+  process in one takes the unit's label only when a login shell is found
+  among itself and its ancestors inside the unit (ADR-0039).
 - The scope-name census that showed both transports in live use was a
   one-time measurement and is not something the reaper repeats. It reads at
   the slice and does not need to know.

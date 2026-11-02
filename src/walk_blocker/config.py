@@ -235,6 +235,17 @@ def check_semantics(schema, data):
             raise ConfigError("reaper.origins[%d].pattern" % i,
                               "does not compile: %s" % exc)
 
+    # The schema's propertyNames pattern keeps a "/" out of a login-unit key
+    # (the reaper compares the bare leaf, never a path), but a key is not a
+    # value, so the control-character sweep above never sees it -- and a
+    # `$`-anchored pattern lets a trailing newline through.
+    for unit in data["reaper"]["login_units"]:
+        hit = _CONTROL.search(unit)
+        if hit:
+            raise ConfigError("reaper.login_units", "unit name %r: control "
+                              "character U+%04X is not allowed in any site "
+                              "value" % (unit, ord(hit.group())))
+
     for shell, hook in data["hooks"].items():
         if "file" not in hook:
             # Required even when disabled: the uninstall path removes the
