@@ -1,7 +1,7 @@
 {
   "files": {
     "LICENSE": "df98fa7bfc85d7734e55c45abfa5aba61420121a9cfa9cbfa46546dbf3fcef4a",
-    "README.md": "55ea267433d00a6d3d40541dcff4676278604e9c3d76ad772b206c4db819e826",
+    "README.md": "5923457393aeab1f311e81f55a53ca088fe4057b6e876d7db57466f4a26f94fa",
     "deploy.py": "09e9f61dbf55ce0ecb12bca0699ce445a3efda68126cd8835dd83e1344e4306b",
     "docs/adr/0001-two-layers.md": "51f28d51db7257da462940b9cc2e34f116b2b69cb04245ec4042ac2faaabf8ab",
     "docs/adr/0002-psi-not-cpu.md": "b84d631d0916e0a5073d7dd7c4fa7fd018a11a1f810fedd86514706be2c94285",
@@ -38,9 +38,10 @@
     "docs/adr/0033-coverage-unknown-is-logged-at-err.md": "5f99185ba7cba669e44ea79ca3cbce93ff35dbb6857d8881e8287378bcd2365c",
     "docs/adr/0034-the-reapers-action-is-a-site-value.md": "c3d6b61f8d31d07421c960086fce61139666208f8cdf68b826e7b645caec707a",
     "docs/adr/0035-the-install-dates-path-injection-with-a-marker.md": "d48ae3b78d8050524c8c439a822e8bd3ebb6ec280b5fbe22e528d4c0fe40df3d",
+    "docs/adr/0036-an-agent-hook-carries-layer-1-to-claude-code.md": "a4c5c408f5c20a25b7304e904a722b366afa3f7032ae4085faeeb78cf16e0d9f",
     "docs/adr/TEMPLATE.md": "2e2c1ad04f151113da2d81fd08b93f297479705324895c63326d46c2876ebe83",
     "docs/alternatives.md": "847b77f60d40fbead0393434bbcb2403d653caa34fbb51781a9bb7c4f8ecea05",
-    "docs/evidence.md": "848603e1e441fe6ee6036c264228fd73c775b2d79417332402f78b148d14f1e9",
+    "docs/evidence.md": "badc3c11d09dae03826917aaeb99006a249422c7fb93dcbc9646dd85d833307b",
     "docs/node-requirements.md": "b129356200f31380362cb30c1601b8011b839f74c12f30bfffe909ae6d94c863",
     "docs/operating.md": "befd070a7ebc583ca00b6131b71142c1c9838f490f1a6b0ad64d92778c90ff04",
     "docs/plan.md": "05ad7a4f079fa36f740fe462e0afbc2f94fe7aa3bdacf36d83d1565c94a1cafa",
