@@ -322,8 +322,8 @@ made and passed. Re-run the dry run as root to make it before installing.
 
 There are no path flags: `argparse` rejects `--prefix` and its siblings
 outright. Every location the deployer writes as root is a literal compiled
-from `[install]`, `[hooks.*]` and `[agent_hook].managed_settings` (ADR-0005,
-ADR-0013, ADR-0036). A different location
+from `[install]` and `[hooks.*]` (ADR-0005, ADR-0013) and, once ADR-0036 is
+implemented, `[agent_hook].managed_settings`. A different location
 is a `site.toml` change, a rebuild and a redeploy.
 
 Read the preview in full. If it advertises a location you did not intend,
