@@ -1,6 +1,7 @@
 # ADR-0035: The install dates PATH injection with a marker in the spool
 
 **Status:** accepted, 2026-10-13
+The Consequences bullet on a directory at an installer-owned spool name was added when issue #245 was decided: `deploy.py` neither refuses nor repairs it, except at `.walk-blocker-spool`, which the install refuses with exit 5, and at `first-hook.state` the install writes no marker. The bullet was added, replacing nothing. Nothing moved.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -75,6 +76,22 @@ like the rest.
 - The marker is not a proof that a session is covered. Layer 1 stays
   advisory (ADR-0001): a shell born after the marker can still bypass the
   shim.
+- **A directory at an installer-owned spool name is skipped, not
+  refused.** The blocker scan the dry run and the install share refuses a
+  link at any of those names, but a directory there, or any other entry
+  that is neither a regular file nor a link, passes it when its owner and
+  mode pass the checks the rest of the spool gets, and the mode repair
+  skips it. The one exception is `.walk-blocker-spool`, which `deploy.py`
+  writes itself and so refuses as anything but a regular file, though only
+  when the install writes it, with exit 5, and not in the dry run.
+  At `first-hook.state` the install leaves a directory as it is and writes
+  no marker, a reader falls back as it does where the file is absent, and
+  nothing reports it. That quiet skip is the intended answer (issue #245):
+  an absent marker is a state the reader already handles, as the first
+  bullet above says. ADR-0031's memory differs in what it shows, not
+  in what it does: a directory at `linked-names.state` is also left in
+  place, but the relink reports `unknown` on every poll until someone
+  removes it.
 - A node upgraded in place records `unknown` until it is uninstalled and
   installed again. That is the honest answer for a run whose start was not
   recorded, and it is the cost of refusing to guess.

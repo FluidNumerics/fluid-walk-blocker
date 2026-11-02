@@ -374,7 +374,8 @@ account (ADR-0004):
   names have been linked since the install, which the install seeds
   (ADR-0031); the install also writes `first-hook.state` there when a run
   of injection begins, the time just before its first hook write, or
-  `unknown` where hooks already stood and no marker did (ADR-0035);
+  `unknown` where hooks already stood and no marker did, and no marker where
+  a directory has the name (ADR-0035);
 - a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,
   since a non-interactive shell returns before reaching anything below it —
@@ -433,7 +434,13 @@ What it verifies, and refuses on:
   its chance and after the previous timer is disabled, so an install refused
   before it begins replacing the payload leaves the spool exactly as it found
   it (a later refusal leaves the repaired state); group- or other-writable,
-  setuid, or setgid anywhere below the spool directory is a refusal;
+  setuid, or setgid anywhere below the spool directory is a refusal. So is a
+  link at any name the installer or the reaper writes there; a directory at
+  one of those names other than `.walk-blocker-spool`, which the install
+  refuses with exit 5, is neither refused nor repaired when its owner and
+  mode pass the checks the rest of the spool gets, and at
+  `first-hook.state` the install leaves it, writes no marker and reports
+  nothing, by design (ADR-0035);
 - **the groups.** `[install].spool_group` must resolve. Each group in
   `[install].trusted_groups` must resolve, have a gid below `GID_MIN`, and
   have no member — in `gr_mem` or by primary gid — with a uid in
