@@ -1,7 +1,7 @@
 # ADR-0035: The install dates PATH injection with a marker in the spool
 
 **Status:** accepted, 2026-10-13
-The Consequences bullet on a directory at an installer-owned spool name was added when issue #245 was decided: `deploy.py` neither refuses nor repairs it, and the install writes no marker there. The bullet was added, replacing nothing. Nothing moved.
+The Consequences bullet on a directory at an installer-owned spool name was added when issue #245 was decided: `deploy.py` neither refuses nor repairs it, except at `.walk-blocker-spool`, which the install refuses with exit 5, and at `first-hook.state` the install writes no marker. The bullet was added, replacing nothing. Nothing moved.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
