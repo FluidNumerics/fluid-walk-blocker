@@ -152,8 +152,9 @@ question by question.
 ## The deployer's guarantees
 
 `deploy.py` is argumentless (ADR-0005): every location it writes as root is
-a literal compiled from `[install]` and `[hooks.*]`, `argparse` rejects
-`--prefix` outright, and the shape rules that used to validate flags live
+a literal compiled from `[install]`, `[hooks.*]` and
+`[agent_hook].managed_settings` (ADR-0036), `argparse` rejects `--prefix`
+outright, and the shape rules that used to validate flags live
 in the schema and one test over the compiled literals. What remains, and
 must, is filesystem-state validation — trust chain, traversability,
 ownership, symlinked hook file, payload marker — because a literal path is

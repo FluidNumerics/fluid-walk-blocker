@@ -44,8 +44,8 @@ already refused elsewhere:
   answer, and an empty mount list reads as a clean bill of health. A
   generated literal has no parse to fail.
 - **It is installed by a hand copy as root**, to a path no config names.
-  Rejected by ADR-0005: every root-write sink is a literal compiled from
-  reviewed config.
+  Rejected by ADR-0005 and ADR-0013: every root-write sink is a literal,
+  compiled from reviewed config.
 - **Its command reader is tested by its own cases**, not by
   `tests/argv_cases.py`. Rejected by "table and shim must agree": a third
   consumer that is not held to the shared matrix drifts silently, and a guard
@@ -136,7 +136,8 @@ assumes one.
 - **A hook denial is not a journal record.** Layer 1's refusal counts do not
   include it, and the reaper never sees the walk it stopped. Recording one
   is a new record source for every reader of the journal, and a decision of
-  its own.
+  its own. The same holds for the user's answer to an ask, so the
+  "audited" escape hatch of ADR-0001 describes the shim's, not the hook's.
 - **The engine now carries code for one named client program.** A change in
   Claude Code's hook protocol is a change here, and the version the hook was
   verified against is recorded in its docstring, measured on the tool.

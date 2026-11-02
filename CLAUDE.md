@@ -83,9 +83,10 @@ record a further consequence without an ADR.
 
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
-`[install]` and `[hooks.*]`; `argparse` rejects `--prefix` outright. What
-that removed is argument-shape validation, which now lives in the schema
-and one test over the compiled literals. The filesystem-state checks (trust
+`[install]`, `[hooks.*]` and `[agent_hook].managed_settings` (ADR-0036);
+`argparse` rejects `--prefix` outright. What that removed is
+argument-shape validation, which now lives in the schema and one test over
+the compiled literals. The filesystem-state checks (trust
 chain, traversability, ownership, symlinked hook file, payload marker)
 remain and must — a literal path is not a trusted path. See ADR-0005 and
 ADR-0013.
