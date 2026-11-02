@@ -72,24 +72,34 @@ a copy per site is a copy per site to keep in agreement with that table.
 ## Decision
 
 `walk-blocker build` emits an **agent hook** for Claude Code beside the shim,
-when `[agent_hook].enabled` is true. It is part of Layer 1 and advisory like
+when `[agent_hook].enabled` is true. The key has no default: whether a site's
+users run Claude Code is a fact about the site, so the site states it. It is
+part of Layer 1 and advisory like
 the shim (ADR-0001): it reads commands as text, below the ceiling that ADR
 names, and it exists only because this caller never reaches the shim. It
 emits a Claude Code plugin, `agent/`, holding the `PreToolUse` and
 `SessionStart` hooks, the playbook skill, the rules text, and the payload's own
 `search_rules.py`, byte-identical and hashed in `site.lock.json`. Every site
 value the hook uses is a literal stamped at build (ADR-0013): the mount table
-and its depth allowances, the policy, the login host patterns, the traversal
-budget, the fan-out bar and `walk-job`'s defaults. The rules text and the
-skill are rendered from templates over the same values. A site writes no prose
-for them.
+and its depth allowances, the policy, the login host names and `walk-job`'s
+defaults. The rules text and the skill are rendered from templates over the
+same values. A site writes no prose for them.
 
 The hook decides with `search_rules.check()` and the compiled policy, and with
 the same rule table on the remote half of ssh to a login host, judged against
-the compiled mount table, not the local one. It adds two rules the reaper
-enforces only after the fact: a remote walk that is unbounded on an expensive
-mount must carry its own `timeout` within the traversal budget, and walks are
-not fanned out at or past the fan-out bar. It **denies**, with the shim's
+the compiled mount table, not the local one. `[agent_hook].login_hosts` lists
+those hosts as exact host names or ssh aliases, compared with the host word
+of the ssh command once any `user@` is removed. It holds no patterns: a
+pattern that matched more than the site meant would judge a host the
+compiled mount table does not describe. The list is optional, and when it is
+empty the hook judges only local walks and leaves the remote half of every
+ssh unjudged.
+
+Two further rules were planned here, both ones the reaper enforces only after
+the fact: a remote walk that is unbounded on an expensive mount must carry
+its own `timeout` within the traversal budget, and walks are not fanned out
+at or past the fan-out bar. They are deferred to issue #251, and the first
+release of the hook ships without them. It **denies**, with the shim's
 refusal text and the alternative named. `WALK_BLOCKER_UNSCOPED=1` turns a
 denial into **ask**, so the user decides, not the agent. It **never rewrites a
 command and never allows one**: a call it does not object to gets no decision,
@@ -98,7 +108,10 @@ is let through.
 
 `deploy.py --system` installs the plugin under `[install].prefix` and writes a
 managed-settings drop-in at `[agent_hook].managed_settings`, a literal
-checked by the schema like every other root-write sink (ADR-0005). The
+checked by the schema like every other root-write sink (ADR-0005). The key
+is required and stamped even when `enabled` is false, as `[hooks.*].file`
+is: a site that turns the hook off still has to name the drop-in, so that
+`--system` and `--uninstall` remove one an earlier install wrote. The
 drop-in force-enables the plugin and sets `USE_BUILTIN_RIPGREP=0`, so the Grep
 and Glob tools' `rg` reaches the shim as well. `--uninstall` removes both.
 Off the node, the same `agent/` directory is a plugin a site may publish to
@@ -128,7 +141,11 @@ assumes one.
   Claude Code's hook protocol is a change here, and the version the hook was
   verified against is recorded in its docstring, measured on the tool.
 - **A site that does not run Claude Code sets `enabled = false`** and its
-  payload is unchanged.
+  payload is unchanged, apart from the drop-in's path compiled into
+  `deploy.py` so that an earlier drop-in can still be removed.
+- **The remote `timeout` and fan-out rules wait for issue #251.** Until
+  then a remote walk the rule table allows is let through whatever its
+  timeout, and a fan-out is judged one command at a time.
 
 ## Re-measure when
 
@@ -143,5 +160,7 @@ granting it, the refused rewrite is a new ADR, not an edit to this one.
 - `[agent_hook].enabled`
 - `[agent_hook].login_hosts`
 - `[agent_hook].managed_settings`
-- read, not added: `[filesystems]`, `[install].prefix`,
-  `[reaper].traversal_budget_s`, `[reaper].fanout_n` and `[slurm]`
+- read, not added: `[filesystems]`, `[install].prefix`, `[site]`,
+  `[shim].unwrapped_tools` and `[slurm]`
+- read once issue #251 lands: `[reaper].traversal_budget_s` and
+  `[reaper].fanout_n`
