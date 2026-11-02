@@ -262,7 +262,7 @@ confirmation.
 `preflight()` function and the same payload check, so that the install
 cannot refuse what the dry run accepted:
 
-- the six root-write locations are the literals compiled from `site.toml`;
+- the root-write locations are the literals compiled from `site.toml`;
 - each of them sits in a trust chain that is root-owned end to end, and
   each hook file is a plain, root-owned, not-group-writable regular file —
   not a symlink under a dotfile manager;
