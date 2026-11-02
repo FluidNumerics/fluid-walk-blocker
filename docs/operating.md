@@ -437,7 +437,8 @@ What it verifies, and refuses on:
   setuid, or setgid anywhere below the spool directory is a refusal. So is a
   link at any name the installer or the reaper writes there; a directory at
   one of those names other than `.walk-blocker-spool`, which the install
-  refuses with exit 5, is neither refused nor repaired, and at
+  refuses with exit 5, is neither refused nor repaired when its owner and
+  mode pass the checks the rest of the spool gets, and at
   `first-hook.state` the install leaves it, writes no marker and reports
   nothing, by design (ADR-0035);
 - **the groups.** `[install].spool_group` must resolve. Each group in
