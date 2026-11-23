@@ -262,7 +262,7 @@ confirmation.
 `preflight()` function and the same payload check, so that the install
 cannot refuse what the dry run accepted:
 
-- the six root-write locations are the literals compiled from `site.toml`;
+- the root-write locations are the literals compiled from `site.toml`;
 - each of them sits in a trust chain that is root-owned end to end, and
   each hook file is a plain, root-owned, not-group-writable regular file —
   not a symlink under a dotfile manager;
@@ -322,7 +322,8 @@ made and passed. Re-run the dry run as root to make it before installing.
 
 There are no path flags: `argparse` rejects `--prefix` and its siblings
 outright. Every location the deployer writes as root is a literal compiled
-from `[install]` and `[hooks.*]` (ADR-0005, ADR-0013). A different location
+from `[install]` and `[hooks.*]` (ADR-0005, ADR-0013) and, once ADR-0036 is
+implemented, `[agent_hook].managed_settings`. A different location
 is a `site.toml` change, a rebuild and a redeploy.
 
 Read the preview in full. If it advertises a location you did not intend,

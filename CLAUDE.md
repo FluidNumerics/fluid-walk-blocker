@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0035` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0036` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed and `docs/node-requirements.md` for what the node must provide.
 This file is the part that is easy to get wrong.
@@ -83,10 +83,11 @@ record a further consequence without an ADR.
 
 **`deploy.py` takes no path arguments, and adding one back is a design
 change.** Every location it writes as root is a literal compiled from
-`[install]` and `[hooks.*]`; `argparse` rejects `--prefix` outright. What
-that removed is argument-shape validation, which now lives in the schema
-and one test over the compiled literals. The filesystem-state checks (trust
-chain, traversability, ownership, symlinked hook file, payload marker)
+`[install]` and `[hooks.*]`, and, once ADR-0036 is implemented,
+`[agent_hook].managed_settings`; `argparse` rejects `--prefix` outright.
+What that removed is argument-shape validation, which now lives in the
+schema and one test over the compiled literals. The filesystem-state checks
+(trust chain, traversability, ownership, symlinked hook file, payload marker)
 remain and must — a literal path is not a trusted path. See ADR-0005 and
 ADR-0013.
 
@@ -304,7 +305,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0035`, in order — the decisions
+3. `docs/adr/0001` … `0036`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the destination node must provide, and
    the floor below which a fault is unsupported (ADR-0032)
