@@ -377,8 +377,9 @@ account (ADR-0004):
   (ADR-0031); the install also writes `first-hook.state` there when a run
   of injection begins, the time just before its first hook write, or
   `unknown` where hooks of ours already stood and no marker did, a
-  disabled shell's counted only where its file proves it ours as
-  `--uninstall` proves it, and no marker where a directory has the name
+  disabled shell's counted only where its file proves it ours by the proof
+  `--uninstall` asks that a disabled hook's file is ours, and no marker
+  where a directory has the name
   (ADR-0035, ADR-0038);
 - a hook block in each `required` shell's startup file named by
   `[hooks.<shell>].file` — above the interactivity guard in the bash rc,

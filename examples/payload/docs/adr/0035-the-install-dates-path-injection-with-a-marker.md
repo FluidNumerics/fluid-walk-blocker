@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-13
 The Consequences bullet on a directory at an installer-owned spool name was added when issue #245 was decided: when it and everything under it pass the checks the rest of the spool gets, `deploy.py` neither refuses nor repairs it, except at `.walk-blocker-spool`, which the install refuses with exit 5, and at `first-hook.state` the install writes no marker. The bullet was added, replacing nothing. Nothing moved.
-The Decision clause on when the marker records `unknown` is narrowed by ADR-0038: a hook of ours on disk is an enabled shell's, or a disabled shell's proven ours as `--uninstall` proves it, and the superseded wording is recorded under "Superseded wording" below.
+The Decision clause on when the marker records `unknown` is narrowed by ADR-0038: a hook of ours on disk is an enabled shell's, or a disabled shell's proven ours by the proof `--uninstall` asks that a disabled hook's file is ours, and the superseded wording is recorded under "Superseded wording" below.
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
 ## Context
@@ -54,7 +54,8 @@ The alternatives for the marker itself:
 `injected <epoch>`, where `<epoch>` is `date +%s` read before the first hook
 is written; or `unknown`, where a hook of ours was on disk when the install
 began and no marker stood: an enabled shell's, or a disabled shell's proven
-ours as `--uninstall` proves it (ADR-0038). It is a new inode renamed over the
+ours by the proof `--uninstall` asks that a disabled hook's file is ours
+(ADR-0038). It is a new inode renamed over the
 name, mode 0640, from the pinned spool, as ADR-0025 writes everything there.
 A marker that is a regular file is kept while a hook of ours stands. With
 no hook on disk the run it dated has ended (an uninstall that could not reach

@@ -3157,8 +3157,9 @@ case $MODE in
             # PATH: the hook on disk is the fact, and --uninstall strips it
             # either way. So does a hook the site has since disabled, which
             # still puts the shim on PATH for its shell -- but only where its
-            # file proves it ours, as --uninstall proves a disabled hook's file
-            # ours: that file may be shared, or the administrator's (ADR-0038).
+            # file proves it ours by the proof --uninstall asks that a disabled
+            # hook's file is ours: that file may be shared, or the
+            # administrator's (ADR-0038).
             # One naming an enabled hook's file is skipped, as --uninstall
             # skips it: the enabled scan has answered for that file.
             _fh_prior=0
