@@ -242,6 +242,8 @@ sg_devoff=''
 sg_value=''
 sg_cluster=''
 sg_pat=''
+sg_nopat=''
+sg_nopatoff=''
 sg_exact=''
 sg_abbrev=0
 sg_execflags=''
@@ -266,6 +268,8 @@ case "$sg_tool" in
         sg_value='-D -S -regextype -maxdepth'
         sg_cluster='EHLPXdsx'
         sg_pat=''
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact=''
         sg_abbrev=0
         sg_execflags='-exec -execdir -ok -okdir'
@@ -294,6 +298,8 @@ case "$sg_tool" in
         sg_value='-D -S -regextype -maxdepth -f'
         sg_cluster='EHLPXdsx'
         sg_pat=''
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact=''
         sg_abbrev=0
         sg_execflags='-exec -execdir -ok -okdir'
@@ -322,6 +328,8 @@ case "$sg_tool" in
         sg_value='-m --max-count -A --after-context -B --before-context -C --context --include --exclude --exclude-dir -d --directories --binary-files --label --group-separator --exclude-from -D --devices -e --regexp -f --file'
         sg_cluster=''
         sg_pat='-e --regexp -f --file'
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact='--binary'
         sg_abbrev=1
         sg_execflags=''
@@ -350,6 +358,8 @@ case "$sg_tool" in
         sg_value='-m --max-count -A --after-context -B --before-context -C --context --include --exclude --exclude-dir --group-separator --exclude-from -D --devices -d --directories --binary-files --label -e --regexp -f --file'
         sg_cluster=''
         sg_pat='-e --regexp -f --file'
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact='--binary'
         sg_abbrev=1
         sg_execflags=''
@@ -378,6 +388,8 @@ case "$sg_tool" in
         sg_value='-t --type -T --type-not --type-add -g --glob --iglob -m --max-count -A --after-context -B --before-context -C --context --color --colors -j --threads --pre --path-separator -M --max-columns -E --encoding --ignore-file --sort --sortr -r --replace -e --regexp -f --file --max-depth --maxdepth'
         sg_cluster=''
         sg_pat='-e --regexp -f --file'
+        sg_nopat='--files'
+        sg_nopatoff='-l --files-with-matches --files-without-match -c --count --count-matches --json --type-list'
         sg_exact=''
         sg_abbrev=0
         sg_execflags=''
@@ -406,6 +418,8 @@ case "$sg_tool" in
         sg_value='--min-depth --exact-depth -e --extension -E --exclude -t --type -c --color -j --threads -S --size -o --owner --changed-within --changed-before --max-buffer-time --search-path --path-separator --format --batch-size --ignore-file --max-results --base-directory -x --exec -X --exec-batch -d --max-depth --maxdepth --search-path'
         sg_cluster=''
         sg_pat=''
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact=''
         sg_abbrev=0
         sg_execflags='-x --exec -X --exec-batch'
@@ -434,6 +448,8 @@ case "$sg_tool" in
         sg_value='-H -T -o -P -I --charset --filelimit --timefmt --sort -L'
         sg_cluster=''
         sg_pat=''
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact=''
         sg_abbrev=0
         sg_execflags=''
@@ -462,6 +478,8 @@ case "$sg_tool" in
         sg_value='-B --block-size -t --threshold --exclude --exclude-from --files0-from --time-style -d --max-depth'
         sg_cluster=''
         sg_pat=''
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact='--time'
         sg_abbrev=1
         sg_execflags=''
@@ -490,6 +508,8 @@ case "$sg_tool" in
         sg_value='-A --after-context -B --before-context -C --context -D --devices -d --directories -g --glob --iglob -J --jobs -M --file-magic -O --file-extension -t --file-type --binary-files --colors --colours --delay --encoding --exclude --exclude-dir --exclude-from --exclude-fs --filter --filter-magic-label --format --from --include --include-dir --include-from --include-fs --label --max-count --min-count --max-files --max-size --min-size --range --replace --zmax -e --regexp -f --file -N --neg-regexp --depth'
         sg_cluster=''
         sg_pat='-e --regexp -f --file -N --neg-regexp'
+        sg_nopat=''
+        sg_nopatoff=''
         sg_exact=''
         sg_abbrev=0
         sg_execflags=''
@@ -2191,6 +2211,7 @@ sg_rootscan() {
     # depending on -- every latch it sets is cleared here, in one place.
     sg_nroots=0
     sg_saw_pat=0
+    sg_nopat_on=0
     sg_want_value=0
     sg_want_root=0
     sg_seen_pos=0
@@ -2389,6 +2410,18 @@ sg_rootscan() {
                 continue
             fi
 
+            # A mode with NO pattern (`rg --files DIR`), last-wins against the
+            # search modes; see nopat_flags in search_rules.py. Read only by
+            # the dry pass below, which is what frees the first positional.
+            if sg_in "$sg_a" "$sg_nopat"; then
+                sg_nopat_on=1
+                continue
+            fi
+            if sg_in "$sg_a" "$sg_nopatoff"; then
+                sg_nopat_on=0
+                continue
+            fi
+
             if sg_in "$sg_a" "$sg_pat"; then
                 sg_saw_pat=1
                 sg_want_value=1
@@ -2423,12 +2456,24 @@ sg_rootscan() {
             case "$sg_a" in
                 --*) ;;
                 -?*)
-                    if sg_parse_cluster "$sg_a" && [ -n "$sg_cl_vflag" ]; then
-                        if sg_in "$sg_cl_vflag" "$sg_pat"; then
-                            sg_saw_pat=1
+                    if sg_parse_cluster "$sg_a"; then
+                        # `-il` is `-i -l`: an off letter inside a cluster
+                        # brings the search mode back too.
+                        sg_cl_check=$sg_cl_letters
+                        while [ -n "$sg_nopatoff" ] && [ -n "$sg_cl_check" ]; do
+                            sg_cl_c=${sg_cl_check%"${sg_cl_check#?}"}
+                            sg_cl_check=${sg_cl_check#?}
+                            if sg_in "-$sg_cl_c" "$sg_nopatoff"; then
+                                sg_nopat_on=0
+                            fi
+                        done
+                        if [ -n "$sg_cl_vflag" ]; then
+                            if sg_in "$sg_cl_vflag" "$sg_pat"; then
+                                sg_saw_pat=1
+                            fi
+                            [ "$sg_cl_next" -eq 1 ] && sg_want_value=1
+                            continue
                         fi
-                        [ "$sg_cl_next" -eq 1 ] && sg_want_value=1
-                        continue
                     fi
                     ;;
             esac
@@ -2493,13 +2538,13 @@ sg_rootscan() {
 # exist AND a positional has to be skipped, which is grep, rgrep and rg. One
 # extra argv pass of shell builtins, no fork, and off the fast path.
 sg_dry=0
-if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
     sg_dry=1
     sg_rootscan "$@"
     sg_dry=0
     # A pattern flag was found somewhere, so nothing is skipped on the real
     # pass and every positional is a path.
-    [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+    { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
 fi
 sg_rootscan "$@"
 
@@ -2554,11 +2599,11 @@ if [ -z "$sg_reason" ] && [ -n "$WALK_BLOCKER_MOUNTS" ]; then
         sg_hit_fs=''
         sg_hit_root=''
         sg_dry=0
-        if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+        if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
             sg_dry=1
             sg_rootscan "$@"
             sg_dry=0
-            [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+            { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
         fi
         sg_rootscan "$@"
         if [ "$sg_nroots" -eq 0 ] && [ -z "$sg_reason" ]; then
@@ -2637,11 +2682,11 @@ if [ -z "$sg_reason" ] && [ -n "$WALK_BLOCKER_FSTYPES$WALK_BLOCKER_DEPTH_BY_MOUN
         sg_hit_fs=''
         sg_hit_root=''
         sg_dry=0
-        if [ -n "$sg_pat" ] && [ "$sg_skip" -gt 0 ]; then
+        if [ -n "$sg_pat$sg_nopat" ] && [ "$sg_skip" -gt 0 ]; then
             sg_dry=1
             sg_rootscan "$@"
             sg_dry=0
-            [ "$sg_saw_pat" -eq 1 ] && sg_skip=0
+            { [ "$sg_saw_pat" -eq 1 ] || [ "$sg_nopat_on" -eq 1 ]; } && sg_skip=0
         fi
         sg_rootscan "$@"
         if [ "$sg_nroots" -eq 0 ] && [ -z "$sg_reason" ]; then

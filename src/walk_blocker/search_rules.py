@@ -366,6 +366,11 @@ class Profile(object):
     device_off_flags -- spellings that turn that back off; last one wins
     value_flags -- flags consuming the NEXT argv element, which is therefore not a root
     pat_flags   -- flags supplying the search pattern, so no positional is spent on it
+    nopat_flags -- flags selecting a mode that takes NO pattern, so every
+                   positional is a path; consume nothing (rg's --files)
+    nopat_off_flags -- flags selecting a pattern-taking mode again, exact long
+                   spellings or short letters, also inside a cluster; last
+                   one wins
     skip_pos    -- leading positionals that are the pattern, not a root
     root_mode   -- "leading"  : operands before the first flag (find's grammar)
                    "positional": operands anywhere, after skip_pos
@@ -486,7 +491,8 @@ class Profile(object):
                  output_only_depth_flags=(), dashdash="predicate",
                  cluster_letters=None, wrapped=True, default_depth=None,
                  depth_enables_traversal=False, depth_range=False,
-                 depth_digits=None, fallback_needs_tty=False):
+                 depth_digits=None, fallback_needs_tty=False,
+                 nopat_flags=(), nopat_off_flags=()):
         # A bound by DEVICE rather than by depth. Depth was the only bound this
         # table recognised, so the standard way of steering a walk AWAY from an
         # expensive filesystem was invisible to it and `find / -xdev` -- which
@@ -578,6 +584,20 @@ class Profile(object):
         self.depth_flags = depth_flags
         self.value_flags = tuple(value_flags) + tuple(pat_flags) + tuple(depth_flags) + tuple(root_flags)
         self.pat_flags = pat_flags
+        # A MODE with no pattern, which is not the same as a pattern supplied
+        # by a flag: `rg --files DIR` lists DIR and takes no pattern at all,
+        # so reading DIR as the pattern dropped it and judged the cwd -- a
+        # walk of an expensive mount that both layers passed. Last-wins
+        # against the search modes, measured on rg 15.2.0:
+        #   rg --files -l PAT DIR    searches DIR for PAT
+        #   rg -l --files DIR        lists DIR
+        #   rg --files -il PAT DIR   searches (the -l is inside a cluster)
+        # so a later search-mode flag gives the first positional back to the
+        # pattern, and `rg --files -l /cheap` from an expensive cwd walks the
+        # cwd. `--type-list` is an off flag too: it walks nothing, and
+        # charging the pattern slot is what this table did before.
+        self.nopat_flags = nopat_flags
+        self.nopat_off_flags = nopat_off_flags
         self.skip_pos = skip_pos
         self.root_mode = root_mode
         self.root_flags = root_flags
@@ -764,6 +784,10 @@ PROFILES = (
             device_flags=("--one-file-system",),
             device_off_flags=("--no-one-file-system",),
             pat_flags=("-e", "--regexp", "-f", "--file"),
+            nopat_flags=("--files",),
+            nopat_off_flags=("-l", "--files-with-matches",
+                             "--files-without-match", "-c", "--count",
+                             "--count-matches", "--json", "--type-list"),
             value_flags=("-t", "--type", "-T", "--type-not", "--type-add",
                          "-g", "--glob", "--iglob",
                          "-m", "--max-count", "-A", "--after-context",
@@ -2332,6 +2356,7 @@ def roots(profile, argv, cwd, stdin_is_tty=True, fallback=True):
     found = []
     positionals = []
     saw_pattern_flag = False
+    nopat = False
 
     i = 1
     while i < len(argv):
@@ -2410,6 +2435,15 @@ def roots(profile, argv, cwd, stdin_is_tty=True, fallback=True):
                 i += 2
             continue
 
+        if token in profile.nopat_flags:
+            nopat = True
+            i += 1
+            continue
+        if token in profile.nopat_off_flags:
+            nopat = False
+            i += 1
+            continue
+
         if token in profile.pat_flags:
             saw_pattern_flag = True
             i += 2
@@ -2428,6 +2462,11 @@ def roots(profile, argv, cwd, stdin_is_tty=True, fallback=True):
 
         cl_letters, cl_vflag, _cl_glued, cl_next = parse_short_cluster(
             profile, token)
+        if any("-" + letter in profile.nopat_off_flags
+               for letter in cl_letters):
+            # `-il` is `-i -l`: the search mode is back, and the cluster
+            # still has to reach the value-flag arm below.
+            nopat = False
         if cl_letters and cl_vflag is not None:
             # `-nefoo` and `-ne foo` both supply the pattern from -e, so the
             # first PATH operand must not be charged against skip_pos. Missing
@@ -2565,7 +2604,7 @@ def roots(profile, argv, cwd, stdin_is_tty=True, fallback=True):
             found.append(cwd)
         return found
     else:
-        skip = 0 if saw_pattern_flag else profile.skip_pos
+        skip = 0 if saw_pattern_flag or nopat else profile.skip_pos
         found.extend(positionals[skip:])
 
     # An empty path operand walks NOTHING, and it does not stop the others.
