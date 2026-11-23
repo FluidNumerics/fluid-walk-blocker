@@ -88,8 +88,9 @@ failed. A disabled hook naming an enabled hook's file is skipped, as
   block of ours, an absent file, and a symlink to a file carrying our block
   each record `injected`; a disabled drop-in naming the enabled bash hook's
   file, which opens with the drop-in's header, is skipped and records
-  `injected`; and a block of ours under an untrusted chain is neither read
-  nor refused.
+  `injected`; and a block or drop-in of ours under an untrusted chain, in a
+  mode-0 file, is neither counted nor refused, and no read of it reports an
+  error.
 
 ## Re-measure when
 

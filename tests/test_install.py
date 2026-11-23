@@ -4802,33 +4802,43 @@ def test_a_disabled_hook_naming_an_enabled_hooks_file_is_skipped(
 
 @pytest.mark.skipif(os.getuid() == 0, reason="root reads every file")
 @pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("disabled", ["zsh", "fish"])
 def test_a_disabled_hook_under_an_untrusted_chain_is_neither_read_nor_refused(
-        tmp_path, shell):
-    """Our zsh block stands for a disabled shell, in a directory the
-    stand-in `stat` calls someone else's. Another account could swap the
-    file for a FIFO before the read, so it is not read and not counted; and
-    the install does not write it, so it is no reason to refuse or to say
-    anything. The file is mode 0, so a read by this test's account fails
-    with an error naming its path, which the output must not carry.
-    Mutations: drop the chain walk from hook_proven_ours(), and the read
-    fails aloud; read the file and then answer no, and it fails the same
-    way."""
-    zdir = tmp_path / "zdir"
-    zdir.mkdir()
-    layout = H.Layout(tmp_path, zshenv=zdir / "zshenv")
+        tmp_path, shell, disabled):
+    """Our zsh block, or our fish drop-in, stands for a disabled shell, in a
+    directory the stand-in `stat` calls someone else's. Another account
+    could swap the file for a FIFO before the read, so it is not read and
+    not counted; and the install does not write it, so it is no reason to
+    refuse or to say anything. The file is mode 0, so a read by this test's
+    account fails with an error naming its path, which the output must not
+    carry; a read whose error output is discarded is not seen. Mutations:
+    drop the chain walk from hook_proven_ours(), or read the file and then
+    answer no, and the read fails aloud."""
+    hdir = tmp_path / "hdir"
+    hdir.mkdir()
+    if disabled == "zsh":
+        layout = H.Layout(tmp_path, zshenv=hdir / "zshenv")
+    else:
+        layout = H.Layout(tmp_path, fishconf=hdir / "fish-conf.fish")
     layout = _drift_install(tmp_path, shell, layout=layout)
-    assert BEGIN in layout.zshenv.read_text()
+    files = {"bash": layout.bashrc, "zsh": layout.zshenv,
+             "fish": layout.fishconf}
+    if disabled == "zsh":
+        assert BEGIN in layout.zshenv.read_text()
+    else:
+        assert layout.fishconf.read_text().startswith(FISH_HEADER + "\n")
     (layout.spool / FIRST_HOOK).unlink()
-    layout.bashrc.unlink()
-    layout.fishconf.unlink()
-    layout.zshenv.chmod(0)
+    for name, path in files.items():
+        if name != disabled:
+            path.unlink()
+    files[disabled].chmod(0)
     result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  tools=ALL_TOOLS, layout=layout,
                                  shell=_sh(shell),
-                                 stat_body=_stat_untrusting(zdir),
-                                 **{"hooks.zsh.enabled": False})
+                                 stat_body=_stat_untrusting(hdir),
+                                 **{"hooks.%s.enabled" % disabled: False})
     assert result.returncode == 0, result.stdout + result.stderr
-    assert str(zdir) not in result.stdout + result.stderr
+    assert str(hdir) not in result.stdout + result.stderr
     lines = _marker(layout)
     assert len(lines) == 1 and lines[0].startswith("injected "), lines
 

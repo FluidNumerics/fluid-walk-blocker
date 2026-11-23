@@ -40,7 +40,7 @@
     "docs/adr/0035-the-install-dates-path-injection-with-a-marker.md": "67f7198029a9aed87a9695ed4f81c45972b544f04b6996749325624e37a16818",
     "docs/adr/0036-an-agent-hook-carries-layer-1-to-claude-code.md": "507ab11824d62cda0522db6da559f2711f62eafc9953fb863bd1bc75cb796036",
     "docs/adr/0037-the-reapers-action-has-no-default.md": "95d3bb63e724caa8d97dabe387bbf86d5060ec60b0e3c49ed2867a57861bc9da",
-    "docs/adr/0038-a-disabled-shells-hook-counts-toward-the-marker-when-proven-ours.md": "ff3d77903332179f946f224c2f0a25ad295e64890c229820af35d6698b42739f",
+    "docs/adr/0038-a-disabled-shells-hook-counts-toward-the-marker-when-proven-ours.md": "e53f425af2e89e745daed9883b417fa6ab08e0e7c6ec23242ed9bc7abff1197a",
     "docs/adr/TEMPLATE.md": "2e2c1ad04f151113da2d81fd08b93f297479705324895c63326d46c2876ebe83",
     "docs/alternatives.md": "847b77f60d40fbead0393434bbcb2403d653caa34fbb51781a9bb7c4f8ecea05",
     "docs/evidence.md": "93070695f781cee68a8c6418a7220a379923e70a86648c92360137143c3ac3d6",
