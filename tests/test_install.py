@@ -4696,7 +4696,7 @@ def test_a_best_effort_hook_alone_records_unknown(tmp_path, shell):
 
 # Issue #246 (ADR-0038): a hook the site has since disabled counts toward "a
 # hook of ours already stood" only where its file proves it ours, by the
-# proof --uninstall makes before stripping one.
+# proof --uninstall asks that a disabled hook's file is ours.
 
 def _install_with_only(tmp_path, shell, disabled, plant=None):
     """A first install writes every hook; then every hook file but the
@@ -4780,14 +4780,39 @@ def _stat_untrusting(directory):
 
 
 @pytest.mark.parametrize("shell", SHELLS)
+def test_a_disabled_hook_naming_an_enabled_hooks_file_is_skipped(
+        tmp_path, shell):
+    """A hand-edited copy (the build refuses two hooks naming one file,
+    issue #224) points the disabled fish drop-in at the enabled bash rc,
+    which opens with the drop-in's header and carries no block of ours. The
+    enabled scan has answered for that file, and no hook of ours stands in
+    it, so the install dates a new run. Mutation: delete the
+    SG_ENABLED_FILES skip from the marker scan, and the header proves the
+    file ours and the marker says `unknown`."""
+    layout = H.Layout(tmp_path, fishconf=tmp_path / "bashrc")
+    layout.bashrc.write_text(FISH_HEADER + "\nexport X=1\n")
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 **{"hooks.fish.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = _marker(layout)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root reads every file")
+@pytest.mark.parametrize("shell", SHELLS)
 def test_a_disabled_hook_under_an_untrusted_chain_is_neither_read_nor_refused(
         tmp_path, shell):
     """Our zsh block stands for a disabled shell, in a directory the
     stand-in `stat` calls someone else's. Another account could swap the
     file for a FIFO before the read, so it is not read and not counted; and
     the install does not write it, so it is no reason to refuse or to say
-    anything. Mutation: drop the chain walk from hook_proven_ours(), and the
-    block is read and the marker says `unknown`."""
+    anything. The file is mode 0, so a read by this test's account fails
+    with an error naming its path, which the output must not carry.
+    Mutations: drop the chain walk from hook_proven_ours(), and the read
+    fails aloud; read the file and then answer no, and it fails the same
+    way."""
     zdir = tmp_path / "zdir"
     zdir.mkdir()
     layout = H.Layout(tmp_path, zshenv=zdir / "zshenv")
@@ -4796,6 +4821,7 @@ def test_a_disabled_hook_under_an_untrusted_chain_is_neither_read_nor_refused(
     (layout.spool / FIRST_HOOK).unlink()
     layout.bashrc.unlink()
     layout.fishconf.unlink()
+    layout.zshenv.chmod(0)
     result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
                                  tools=ALL_TOOLS, layout=layout,
                                  shell=_sh(shell),
