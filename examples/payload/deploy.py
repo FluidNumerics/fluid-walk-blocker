@@ -142,7 +142,7 @@ __version__ = '0.3.3'  # GENERATED from VERSION
 # reads the payload's, the install reads its root-only snapshot's, and both
 # refuse unless the lock names this digest and every payload file hashes to
 # its entry (ADR-0029). It catches a bad copy, not the payload's owner.
-SITE_SHA256 = 'b8a9380cc8894977fc6f0573bcf80cd50ff6e1d7d6fdd1a28a5df9c0173c7644'  # GENERATED from SITE_SHA256
+SITE_SHA256 = 'e035a426abaaf686d2848fa92588e585fb793c82d0f26d092b36278b12b659b2'  # GENERATED from SITE_SHA256
 
 # The payload IS the directory this file is in.
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -250,7 +250,7 @@ RELINK_KILL_AFTER_S = 10  # GENERATED from site.toml:timer.relink_kill_after_s
 # from the installed unit, so a redeploy carries the site's decision instead
 # of reverting it to the default -- which is what a hand-edited unit did on
 # every install before this (ADR-0034). The reaper reads only its argv.
-REAPER_ACTION = 'report'  # GENERATED from site.toml:reaper.action
+REAPER_ACTION = 'kill'  # GENERATED from site.toml:reaper.action
 REAPER_FLAGS = {"report": "--report", "kill": "--kill"}
 REAPER_VERBS = {"report": "report", "kill": "report and stop"}
 

@@ -179,6 +179,8 @@ def test_defaults_fill_a_minimal_site():
         "install": {"spool_group": "wbaudit", "trusted_groups": []},
         "slurm": {"partition": "p"},
         "timer": {"on_calendar": "*:00:30"},
+        # The reaper's action has no default either (ADR-0037).
+        "reaper": {"action": "report"},
     })
     assert site.lookup("install.prefix") == "/usr/local/lib/walk-blocker"
     assert site.lookup("hooks.bash.file") == "/etc/bash.bashrc"
@@ -365,6 +367,8 @@ BAD_SITES = [
     ("install.trusted_groups", ["a b"], "pattern"),
     ("install.trusted_groups", ["svc-log", "svc-log"], "unique"),
     ("install.trusted_groups", "svc-log", "array"),
+    # ADR-0037: a site decides the reaper's action; neither is a default.
+    ("reaper.action", REMOVE, "required property"),
 ]
 
 
@@ -405,32 +409,42 @@ def test_an_empty_trusted_groups_list_is_allowed_and_names_are_kept():
     assert site.lookup("install.spool_group") == "wb_read-1"
 
 
-def test_the_reaper_action_is_a_closed_set_with_a_report_default():
+def test_the_reaper_action_is_a_closed_set_with_no_default():
     """`report` or `kill` and nothing else -- the retired `--kill-others` has
-    no value here -- and a site that omits the key ships report-only
-    (ADR-0034)."""
+    no value here (ADR-0034) -- and a site that omits the key, or the whole
+    `[reaper]` table, is refused rather than given either action (ADR-0037)."""
     data = load_example_dict()
     data["reaper"]["action"] = "kill_others"
     with pytest.raises(jsonschema.ValidationError) as exc:
         config.from_dict(data)
     assert list(exc.value.absolute_path) == ["reaper", "action"], exc.value
-    data = load_example_dict()
-    del data["reaper"]["action"]
-    assert config.from_dict(data).lookup("reaper.action") == "report"
+    reaper = config.load_schema()["properties"]["reaper"]
+    assert "default" not in reaper["properties"]["action"]
+    assert reaper["required"] == ["action"]
+    for drop in (lambda d: d["reaper"].pop("action"), lambda d: d.pop("reaper")):
+        data = load_example_dict()
+        drop(data)
+        with pytest.raises(jsonschema.ValidationError) as exc:
+            config.from_dict(data)
+        assert list(exc.value.absolute_path) == ["reaper"], exc.value
+        assert "'action' is a required property" in exc.value.message
 
 
 def test_validate_prints_the_kill_notice_only_for_kill(tmp_path, capsys):
     """One stdout line, not a failure and not stderr: the value is valid,
     and the line is for whoever reads the build log (ADR-0034)."""
+    # The example chooses kill (ADR-0037), so it carries the notice.
     assert cli.main(["validate", "--site", EXAMPLE]) == 0
-    assert "reaper.action" not in capsys.readouterr().out
-    site = tmp_path / "site.toml"
-    site.write_text(open(EXAMPLE).read().replace(
-        'action = "report"', 'action = "kill"'), encoding="utf-8")
-    assert cli.main(["validate", "--site", str(site)]) == 0
     captured = capsys.readouterr()
     assert 'reaper.action = "kill"' in captured.out and "--kill" in captured.out
     assert captured.err == ""
+    site = tmp_path / "site.toml"
+    text = open(EXAMPLE).read()
+    assert text.count('action = "kill"') == 1
+    site.write_text(text.replace('action = "kill"', 'action = "report"'),
+                    encoding="utf-8")
+    assert cli.main(["validate", "--site", str(site)]) == 0
+    assert "reaper.action" not in capsys.readouterr().out
 
 
 def test_neither_group_key_has_a_default():

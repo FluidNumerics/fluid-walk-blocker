@@ -18,7 +18,7 @@ licence travels in the payload, so a node holds the terms beside the code.
 What stays out of this tree is a customer's operational facts, not the code
 itself -- see "IP hygiene" below, which is unchanged by the licence.
 
-Read `README.md` first, then `docs/adr/0001` through `0036` in order, then
+Read `README.md` first, then `docs/adr/0001` through `0037` in order, then
 `docs/site-config.md` for what a site measures before it can be
 deployed and `docs/node-requirements.md` for what the node must provide.
 This file is the part that is easy to get wrong.
@@ -175,11 +175,13 @@ shell's absence is an anomaly at the site, and only a census answers that.
 The reconcile timer reports hook state and never repairs or fails. See
 ADR-0008.
 
-**Report before you kill.** The reaper's default is `--report`. Promoting
-to `--kill` happens after reading real findings against real traffic at
-the site, and it is a decision someone makes, not a default that drifts:
-`[reaper].action = "kill"`, reviewed in the site's own repository and
-compiled into the unit, so a redeploy carries it (ADR-0034). `--kill` acts
+**Report before you kill.** `[reaper].action` is a required site value
+with no engine default: neither `report` nor `kill` is safe to take by
+omission (ADR-0037). "Report before kill" is guidance about when a site
+chooses `kill`: after reading its report trail against real traffic, as
+a decision someone makes, not a default that drifts. The choice is
+reviewed in the site's own repository and compiled into the unit, so a
+redeploy carries it (ADR-0034). `--kill` acts
 on every finding outside `NEVER_KILL`, whoever owns the process; there is
 no second flag, because the reaper's only caller is the root-run unit.
 
@@ -305,7 +307,7 @@ root.
 
 1. `README.md` — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` … `0036`, in order — the decisions
+3. `docs/adr/0001` … `0037`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the destination node must provide, and
    the floor below which a fault is unsupported (ADR-0032)

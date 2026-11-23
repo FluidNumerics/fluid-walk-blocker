@@ -500,7 +500,10 @@
     "reaper": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Layer 2, the periodic backstop. It scans and classifies the whole process table every poll; PSI corroborates and never gates (ADR-0009). Its default action is `--report`.",
+      "description": "Layer 2, the periodic backstop. It scans and classifies the whole process table every poll; PSI corroborates and never gates (ADR-0009). Its action is the site's to choose and has no default (ADR-0037).",
+      "required": [
+        "action"
+      ],
       "properties": {
         "cgroup_root": {
           "$ref": "#/$defs/sink_path",
@@ -604,8 +607,7 @@
         "action": {
           "type": "string",
           "enum": ["report", "kill"],
-          "default": "report",
-          "description": "What the unit runs the reaper with. `report` renders `--report`: every finding is recorded and nothing is signalled. `kill` renders `--kill`: the reaper signals every finding outside `NEVER_KILL`, whoever owns the process, within `max_kills` and `kill_grace_s`. Compiled into the service unit's `ExecStart` by `deploy.py`, so a redeploy carries the decision instead of reverting it; the reaper itself reads only its argv. Set it only after the trail has been read against real traffic (ADR-0009, \"Re-measure when\"); `validate` and `build` print a notice when it is `kill` (ADR-0034)."
+          "description": "What the unit runs the reaper with, and required: it has no default, because neither action is safe to take by omission (ADR-0037). `report` renders `--report`: every finding is recorded and nothing is signalled. `kill` renders `--kill`: the reaper signals every finding outside `NEVER_KILL`, whoever owns the process, within `max_kills` and `kill_grace_s`. Compiled into the service unit's `ExecStart` by `deploy.py`, so a redeploy carries the decision instead of reverting it; the reaper itself reads only its argv. Choose `kill` only after the trail has been read against real traffic (ADR-0009, \"Re-measure when\"); `validate` and `build` print a notice when it is `kill` (ADR-0034)."
         },
         "settle_s": {
           "type": "number",

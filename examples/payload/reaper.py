@@ -42,10 +42,11 @@ descriptive only -- never an input to classify() -- and it is what lets the
 audit log tell a traversal Layer 1 was in front of from one it never applied
 to (ADR-0003).
 
-Default is --report. Promoting to --kill is a decision someone makes after
-reading real findings against real traffic, not a default that drifts. A site
-records it as `[reaper].action = "kill"`, and the unit the deployer writes
-passes the flag (ADR-0034). Acting on another user's process needs no second
+Run with no flag, it reports; the unit always passes one. Which flag is the
+site's required `[reaper].action`, with no default (ADR-0037): `kill` is a
+decision someone makes after reading real findings against real traffic, not
+a default that drifts, and the unit the deployer writes passes the flag
+(ADR-0034). Acting on another user's process needs no second
 flag: this tool's one caller is that root-run unit.
 """
 

@@ -21,10 +21,10 @@ mount point, is allowed and always was. The refusal prints the depth that
 applied.
 
 **A kill** can come only from the reaper, and only when it runs with
-`--kill`. By default it only reports: it records what it would have killed
-and signals nothing. When it does kill, it sends `SIGTERM`, waits, then
-sends `SIGKILL`. It kills a process for one of three reasons, all of them
-about a traversal tool walking a guarded mount:
+`--kill`, a site's choice. Otherwise it reports: it records what it would
+have killed and signals nothing. When it does kill, it sends `SIGTERM`,
+waits, then sends `SIGKILL`. It kills a process for one of three reasons,
+all of them about a traversal tool walking a guarded mount:
 
 - the walk ran longer than 900 seconds while the process that started it was
   still alive;

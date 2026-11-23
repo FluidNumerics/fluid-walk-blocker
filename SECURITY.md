@@ -54,8 +54,9 @@ authorization; the absence of a second confirmation is not a missing check.
 ## Out of scope
 
 - Bypassing Layer 1, per above.
-- That `--kill` can kill processes. It is opt-in, off by default, and promoted
-  only by a person deciding so at a site.
+- That `--kill` can kill processes. The unit passes it only where a site's
+  `site.toml` states `[reaper].action = "kill"`, a key with no default
+  (ADR-0037), so it runs only where a person chose it for that site.
 - Damage done by running the installer as root against a node you should not
   have. The tool assumes the operator is authorized on the node.
 - Findings that require root on the node to begin with, where root is already

@@ -342,16 +342,19 @@ def test_a_failed_build_leaves_no_staging_litter_and_the_old_payload(scratch_pay
 
 def test_a_promoted_site_stamps_kill_into_deploy_and_nowhere_else(tmp_path):
     """`[reaper].action` reaches deploy.py as REAPER_ACTION and no other
-    file: the reaper reads its argv, never the key (ADR-0034). A writing
-    build prints the notice; `--check` of the result is silent, because its
-    stdout is the difference list; the example's build says nothing, since
-    the notice is for the other value. And the payload's own dry run,
-    unprivileged, previews the promoted line."""
+    file: the reaper reads its argv, never the key (ADR-0034). The example
+    chooses `kill` (ADR-0037), so its writing build prints the notice;
+    `--check` of the result is silent, because its stdout is the difference
+    list; a `report` site's build says nothing, since the notice is for the
+    other value. And the payload's own dry run, unprivileged, previews the
+    promoted line."""
     site = tmp_path / "site.toml"
-    site.write_text(open(EXAMPLE).read().replace(
-        'action = "report"', 'action = "kill"'), encoding="utf-8")
+    text = open(EXAMPLE).read()
+    assert text.count('action = "kill"') == 1
+    site.write_text(text.replace('action = "kill"', 'action = "report"'),
+                    encoding="utf-8")
     out = tmp_path / "payload"
-    code, stdout, err = _build(site, out)
+    code, stdout, err = _build(EXAMPLE, out)
     assert code == 0 and err == "", err
     assert 'reaper.action = "kill"' in stdout and "--kill" in stdout, stdout
     deploy_text = (out / "deploy.py").read_text()
@@ -360,8 +363,8 @@ def test_a_promoted_site_stamps_kill_into_deploy_and_nowhere_else(tmp_path):
     for name in ("reaper.py", "search_rules.py", "survey.py", "walk-job",
                  "shim/guard.sh", "shim/install.sh", "shim/wrapped_names.sh"):
         assert "reaper.action" not in (out / name).read_text(), name
-    assert _build(site, out, check=True)[:2] == (0, "")
-    code, stdout, _e = _build(EXAMPLE, tmp_path / "example")
+    assert _build(EXAMPLE, out, check=True)[:2] == (0, "")
+    code, stdout, _e = _build(site, tmp_path / "report")
     assert code == 0 and "reaper.action" not in stdout, stdout
 
     r = subprocess.run([sys.executable, str(out / "deploy.py"),

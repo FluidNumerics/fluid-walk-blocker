@@ -97,8 +97,9 @@ a round and gets the same answer. ADRs live under `docs/adr/`.
   marker. Change `src/walk_blocker/search_rules.py`, the `.in` template, the
   schema, or `site.example.toml`, and rebuild; `walk-blocker build --check`
   fails on a stale artifact.
-- `--report` is the default and `--kill` is a separate human decision. Do not
-  suggest promoting it.
+- `[reaper].action` is a required site value with no default (ADR-0037);
+  choosing `kill` is a human decision made at the site. Do not suggest a
+  default for it, and do not report the example's `kill` as a defect.
 - Issue and PR text describes shapes, not identities: no usernames, no live
   PIDs, no hostnames, no site paths, no customer or vendor names. "A remote
   mount", "a user's process", "the reference deployment".

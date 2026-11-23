@@ -274,16 +274,19 @@ group's membership changes.
 
 ## Decide the reaper's action
 
-Key: `[reaper].action`. Decision records: ADR-0009, ADR-0034.
+Key: `[reaper].action`, required. Decision records: ADR-0009, ADR-0034,
+ADR-0037.
 
-`report`, the default, records every finding and signals nothing. `kill`
+There is no default: a site states one value, and a `site.toml` without it
+is refused. `report` records every finding and signals nothing. `kill`
 makes the unit run `reaper.py --kill`: the reaper signals findings outside
 `NEVER_KILL`, whoever owns the process, up to `max_kills` per poll and with
 `kill_grace_s` between `SIGTERM` and `SIGKILL`. The value is compiled into
 the service unit, so a redeploy carries it; there is nothing to edit on the
 node and nothing there to drift back.
 
-Leave it at `report` for the first deployment. Promote only on evidence:
+The example states `kill`. A site's first deployment usually states
+`report`, and moves to `kill` only on evidence read from that trail:
 
 1. Read the trail for several days of real traffic. Count distinct
    `(verdict, pid, starttime)` keys inside and outside `NEVER_KILL`; rows
