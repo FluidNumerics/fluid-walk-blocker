@@ -14,7 +14,16 @@ jobs:
     # is 3.9, which is the node floor (ADR-0015); the matrix interpreters
     # come from uv.
     runs-on: ubuntu-latest
-    container: rockylinux:9
+    container:
+      image: rockylinux:9
+      # The image config may set no PATH. The runner builds a step's PATH
+      # from the entries actions add (setup-uv adds uv's) and the PATH in
+      # the container config, so with none the steps after setup-uv run
+      # with only uv's directories on PATH, and `docker exec` cannot find
+      # `sh`. Stating the standard PATH here puts it in the container
+      # config whatever the image carries.
+      env:
+        PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
