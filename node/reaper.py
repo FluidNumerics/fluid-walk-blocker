@@ -37,7 +37,9 @@ killed.
 Each finding also records HOW the process reached the node, read from its leaf
 cgroup and mapped through the site's `[reaper].origins` table: one label per
 ssh transport, container runtime or unit shape the site runs, `other` for a
-shape the table has not seen, `unknown` when /proc raced the scan. That is
+shape the table has not seen, `unknown` when /proc raced the scan. A login
+inside a service unit the site names in `[reaper].login_units` takes that
+unit's label instead (ADR-0039). That is
 descriptive only -- never an input to classify() -- and it is what lets the
 audit log tell a traversal Layer 1 was in front of from one it never applied
 to (ADR-0003).
@@ -401,11 +403,32 @@ _ORIGIN_RULES = tuple((re.compile(row["pattern"]), row["label"])
 # snapshot whose ppid links are inconsistent, read mid-fork across the scan.
 LOGIN_SHELL_MAX_HOPS = 64
 
+# Shell names for the second login-shell form below. A shell not named here
+# falls through to the ORIGINS table, which errs toward the table's answer.
+LOGIN_SHELL_NAMES = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "fish",
+                     "tcsh", "csh")
+
+
+def is_login_shell(argv):
+    """Whether `argv` is a login shell's, in either form a login uses.
+
+    argv[0] starting with "-" is the convention login(1), sshd and `su -l`
+    use. An ssh server that starts the session shell itself may instead run
+    it as exactly `<shell> -l` (or `--login`), with argv[0] the shell's path.
+    Only that exact shape counts: `bash -l -c <cmd>` is a script, and a
+    walk tool's own `-l` (`grep -l`, `du -l`) is not a shell's.
+    """
+    if not argv:
+        return False
+    if argv[0].startswith("-"):
+        return True
+    return (len(argv) == 2 and argv[1] in ("-l", "--login")
+            and os.path.basename(argv[0]) in LOGIN_SHELL_NAMES)
+
 
 def login_shell_in_unit(proc, procs, leaf):
     """Whether `proc`, or an ancestor still inside the unit `leaf`, is a login
-    shell (argv[0] starting with "-", the convention login(1) and sshd use
-    to tell a shell it is a login shell).
+    shell (`is_login_shell`).
 
     Read from the snapshot `scan_procs()` already took: no further /proc read
     and no fork. A missing ancestor or an empty argv is "not found", which
@@ -426,7 +449,7 @@ def login_shell_in_unit(proc, procs, leaf):
     while (current is not None and current.leaf_cgroup == leaf
            and current.pid not in seen and hops <= LOGIN_SHELL_MAX_HOPS):
         seen.add(current.pid)
-        if current.argv and current.argv[0].startswith("-"):
+        if is_login_shell(current.argv):
             return True
         current = procs.get(current.ppid)
         hops += 1

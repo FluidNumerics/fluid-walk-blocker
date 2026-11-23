@@ -142,8 +142,9 @@ origins = [
 ]
 # Service unit leaf -> origin label, for a unit that carries logins with no
 # logind session. A process there takes the label only when a login shell
-# (argv[0] starting with "-") is among itself and its ancestors inside the
-# unit; the daemon itself falls through to origins above. Use a label apart
+# (argv[0] starting with "-", or exactly `<shell> -l`) is among itself and
+# its ancestors inside the unit; the daemon itself falls through to origins
+# above. Use a label apart
 # from systemd_service, and apart from the session-scope label the same
 # transport gets when it does register a session (ADR-0039).
 login_units = { "tailscaled.service" = "ssh_tailscale_unregistered" }

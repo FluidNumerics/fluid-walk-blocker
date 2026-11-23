@@ -1786,7 +1786,7 @@ def test_classify_origin_maps_every_example_label_and_the_two_fallbacks():
 
 
 def test_origins_come_from_config_and_the_first_match_wins(tmp_path):
-    """The label set is `[reaper].origins`, compiled in: a site that runs a
+    """The leaf table is `[reaper].origins`, compiled in: a site that runs a
     scheduler adapter adds one row and its trail says so. Order is the
     site's, first match wins, a leaf no row matches is `other`, and the two
     fallbacks are code -- present whatever the table says."""
@@ -1951,6 +1951,46 @@ def test_a_login_shell_above_the_unit_does_not_count(procfs, mounts_path):
     not about the unit, and the lookup stops at the boundary."""
     _login_unit_tree(procfs, "above")
     assert _walk_record(procfs, mounts_path)["origin"] == "systemd_service"
+
+
+@pytest.mark.parametrize("shell_argv, origin", [
+    (["/bin/bash", "-l"], "ssh_tailscale_unregistered"),
+    (["/usr/bin/zsh", "--login"], "ssh_tailscale_unregistered"),
+    (["/bin/bash", "-l", "-c", " ".join(WALK)], "systemd_service"),
+    (["/usr/libexec/helper", "-l"], "systemd_service"),
+])
+def test_a_session_shell_the_transport_starts_itself_is_a_login(
+        procfs, mounts_path, shell_argv, origin):
+    """An ssh server that starts the session shell itself, with no
+    multiplexer in between, runs it as exactly `<shell> -l`: argv[0] is the
+    shell's path, not "-bash". That is a login too (ADR-0039). A shell given
+    a command, or a program that is not a shell, is not."""
+    write_proc(procfs, 1, "systemd", ["/usr/lib/systemd/systemd"], uid=0,
+               ppid=0, state="S", cgroup="/init.scope")
+    write_proc(procfs, 6100, "tailscaled", ["/usr/sbin/tailscaled"], uid=0,
+               ppid=1, state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(procfs, 6101, os.path.basename(shell_argv[0]), shell_argv,
+               ppid=6100, state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(procfs, 6005, "bfs", WALK, ppid=6101, age_s=9000,
+               cgroup=TAILSCALED_UNIT)
+    assert _walk_record(procfs, mounts_path)["origin"] == origin
+
+
+@pytest.mark.parametrize("argv, login", [
+    (["-bash"], True),
+    (["/bin/bash", "-l"], True),
+    (["/bin/fish", "--login"], True),
+    ([], False),
+    (["/bin/bash"], False),
+    (["/bin/bash", "-l", "-c", "true"], False),
+    (["/bin/bash", "-c", "true"], False),
+    (["/usr/bin/ssh", "-l"], False),
+    (["grep", "-l"], False),
+    (["du", "-l"], False),
+])
+def test_a_login_shell_is_a_dash_argv0_or_exactly_a_shell_and_dash_l(
+        argv, login):
+    assert reaper.is_login_shell(argv) is login
 
 
 def test_the_login_lookup_is_bounded_on_a_ppid_cycle():

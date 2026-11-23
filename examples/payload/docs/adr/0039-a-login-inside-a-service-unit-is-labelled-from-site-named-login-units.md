@@ -25,6 +25,14 @@ person who had logged in with the shim on `PATH`. A reader triaging the
 trail draws the wrong conclusion about which layer was in front of the
 walk, which is the question the label exists to answer.
 
+The login shell in that chain was the multiplexer's, whose `argv[0]` starts
+with `-`. A second route to the same unit comes from reading the
+transport's source, not from a node: when its in-process ssh server hands
+the session to neither login(1) nor `su`, it starts the session shell
+itself as `<shell> -l`, with `argv[0]` the shell's path. It asks logind for
+a session only when it runs as root, and goes on without one if the
+request fails.
+
 The alternatives on the table:
 
 - **A site row for the unit, ahead of the generic one** — `{ pattern =
@@ -49,11 +57,18 @@ The alternatives on the table:
 
 `[reaper].login_units` maps a service unit's bare leaf name to an origin
 label, and defaults to empty. A process whose leaf is a named unit takes
-that label only when a login shell — `argv[0]` starting with `-` — is among
-itself and its ancestors while they remain in the same unit cgroup;
-otherwise the leaf falls through to `[reaper].origins` unchanged, so the
-daemon and its own children stay `systemd_service` or whatever the table
-says.
+that label only when a login shell is among itself and its ancestors while
+they remain in the same unit cgroup; otherwise the leaf falls through to
+`[reaper].origins` unchanged, so the daemon and its own children stay
+`systemd_service` or whatever the table says.
+
+A login shell takes one of two forms. Its `argv[0]` starts with `-`, the
+form login(1), sshd and `su -l` give it; or its argv is exactly a shell's
+path followed by `-l` or `--login`, the form an ssh server that starts the
+session shell itself can use. The second form counts only when the path's
+basename is in a fixed list in the reaper (`sh`, `bash`, `dash`, `zsh`,
+`ksh`, `mksh`, `fish`, `tcsh`, `csh`), so `bash -l -c <cmd>`, a shell
+outside the list and another tool's `-l` fall through to the table.
 
 The ancestry is read from the poll's own snapshot, walking `ppid` within
 the unit, with a seen-set and a hop cap: no further `/proc` read and no
@@ -89,18 +104,25 @@ sees its answer (ADR-0003).
   `ppid` link can name a process that has exited or a pid reused since; a
   missing link reads as no login, and a reused pid outside the unit ends the
   walk at the boundary. Both err toward the table's answer.
-- Tests pin the reported tree to the unit's label, a daemon child with no
-  login shell and a chain with a missing link to `systemd_service`, a login
-  shell above the unit's boundary as not counting, the hop cap on a `ppid`
-  cycle, and the verdict and every other record field as identical across
-  the labels (`tests/test_reaper.py`).
+- A process's argv is set by whatever started it, so either form is
+  evidence of a login's shape, not proof of one: a daemon child started
+  with a leading `-`, or as a bare `bash -l` reading its standard input,
+  reads as a login. The label is descriptive and never reaches
+  `classify()`, so the cost is a mislabel, never a verdict.
+- Tests pin the reported tree, and a session shell run as `<shell> -l` or
+  `--login` with no multiplexer, to the unit's label. They pin a daemon
+  child with no login shell, a chain with a missing link, `bash -l -c`, a
+  non-shell's `-l` and a login shell above the unit's boundary to
+  `systemd_service`, and the hop cap on a `ppid` cycle. The verdict is
+  pinned identical across four shapes, and every other record field across
+  the three whose ancestry is the same (`tests/test_reaper.py`).
 
 ## Re-measure when
 
 Whenever a finding in the trail reads `systemd_service` and its owner is a
 person rather than a service account, and whenever a site adds or replaces
 an ssh transport. Procedure: for one such process, read its leaf and its
-ancestors' leaves and `argv[0]` from `/proc`, and whether its uid has a
+ancestors' leaves and argv from `/proc`, and whether its uid has a
 session in `loginctl`. A unit that carries login shells with no session is
 a `login_units` entry; a transport whose logins land in a session scope is
 an `origins` row, as ADR-0003 says. The bar is that no login reads as a

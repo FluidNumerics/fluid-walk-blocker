@@ -568,7 +568,7 @@
         "login_units": {
           "type": "object",
           "default": {},
-          "description": "Service units that carry logins without registering a logind session, keyed by the bare unit leaf name (for example an ssh transport's own daemon unit) and mapping to an origin label. A process in that unit takes the label only when a login shell (argv[0] starting with `-`) is among itself and its ancestors inside the unit; otherwise the `origins` table decides, so the daemon itself stays a service. Use a label distinct from the generic service label. Origin never feeds the kill decision (ADR-0039).",
+          "description": "Service units that carry logins without registering a logind session, keyed by the bare unit leaf name (for example an ssh transport's own daemon unit) and mapping to an origin label. A process in that unit takes the label only when a login shell (argv[0] starting with `-`, or argv exactly `<shell> -l` or `<shell> --login` for a shell the reaper lists) is among itself and its ancestors inside the unit; otherwise the `origins` table decides, so the daemon itself stays a service. Use a label distinct from the generic service label. Origin never feeds the kill decision (ADR-0039).",
           "propertyNames": {
             "pattern": "^[^/]+$"
           },

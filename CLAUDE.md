@@ -162,7 +162,8 @@ the `/proc` step's job. See ADR-0003.
 
 **A finding's `origin` is descriptive and never an input to `classify()`.**
 A process is not more or less of a runaway because of how its owner logged
-in. The label set is `[reaper].origins`; the rule is code.
+in. The label set is `[reaper].origins`, plus `[reaper].login_units` for a
+login inside a service unit (ADR-0039); the rule is code.
 
 **Hook shells are verified, not assumed, and their class comes from
 config.** `[hooks.<shell>]` names each shell's system startup file and

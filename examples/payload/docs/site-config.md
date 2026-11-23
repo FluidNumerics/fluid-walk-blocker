@@ -90,15 +90,16 @@ person's walk as a daemon's.
 Key: `[reaper].login_units`. Decision record: ADR-0039.
 
 1. For a finding labelled as a service whose owner is a person, read the
-   leaf and `argv[0]` of the process and each ancestor from `/proc`, and
-   check `loginctl` for a session of that uid. A chain that stays in one
-   service unit with a login shell (`argv[0]` starting with `-`) in it is
-   that shape.
+   leaf and argv of the process and each ancestor from `/proc`, and check
+   `loginctl` for a session of that uid. A chain that stays in one service
+   unit with a login shell in it is that shape. A login shell's `argv[0]`
+   starts with `-`, or its argv is exactly `<shell> -l` or
+   `<shell> --login` for a shell the reaper lists (ADR-0039).
 2. Name the unit's bare leaf, such as `tailscaled.service`, in
    `login_units`, mapped to a label of its own. A process in the unit takes
    the label only when a login shell is among itself and its ancestors
-   inside the unit; the daemon itself, and anything else it runs, falls
-   through to `origins`. Choose a label apart from the generic service
+   inside the unit; the daemon itself, and a chain with no login shell in
+   it, fall through to `origins`. Choose a label apart from the generic service
    label, and apart from the session-scope label the same transport gets
    when its login does register a session: the two differ in where PSI can
    see them. The default is empty, which leaves every unit to `origins`.
