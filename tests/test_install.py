@@ -4768,6 +4768,27 @@ def test_a_disabled_hook_not_proven_ours_does_not_count(
     assert len(lines) == 1 and lines[0].startswith("injected "), lines
 
 
+@pytest.mark.parametrize("shell", SHELLS)
+def test_an_enabled_hook_still_counts_beside_a_disabled_one_not_proven_ours(
+        tmp_path, shell):
+    """The enabled bash block stands, and the disabled zsh file is a stock
+    one with no block of ours: the bash block alone makes the date
+    unknowable, whatever the scan of the disabled hooks finds. Mutation:
+    reset `_fh_prior` just before the disabled hook's proof, and this reads
+    `injected`."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    layout.fishconf.unlink()
+    layout.zshenv.write_text("# a stock zshenv\nexport X=1\n")
+    assert BEGIN in layout.bashrc.read_text()
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _marker(layout) == ["unknown"], _marker(layout)
+
+
 def _stat_untrusting(directory):
     """STAT_ROOT_755, which passes the spool's query through so the marker
     can be written, except that the chain walk's query for `directory`
