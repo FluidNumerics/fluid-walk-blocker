@@ -2701,8 +2701,8 @@ hook_file_plain() {
     # hook_file_plain -- is $HK_FILE (hook_select() first) a regular file,
     # and not a link? Every write of a hook leaves a regular file renamed
     # into place and refuses a link, so nothing else there was ever
-    # walk-blocker's. The first half of the proof a disabled hook's file
-    # makes (uninstall_claim(), hook_proven_ours()).
+    # walk-blocker's. The proof's type check, for a disabled hook's file
+    # (uninstall_claim(), hook_proven_ours()).
     [ -f "$HK_FILE" ] && [ ! -L "$HK_FILE" ]
 }
 
@@ -2710,7 +2710,7 @@ hook_content_ours() {
     # hook_content_ours -- does $HK_FILE's content say walk-blocker wrote
     # it? A block file by its BEGIN marker (block_shape(), which it leaves
     # set: matched or not, an install wrote it), the drop-in by its first
-    # line, FISH_HEADER. The second half of the proof. Quiet: no output, no
+    # line, FISH_HEADER. The proof's content check. Quiet: no output, no
     # exit. Its caller has already shown the file plain and its directory's
     # chain trusted, so the read cannot be swapped for a FIFO and hang.
     case $HK_KIND in
@@ -2728,16 +2728,16 @@ hook_content_ours() {
 
 hook_proven_ours() {
     # hook_proven_ours SHELL -- is walk-blocker's hook in SHELL's file, by
-    # the proof `--uninstall` asks of a disabled hook before it strips one
-    # (uninstall_claim())? For the marker's scan of the hooks the site has
-    # disabled (issue #246). Quiet: no output, no exit, no refusal.
+    # the proof uninstall_claim() asks that a disabled hook's file is ours?
+    # For the marker's scan of the hooks the site has disabled (issue #246).
+    # Quiet: no output, no exit, no refusal. The uninstall's checks on a
+    # block file's own owner and mode are not part of the proof: they refuse
+    # a write, and this install does not write the file (ADR-0038).
     #
-    # The chain is checked here, as uninstall_claim() checks it, and not left
-    # to an earlier step: an enabled hook's file was walked by
-    # check_hook_file() before anything read it, and a disabled one's never
-    # is. A chain another account can write is not refused -- the install
-    # does not write this file -- but the file under it is not read either,
-    # and the answer is no.
+    # The chain is walked here, as uninstall_claim() walks it, because
+    # nothing else in --system walks a disabled hook's chain. A chain another
+    # account can write is not refused -- the install does not write this
+    # file -- but the file under it is not read either, and the answer is no.
     hook_select "$1"
     hook_file_plain || return 1
     _hp_was=$SG_WOULD_REFUSE
@@ -3157,8 +3157,8 @@ case $MODE in
             # PATH: the hook on disk is the fact, and --uninstall strips it
             # either way. So does a hook the site has since disabled, which
             # still puts the shim on PATH for its shell -- but only where its
-            # file proves it ours, as --uninstall proves it before stripping
-            # one: that file may be shared, or the administrator's (ADR-0038).
+            # file proves it ours, as --uninstall proves a disabled hook's file
+            # ours: that file may be shared, or the administrator's (ADR-0038).
             # One naming an enabled hook's file is skipped, as --uninstall
             # skips it: the enabled scan has answered for that file.
             _fh_prior=0

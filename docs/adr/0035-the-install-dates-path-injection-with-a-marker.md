@@ -121,5 +121,5 @@ Narrowed by ADR-0038. The Decision above read:
 > `install.sh --system` writes `<spool>/first-hook.state`, one line: `injected <epoch>`, where `<epoch>` is `date +%s` read before the first hook is written; or `unknown`, where any hook of ours was already on disk when the install began and no marker stood.
 
 A hook of ours on disk is an enabled shell's, or a disabled shell's whose
-file proves it walk-blocker's by the proof `--uninstall` makes before it
-strips one.
+file proves it walk-blocker's by the proof `--uninstall` asks that a
+disabled hook's file is ours.
