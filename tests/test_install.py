@@ -4694,6 +4694,176 @@ def test_a_best_effort_hook_alone_records_unknown(tmp_path, shell):
     assert _marker(layout) == ["unknown"], _marker(layout)
 
 
+# Issue #246 (ADR-0038): a hook the site has since disabled counts toward "a
+# hook of ours already stood" only where its file proves it ours, by the
+# proof --uninstall asks that a disabled hook's file is ours.
+
+def _install_with_only(tmp_path, shell, disabled, plant=None):
+    """A first install writes every hook; then every hook file but the
+    disabled shell's is removed with the marker, `plant` (a callable taking
+    the disabled shell's path) replaces that one, and a second --system
+    runs with the shell disabled. Returns the marker's lines."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    files = {"bash": layout.bashrc, "zsh": layout.zshenv,
+             "fish": layout.fishconf}
+    for name, path in files.items():
+        if name != disabled:
+            path.unlink()
+    if plant is not None:
+        plant(files[disabled])
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 **{"hooks.%s.enabled" % disabled: False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    return _marker(layout)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("disabled", ["zsh", "fish"])
+def test_a_disabled_hook_proven_ours_records_unknown(tmp_path, shell, disabled):
+    """An earlier install's zsh block, or its fish drop-in, stands for a
+    shell the site has since disabled, and no marker does: the hook still
+    puts the shim on PATH for that shell, so the marker says `unknown`.
+    Mutation: scan only the enabled hooks, and this reads `injected`."""
+    lines = _install_with_only(tmp_path, shell, disabled)
+    assert lines == ["unknown"], lines
+
+
+def _write(text):
+    return lambda path: path.write_text(text)
+
+
+def _remove(path):
+    path.unlink()
+
+
+def _link_to_ours(path):
+    """A symlink to a file carrying our block: never ours, however it
+    reads."""
+    target = path.parent / (path.name + ".target")
+    os.rename(str(path), str(target))
+    os.symlink(str(target), str(path))
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("disabled, plant", [
+    ("fish", _write("# someone else's fish config\nset -gx X 1\n")),
+    ("zsh", _write("# a stock zshenv\nexport X=1\n")),
+    ("zsh", _remove),
+    ("fish", _remove),
+    ("zsh", _link_to_ours),
+], ids=["fish-without-header", "zsh-without-block", "zsh-absent",
+        "fish-absent", "zsh-symlink"])
+def test_a_disabled_hook_not_proven_ours_does_not_count(
+        tmp_path, shell, disabled, plant):
+    """A disabled shell's file that does not prove itself walk-blocker's --
+    a drop-in without the generated header, a block file with no block of
+    ours, no file at all, a symlink -- is not a hook of ours, so the install
+    dates a new run. Mutation: prove a disabled hook as an enabled one is
+    found (hook_on_disk()), and the headerless drop-in and the link read
+    `unknown`; count every disabled hook, and all of them do."""
+    lines = _install_with_only(tmp_path, shell, disabled, plant=plant)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_an_enabled_hook_still_counts_beside_a_disabled_one_not_proven_ours(
+        tmp_path, shell):
+    """The enabled bash block stands, and the disabled zsh file is a stock
+    one with no block of ours: the bash block alone makes the date
+    unknowable, whatever the scan of the disabled hooks finds. Mutation:
+    reset `_fh_prior` just before the disabled hook's proof, and this reads
+    `injected`."""
+    layout = _drift_install(tmp_path, shell)
+    (layout.spool / FIRST_HOOK).unlink()
+    layout.fishconf.unlink()
+    layout.zshenv.write_text("# a stock zshenv\nexport X=1\n")
+    assert BEGIN in layout.bashrc.read_text()
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 **{"hooks.zsh.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _marker(layout) == ["unknown"], _marker(layout)
+
+
+def _stat_untrusting(directory):
+    """STAT_ROOT_755, which passes the spool's query through so the marker
+    can be written, except that the chain walk's query for `directory`
+    answers uid 1000."""
+    head, body = H.STAT_ROOT_755.split("\n", 1)
+    return (head + "\n"
+            "if [ \"$2\" = '%%u %%a' ] && [ \"$3\" = '%s' ]; then\n"
+            "    printf '1000 755\\n'; exit 0\n"
+            "fi\n" % directory + body)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_disabled_hook_naming_an_enabled_hooks_file_is_skipped(
+        tmp_path, shell):
+    """A hand-edited copy (the build refuses two hooks naming one file,
+    issue #224) points the disabled fish drop-in at the enabled bash rc,
+    which opens with the drop-in's header and carries no block of ours. The
+    enabled scan has answered for that file, and no hook of ours stands in
+    it, so the install dates a new run. Mutation: delete the
+    SG_ENABLED_FILES skip from the marker scan, and the header proves the
+    file ours and the marker says `unknown`."""
+    layout = H.Layout(tmp_path, fishconf=tmp_path / "bashrc")
+    layout.bashrc.write_text(FISH_HEADER + "\nexport X=1\n")
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 **{"hooks.fish.enabled": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = _marker(layout)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root reads every file")
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("disabled", ["zsh", "fish"])
+def test_a_disabled_hook_under_an_untrusted_chain_is_neither_read_nor_refused(
+        tmp_path, shell, disabled):
+    """Our zsh block, or our fish drop-in, stands for a disabled shell, in a
+    directory the stand-in `stat` calls someone else's. Another account
+    could swap the file for a FIFO before the read, so it is not read and
+    not counted; and the install does not write it, so it is no reason to
+    refuse or to say anything. The file is mode 0, so a read by this test's
+    account fails with an error naming its path, which the output must not
+    carry; a read whose error output is discarded is not seen. Mutations:
+    drop the chain walk from hook_proven_ours(), or read the file and then
+    answer no, and the read fails aloud."""
+    hdir = tmp_path / "hdir"
+    hdir.mkdir()
+    if disabled == "zsh":
+        layout = H.Layout(tmp_path, zshenv=hdir / "zshenv")
+    else:
+        layout = H.Layout(tmp_path, fishconf=hdir / "fish-conf.fish")
+    layout = _drift_install(tmp_path, shell, layout=layout)
+    files = {"bash": layout.bashrc, "zsh": layout.zshenv,
+             "fish": layout.fishconf}
+    if disabled == "zsh":
+        assert BEGIN in layout.zshenv.read_text()
+    else:
+        assert layout.fishconf.read_text().startswith(FISH_HEADER + "\n")
+    (layout.spool / FIRST_HOOK).unlink()
+    for name, path in files.items():
+        if name != disabled:
+            path.unlink()
+    files[disabled].chmod(0)
+    result, layout = run_install(tmp_path, ["--system"], fake_uid=0,
+                                 tools=ALL_TOOLS, layout=layout,
+                                 shell=_sh(shell),
+                                 stat_body=_stat_untrusting(hdir),
+                                 **{"hooks.%s.enabled" % disabled: False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert str(hdir) not in result.stdout + result.stderr
+    lines = _marker(layout)
+    assert len(lines) == 1 and lines[0].startswith("injected "), lines
+
+
 @pytest.mark.parametrize("shell", SHELLS)
 def test_a_marker_with_no_hook_on_disk_is_replaced(tmp_path, shell):
     """An uninstall that could not reach the spool strips the hooks and
