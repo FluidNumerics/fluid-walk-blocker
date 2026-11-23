@@ -9,8 +9,9 @@ Two rules frame every step below. **Layer 1 is advisory** (ADR-0001): the
 shim refuses the naive command and names the alternative, and an absolute
 path, a private `PATH`, a container, a batch script, a shell function or a
 session that started before the install all go around it. **The reaper
-reports by default**: nothing is killed until a human reads real findings
-and decides otherwise (ADR-0009).
+runs the action the site chose**: `[reaper].action` has no default, and a
+site chooses `kill` only after a human reads real findings (ADR-0009,
+ADR-0037).
 
 ## 1. Prerequisites
 
@@ -452,7 +453,8 @@ What it verifies, and refuses on:
   file untouched, and the install stops with `install.sh`'s 3 and the timer
   disabled (issue #218).
 
-The reaper runs `--report`. Its unit's `ExecStartPre` runs
+The reaper runs the flag `[reaper].action` names, `--report` or `--kill`
+(ADR-0037). Its unit's `ExecStartPre` runs
 `install.sh --relink` — the reconcile — which re-links the farm, re-checks
 every hook and reports rather than repairs, re-asserts the audit
 directory's mode, and reports each mount running on its default; the
@@ -913,9 +915,9 @@ request's own revision, and `build --check` beside it, as required checks.
 
 ## 12. Promoting to `--kill`
 
-The reaper's default is `--report`, and the unit is written that way from
-`[reaper].action = "report"`. Promoting it is a decision a person makes
-after reading real findings
+`[reaper].action` has no default (ADR-0037): a site states `report` or
+`kill`, and the unit is written from that value. A site that starts at
+`report` promotes when a person decides to, after reading real findings
 against real traffic, not a default that drifts. The bar, from ADR-0009's
 "Re-measure when": read the trail for several days, count distinct
 `(verdict, pid, starttime)` keys inside and outside `NEVER_KILL`, and

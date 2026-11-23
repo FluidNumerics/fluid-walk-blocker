@@ -1,6 +1,7 @@
 # ADR-0034: The reaper's action is a site value compiled into the unit
 
 **Status:** accepted, 2026-10-08
+The Decision clause "`[reaper].action` is a site value, `report` or `kill`, default `report`." is narrowed by ADR-0037: the key is required and has no default, and the superseded wording is recorded under "Superseded wording" below.
 **Narrows:** ADR-0028, "Under `--kill-others`, an orphaned walk is killed at the first poll after it passes the budget, so it may run for up to the budget plus one poll interval."
 **Evidence:** n/a, structural — see `docs/evidence.md`
 
@@ -56,8 +57,8 @@ The alternatives, in their strongest form:
 
 ## Decision
 
-`[reaper].action` is a site value, `report` or `kill`, default `report`.
-The build stamps it into `deploy.py`, and `render_units()` turns it into
+`[reaper].action` is a site value, `report` or `kill`, and required
+(ADR-0037). The build stamps it into `deploy.py`, and `render_units()` turns it into
 the service's `ExecStart` flag and its `Description`, so the dry run
 previews the exact line the install writes and every later redeploy
 carries the site's decision.
@@ -116,3 +117,12 @@ record says how to take the measurement.
 - `[reaper].action`, new.
 - `[reaper].max_kills` and `[reaper].kill_grace_s`, unchanged, bound what
   `kill` may do in one poll.
+
+## Superseded wording
+
+Narrowed by ADR-0037. The Decision above read:
+
+> `[reaper].action` is a site value, `report` or `kill`, default `report`.
+
+The key has no default: a site that omits it, or the whole `[reaper]`
+table, is refused, and the shipped example states `kill`.

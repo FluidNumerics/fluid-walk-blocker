@@ -901,8 +901,10 @@ def test_the_preview_runs_unprivileged_for_real_and_writes_nothing(
                 and "install.sh" in l and "--system" in l
                 and "--relink" not in l and "--version" not in l]
     assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in out
-    assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
-        deploy.TRUSTED_PYTHON3, layout.prefix, layout.spool) in out
+    assert "ExecStart=%s %s/reaper.py %s --spool %s" % (
+        deploy.TRUSTED_PYTHON3, layout.prefix,
+        deploy.REAPER_FLAGS[VALUES["site.toml:reaper.action"]],
+        layout.spool) in out
     # ...and no command is advertised under it.
     assert _previewed_lines(out, script) == [], out
     assert "the path is not trusted end to end" in proc.stderr, proc.stderr
@@ -1549,8 +1551,9 @@ def test_deploy_system_executes_when_root_and_approved(tmp_path, monkeypatch):
     exec_start = next(
         line for line in service_text.splitlines()
         if line.startswith("ExecStart="))
-    assert "--report" in exec_start
-    assert "--kill" not in exec_start
+    # The flag the site stated (ADR-0037), and nothing retired.
+    assert "/reaper.py %s --spool " % deploy.REAPER_FLAGS[deploy.REAPER_ACTION] in exec_start
+    assert "--kill-others" not in exec_start
     assert args.prefix in service_text
     assert "$HOME" not in service_text and "~" not in service_text
 
@@ -1997,6 +2000,9 @@ def test_the_post_install_message_names_both_trails_and_the_record(
     pass_prefix_checks(monkeypatch)
     monkeypatch.setattr(deploy, "run", recording_run([]))
 
+    # The report branch of the message; the kill branch is pinned by
+    # test_the_preview_and_the_install_agree_on_a_promoted_unit.
+    monkeypatch.setattr(deploy, "REAPER_ACTION", "report")
     args = _args(tmp_path)
     assert deploy.system_execute(args) == 0
     out = capsys.readouterr().out
@@ -3838,16 +3844,16 @@ def test_a_unit_path_that_is_a_symlink_is_not_followed(tmp_path):
     assert target.read_text() == "do not truncate me\n"
 
 
-def test_the_reaper_ships_report_only_by_default():
-    """Promoting to --kill is a decision someone makes after reading real
-    findings, recorded as `[reaper].action = "kill"`; the example, and so
-    this suite's payload, leaves it at the default. Checked against
+def test_the_reaper_ships_the_action_the_site_states():
+    """`[reaper].action` has no default (ADR-0037): the example states
+    `kill`, and so this suite's payload carries `--kill` because the site
+    said so, not because anything fell back to it. Checked against
     ExecStart specifically: `--kill-after` on the unrelated ExecStartPre
     legitimately puts `--kill` elsewhere in the unit."""
-    assert deploy.REAPER_ACTION == "report"
+    assert deploy.REAPER_ACTION == VALUES["site.toml:reaper.action"] == "kill"
     _directive, command = exec_lines("ExecStart=")[0]
-    assert "--report" in command
-    assert "--kill" not in command
+    assert "--kill" in command.split()
+    assert "--report" not in command
 
 
 @pytest.mark.parametrize("action, flags, verb", [
@@ -3879,7 +3885,8 @@ def test_the_action_tables_are_exactly_the_schema_enum():
     props = config.load_schema()["properties"]["reaper"]["properties"]
     enum = set(props["action"]["enum"])
     assert set(deploy.REAPER_FLAGS) == enum == set(deploy.REAPER_VERBS)
-    assert props["action"]["default"] == "report"
+    # ADR-0037: a site states the action; the schema offers no fallback.
+    assert "default" not in props["action"]
 
 
 def test_the_preview_and_the_install_agree_on_a_promoted_unit(
@@ -3960,7 +3967,8 @@ def test_the_reapers_own_exit_status_still_reaches_the_unit():
     words = command.split()
     assert words[0] == deploy.TRUSTED_PYTHON3
     assert words[1] == "/PFX/reaper.py"
-    assert words[2:] == ["--report", "--spool", "/SPOOL"], command
+    assert words[2:] == [deploy.REAPER_FLAGS[deploy.REAPER_ACTION],
+                         "--spool", "/SPOOL"], command
     assert ("SuccessExitStatus", "0") in exec_lines("SuccessExitStatus=")
 
     tolerant = [d for d, c in exec_lines("Exec") if c.startswith("-")]
@@ -4027,8 +4035,10 @@ def test_the_preview_prints_the_rendered_units_the_install_writes(
             assert line in previewed.splitlines(), line
     assert "OnCalendar=%s" % VALUES["site.toml:timer.on_calendar"] in previewed
     assert "TimeoutStartSec=%d" % VALUES["site.toml:timer.timeout_start_sec"] in previewed
-    assert "ExecStart=%s %s/reaper.py --report --spool %s" % (
-        VALUES["site.toml:trusted_binaries.python3"], args.prefix, args.spool_dir) in previewed
+    assert "ExecStart=%s %s/reaper.py %s --spool %s" % (
+        VALUES["site.toml:trusted_binaries.python3"], args.prefix,
+        deploy.REAPER_FLAGS[VALUES["site.toml:reaper.action"]],
+        args.spool_dir) in previewed
 
 
 # --------------------------------------------------------------------------

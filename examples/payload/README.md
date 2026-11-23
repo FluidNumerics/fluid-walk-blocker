@@ -52,7 +52,8 @@ prefix, and every refusal prints its path.
   past its time budget on such a mount, whether or not the session that
   started it is still open, or too many running at once under one parent. The reaper kills only when the
   site has set `[reaper].action = "kill"`, which puts `--kill` in its unit.
-  By default it reports and signals nothing.
+  Under `"report"` it records what it found and signals nothing; the site
+  must choose one, and there is no default.
 - **How to check.** `systemctl cat walk-blocker.service | grep ExecStart=`
   shows, to any account, whether killing is on at all. A refusal is recorded
   in your own journal (`journalctl -t walk-blocker`) for as long as the node
@@ -83,10 +84,11 @@ not care how the process arrived.
 | Layer | What it is | Catches | Bypassable by |
 |---|---|---|---|
 | 1, the shim | a POSIX `sh` dispatcher on every user's `PATH`, generated from the rule table and `site.toml` | the naive invocation, before it starts, in under a second, with a message naming the alternative | an absolute path, a private `PATH`, a container, a batch script, a second-level shell, a shell function — by design (ADR-0001) |
-| 2, the reaper | a root-run systemd timer, stdlib Python, reading PSI at each user slice and classifying the whole process table | whatever reached the node regardless of how, once it is past budget on an expensive mount | nothing that changes how a process arrives; it reports by default and kills only when a human decides |
+| 2, the reaper | a root-run systemd timer, stdlib Python, reading PSI at each user slice and classifying the whole process table | whatever reached the node regardless of how, once it is past budget on an expensive mount | nothing that changes how a process arrives; it runs the action the site chose, and kills only when a human has decided it should |
 
-Layer 1 is advisory and the code says so. Layer 2 is the backstop, and its
-default is `--report`.
+Layer 1 is advisory and the code says so. Layer 2 is the backstop, and it
+runs the action the site chose in `[reaper].action`, which has no default;
+the example chooses `kill` (ADR-0037).
 
 ## How a search gets intercepted
 
@@ -159,7 +161,7 @@ after which nothing is measurable.
 | `node/deploy.py` | the argumentless deployer |
 | `examples/site.example.toml` | a fictional site with every key written out |
 | `examples/payload/` | that site, built; a build product checked by CI |
-| `docs/adr/` | the decisions, `0001` through `0036` |
+| `docs/adr/` | the decisions, `0001` through `0037` |
 | `docs/alternatives.md` | what to run instead: observed walk patterns and their redirects |
 | `docs/site-config.md` | what a site measures before filling `site.toml` |
 | `docs/node-requirements.md` | what the destination node must provide |
@@ -173,9 +175,10 @@ after which nothing is measurable.
 
 - **Enforcement by Layer 1.** A PATH shim cannot bind; describing it as a
   sandbox invites reliance it cannot support (ADR-0001).
-- **Killing by default.** The reaper reports. `--kill` is a decision made at
-  the site after reading real findings, recorded as `[reaper].action` and
-  compiled into the unit (ADR-0009, ADR-0034).
+- **An action by default.** Neither reporting nor killing is chosen for a
+  site: `[reaper].action` is required, and `--kill` is a decision made at
+  the site after reading real findings, reviewed in the site's own
+  repository and compiled into the unit (ADR-0009, ADR-0034, ADR-0037).
 - **Processes that predate the deployment.** The reaper will report them;
   nothing here retroactively wraps a shell that already started.
 - **Sudo for agent sessions.** Automated agents working in this repository
@@ -229,7 +232,7 @@ configuration can be checked against a commit.
 
 1. This file — what it is, what is in and out of scope
 2. `docs/plan.md` — the architecture as built, on one page
-3. `docs/adr/0001` through `docs/adr/0036`, in order — the decisions
+3. `docs/adr/0001` through `docs/adr/0037`, in order — the decisions
 4. `docs/site-config.md` — what a site measures before it can be deployed
 5. `docs/node-requirements.md` — what the node must provide, and the floor
    below which a fault is unsupported
