@@ -94,10 +94,13 @@ def write_proc(root, pid, comm, argv, uid=UID_A, ppid=1, state="D",
                                  % (comm, uid, uid, uid, uid))
     # Defaults to a seated-session scope so the cases written before origin
     # existed keep describing a plausible process. cgroup=None omits the file
-    # entirely, which is what a process exiting mid-scan looks like.
+    # entirely, which is what a process exiting mid-scan looks like. A value
+    # starting "/" is a whole cgroup path, for a process outside any user
+    # slice -- a system service, or pid 1 in init.scope.
     if cgroup is not None:
         (base / "cgroup").write_text(
-            "0::/user.slice/user-%d.slice/%s\n" % (uid, cgroup))
+            "0::%s\n" % cgroup if cgroup.startswith("/")
+            else "0::/user.slice/user-%d.slice/%s\n" % (uid, cgroup))
     # fd/0, for the tools that decide what they walk by asking whether stdin
     # is a terminal. Omitted by default, which read_proc reads as None -- the
     # unreadable case, and what a process belonging to another user really
@@ -1783,7 +1786,7 @@ def test_classify_origin_maps_every_example_label_and_the_two_fallbacks():
 
 
 def test_origins_come_from_config_and_the_first_match_wins(tmp_path):
-    """The label set is `[reaper].origins`, compiled in: a site that runs a
+    """The leaf table is `[reaper].origins`, compiled in: a site that runs a
     scheduler adapter adds one row and its trail says so. Order is the
     site's, first match wins, a leaf no row matches is `other`, and the two
     fallbacks are code -- present whatever the table says."""
@@ -1840,6 +1843,208 @@ def test_origin_does_not_change_any_verdict(procfs, mounts_path):
         findings = reaper.classify(scan(root), read_mounts(mounts_path))
         verdicts.append(findings[0].verdict)
     assert len(set(verdicts)) == 1, verdicts
+    # And the login-unit shapes (ADR-0039): the same walk under a login
+    # shell inside the unit, under the daemon alone, with a login shell above
+    # the unit, and with the chain broken. Each has a live parent where the
+    # cases above are orphans, so they are compared with each other: two
+    # labels, one verdict, and one record apart from `origin`. The broken
+    # chain changes the walk's ancestry, which is classify()'s business, so
+    # its verdict and label are compared but not the rest of its record.
+    verdicts, records = [], []
+    for shape in ("login", "daemon", "above", "broken"):
+        root = procfs / ("origin-" + shape)
+        root.mkdir()
+        _login_unit_tree(root, shape)
+        procs = scan(root)
+        finding = [f for f in reaper.classify(procs, read_mounts(mounts_path))
+                   if f.proc.pid == 6005][0]
+        verdicts.append(finding.verdict)
+        records.append(finding.record(procs=procs))
+    assert len(set(verdicts)) == 1, verdicts
+    assert [r["origin"] for r in records] == [
+        "ssh_tailscale_unregistered", "systemd_service", "systemd_service",
+        "systemd_service"]
+    for r in records:
+        for volatile in ("ts", "origin"):
+            r.pop(volatile)
+    assert records[0] == records[1] == records[2]
+
+
+# The shape issue #248 reported: a Tailscale SSH login whose session shell
+# never got a logind session, so the whole chain stays in the daemon's unit.
+# pid 1 sits in init.scope; everything below it is in tailscaled.service.
+TAILSCALED_UNIT = "/system.slice/tailscaled.service"
+WALK = ["bfs", "/scratch", "-name", "x"]
+
+
+def _login_unit_tree(root, shape):
+    """Write one of the login-unit fixtures under `root`; the walk is pid 6005.
+
+    `login`: tmux server -> -bash -> claude -> bash -c -> bfs, all in the unit.
+    `daemon`: the same walk with no login shell anywhere in the unit.
+    `broken`: the login chain with its `claude` link missing from /proc.
+    `above`: a login shell exists, but in a session scope above the unit.
+    """
+    write_proc(root, 1, "systemd", ["/usr/lib/systemd/systemd"], uid=0,
+               ppid=0, state="S", cgroup="/init.scope")
+    login_argv = ["-bash"] if shape in ("login", "broken") else ["bash"]
+    if shape == "above":
+        # A login shell in a session scope that started the daemon's child
+        # -- the boundary is the unit's cgroup, so this one is not evidence.
+        write_proc(root, 5999, "bash", ["-bash"], ppid=1, state="S",
+                   cgroup=SEATED)
+        top_parent = 5999
+    else:
+        top_parent = 1
+    write_proc(root, 6000, "tmux: server", ["tmux", "new", "-d"],
+               ppid=top_parent, state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(root, 6001, "bash", login_argv, ppid=6000, state="S",
+               cgroup=TAILSCALED_UNIT)
+    if shape != "broken":
+        write_proc(root, 6002, "claude", ["claude"], ppid=6001, state="S",
+                   cgroup=TAILSCALED_UNIT)
+    write_proc(root, 6003, "bash", ["bash", "-c", " ".join(WALK)], ppid=6002,
+               state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(root, 6005, "bfs", WALK, ppid=6003, age_s=9000,
+               cgroup=TAILSCALED_UNIT)
+
+
+def _walk_record(root, mounts_path):
+    procs = scan(root)
+    finding = [f for f in reaper.classify(procs, read_mounts(mounts_path))
+               if f.proc.pid == 6005][0]
+    return finding.record(procs=procs)
+
+
+def test_a_login_inside_a_login_unit_takes_the_units_label(
+        procfs, mounts_path):
+    """Issue #248: a Tailscale SSH login with no logind session leaves the
+    whole chain in tailscaled.service, and the generic `.service` row called
+    it a daemon -- "Layer 1 never applied" about a person with the shim on
+    PATH. A login shell inside the unit is the evidence that it was a login
+    (ADR-0039)."""
+    _login_unit_tree(procfs, "login")
+    entry = _walk_record(procfs, mounts_path)
+    assert entry["leaf_cgroup"] == "tailscaled.service"
+    assert entry["origin"] == "ssh_tailscale_unregistered"
+
+
+def test_a_daemon_child_in_a_login_unit_stays_a_service(procfs, mounts_path):
+    """The unit's name alone is not evidence. With no login shell among the
+    walk and its ancestors in the unit, the leaf falls through to the
+    origins table, and the daemon is what the generic row says it is."""
+    _login_unit_tree(procfs, "daemon")
+    assert _walk_record(procfs, mounts_path)["origin"] == "systemd_service"
+
+
+def test_a_broken_ancestry_in_a_login_unit_is_not_a_login(procfs, mounts_path):
+    """A parent that exited between the scan and the lookup is a missing
+    link, and the lookup reads only the snapshot: no login shell found, so
+    no login claimed -- the table decides, not a guess."""
+    _login_unit_tree(procfs, "broken")
+    assert _walk_record(procfs, mounts_path)["origin"] == "systemd_service"
+
+
+def test_a_login_shell_above_the_unit_does_not_count(procfs, mounts_path):
+    """The unit's cgroup bounds the walk. A login shell in a session scope
+    that started something now in the unit is evidence about that scope,
+    not about the unit, and the lookup stops at the boundary."""
+    _login_unit_tree(procfs, "above")
+    assert _walk_record(procfs, mounts_path)["origin"] == "systemd_service"
+
+
+@pytest.mark.parametrize("shell_argv, origin", [
+    (["/bin/bash", "-l"], "ssh_tailscale_unregistered"),
+    (["/usr/bin/zsh", "--login"], "ssh_tailscale_unregistered"),
+    (["/bin/bash", "-l", "-c", " ".join(WALK)], "systemd_service"),
+    (["/usr/libexec/helper", "-l"], "systemd_service"),
+])
+def test_a_session_shell_the_transport_starts_itself_is_a_login(
+        procfs, mounts_path, shell_argv, origin):
+    """An ssh server that starts the session shell itself, with no
+    multiplexer in between, runs it as exactly `<shell> -l`: argv[0] is the
+    shell's path, not "-bash". That is a login too (ADR-0039). A shell given
+    a command, or a program that is not a shell, is not."""
+    write_proc(procfs, 1, "systemd", ["/usr/lib/systemd/systemd"], uid=0,
+               ppid=0, state="S", cgroup="/init.scope")
+    write_proc(procfs, 6100, "tailscaled", ["/usr/sbin/tailscaled"], uid=0,
+               ppid=1, state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(procfs, 6101, os.path.basename(shell_argv[0]), shell_argv,
+               ppid=6100, state="S", cgroup=TAILSCALED_UNIT)
+    write_proc(procfs, 6005, "bfs", WALK, ppid=6101, age_s=9000,
+               cgroup=TAILSCALED_UNIT)
+    assert _walk_record(procfs, mounts_path)["origin"] == origin
+
+
+@pytest.mark.parametrize("argv, login", [
+    (["-bash"], True),
+    (["/bin/bash", "-l"], True),
+    (["/bin/fish", "--login"], True),
+    ([], False),
+    (["/bin/bash"], False),
+    (["/bin/bash", "-l", "-c", "true"], False),
+    (["/bin/bash", "-c", "true"], False),
+    (["/usr/bin/ssh", "-l"], False),
+    (["grep", "-l"], False),
+    (["du", "-l"], False),
+])
+def test_a_login_shell_is_a_dash_argv0_or_exactly_a_shell_and_dash_l(
+        argv, login):
+    assert reaper.is_login_shell(argv) is login
+
+
+def test_the_login_lookup_is_bounded_on_a_ppid_cycle():
+    """A snapshot read mid-fork can hold ppid links that loop. The lookup
+    must end, and say "not found", rather than spin the poll."""
+    def proc(pid, ppid):
+        return reaper.Proc(pid=pid, ppid=ppid, argv=["bash"],
+                           leaf_cgroup="tailscaled.service")
+    procs = {7000: proc(7000, 7001), 7001: proc(7001, 7000)}
+    assert not reaper.login_shell_in_unit(procs[7000], procs,
+                                          "tailscaled.service")
+    chain = {pid: proc(pid, pid + 1) for pid in range(8000, 8200)}
+    chain[8199].argv = ["-bash"]
+    assert not reaper.login_shell_in_unit(chain[8000], chain,
+                                          "tailscaled.service")
+    assert reaper.login_shell_in_unit(
+        chain[8199 - reaper.LOGIN_SHELL_MAX_HOPS], chain, "tailscaled.service")
+
+
+def test_a_poll_labels_a_login_inside_a_login_unit(tmp_path, procfs,
+                                                    mounts_path):
+    """End to end: run() hands record() the poll's own snapshot, so the
+    lookup sees the walk's ancestors. A record() call without it would fall
+    through to the table and write `systemd_service` for the issue's tree.
+    No slice holds the walk -- it is in the unit, not a user slice -- and its
+    uid has no slice of its own here, so the PSI field is left off, not
+    False. Another user's slice is present, as on any live node; with none
+    at all the poll is blind and records nothing (ADR-0009)."""
+    cg = tmp_path / "cg"
+    write_slice(cg, UID_B, io_full_total=0.0)
+    _login_unit_tree(procfs, "login")
+    args = _report_args(tmp_path, cg, procfs, mounts_path)
+    reaper.run(args, sleep=lambda _s: None)
+    entries = [e for e in _read_audit(str(tmp_path / "audit.jsonl"))
+               if e.get("pid") == 6005]
+    assert len(entries) == 1, entries
+    assert entries[0]["origin"] == "ssh_tailscale_unregistered"
+    assert "stalling_slice" not in entries[0]
+
+
+def test_login_units_come_from_config_and_default_to_none(tmp_path):
+    """The unit-to-label map is `[reaper].login_units`, compiled in. With
+    none configured, the issue's tree reads as the generic row says."""
+    custom = load_stamped_reaper(
+        site_values(**{"site.toml:reaper.login_units": {}}), str(tmp_path))
+    assert custom.LOGIN_UNITS == {}
+    login = custom.Proc(pid=1, ppid=0, argv=["-bash"],
+                        leaf_cgroup="tailscaled.service")
+    assert custom.classify_origin("tailscaled.service", login,
+                                  {1: login}) == "systemd_service"
+    assert reaper.classify_origin("tailscaled.service", login,
+                                  {1: login}) == "ssh_tailscale_unregistered"
+    # Without a process there is nothing to look up: the leaf alone.
+    assert reaper.classify_origin("tailscaled.service") == "systemd_service"
 
 
 def test_a_remote_command_attributes_to_its_shell_not_to_the_transport_daemon(

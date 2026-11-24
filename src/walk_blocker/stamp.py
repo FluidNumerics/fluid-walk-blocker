@@ -101,6 +101,7 @@ CONSUMERS = {
         "VERSION",
         "site.toml:reaper.cgroup_root", "site.toml:reaper.slice_prefix",
         "site.toml:reaper.slice_suffix", "site.toml:reaper.origins",
+        "site.toml:reaper.login_units",
         "site.toml:reaper.traversal_budget_s", "site.toml:reaper.fanout_n",
         "site.toml:reaper.io_stall_fraction", "site.toml:reaper.cpu_stall_fraction",
         "site.toml:reaper.kill_grace_s", "site.toml:reaper.max_kills",

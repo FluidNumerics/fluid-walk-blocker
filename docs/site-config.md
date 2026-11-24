@@ -82,6 +82,28 @@ registers its sessions under its own scope-naming scheme.
    cgroup file is `unknown`. Both are legitimate, and a rising `other`
    count is the signal that the table is behind the site.
 
+A transport whose login does not register a logind session never reaches a
+session scope: the session shell and everything under it stay in the
+transport daemon's own unit, and the generic `.service` row labels a
+person's walk as a daemon's.
+
+Key: `[reaper].login_units`. Decision record: ADR-0039.
+
+1. For a finding labelled as a service whose owner is a person, read the
+   leaf and argv of the process and each ancestor from `/proc`, and check
+   `loginctl` for a session of that uid. A chain that stays in one service
+   unit with a login shell in it is that shape. A login shell's `argv[0]`
+   starts with `-`, or its argv is exactly `<shell> -l` or
+   `<shell> --login` for a shell the reaper lists (ADR-0039).
+2. Name the unit's bare leaf, such as `tailscaled.service`, in
+   `login_units`, mapped to a label of its own. A process in the unit takes
+   the label only when a login shell is among itself and its ancestors
+   inside the unit; the daemon itself, and a chain with no login shell in
+   it, fall through to `origins`. Choose a label apart from the generic service
+   label, and apart from the session-scope label the same transport gets
+   when its login does register a session: the two differ in where PSI can
+   see them. The default is empty, which leaves every unit to `origins`.
+
 The label is descriptive only; it never enters the kill decision. Match the
 leaf name, never the full path — the path carries another user's session
 id, and the audit log has to stay a document that can be shown to the

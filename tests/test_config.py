@@ -43,9 +43,16 @@ def _scalar(value):
     raise TypeError(type(value))
 
 
+def _key(key):
+    # A key with a dot in it -- a unit name in `[reaper].login_units` -- is a
+    # dotted key when bare, so it is quoted; a JSON string is a valid TOML
+    # quoted key.
+    return key if re.match(r"^[A-Za-z0-9_-]+$", key) else json.dumps(key)
+
+
 def _inline(value):
     if isinstance(value, dict):
-        return "{ " + ", ".join("%s = %s" % (k, _inline(v)) for k, v in value.items()) + " }"
+        return "{ " + ", ".join("%s = %s" % (_key(k), _inline(v)) for k, v in value.items()) + " }"
     return _scalar(value)
 
 
@@ -58,7 +65,7 @@ def dump_toml(data, prefix=""):
                 and prefix != "reaper":
             arrays.append((key, value))
         else:
-            lines.append("%s = %s" % (key, _scalar(value) if not isinstance(value, list)
+            lines.append("%s = %s" % (_key(key), _scalar(value) if not isinstance(value, list)
                                        else "[" + ", ".join(_inline(v) for v in value) + "]"))
     out = "\n".join(lines) + ("\n" if lines else "")
     for key, value in tables:
@@ -132,7 +139,14 @@ def test_every_property_has_a_description():
 def test_every_object_forbids_unknown_keys():
     def walk(node, path):
         if isinstance(node, dict):
-            if node.get("type") == "object" or "properties" in node:
+            if "propertyNames" in node:
+                # A map (`[reaper].login_units`): its keys are the site's own
+                # names, so they are constrained by pattern rather than
+                # enumerated, and every value still has a schema.
+                assert "properties" not in node, path
+                assert isinstance(node.get("additionalProperties"), dict), path
+                assert node["propertyNames"].get("pattern"), path
+            elif node.get("type") == "object" or "properties" in node:
                 assert node.get("additionalProperties") is False, path
             for k, v in node.items():
                 walk(v, path + "/" + k)
@@ -188,6 +202,8 @@ def test_defaults_fill_a_minimal_site():
     assert site.lookup("filesystems.mounts") == []
     assert [o["label"] for o in site.lookup("reaper.origins")] == [
         "ssh_seated", "ssh_seatless", "container", "systemd_service", "init"]
+    # ADR-0039: no login unit is assumed; a site names its own.
+    assert site.lookup("reaper.login_units") == {}
     assert "bfs" not in site.data["trusted_binaries"]
     assert site.derived()["timer_floor_s"] == 160
     # ADR-0030: the re-assertion cadence has a default; a site that omits
@@ -347,6 +363,16 @@ BAD_SITES = [
     ("timer.reassert_interval_s", "21600", "integer"),
     ("timer.reassert_interval_s", 21600.5, "integer"),
     ("reaper.origins[0].pattern", "(", "compile"),
+    # ADR-0039: a login unit is a bare leaf name mapping to an origin label.
+    ("reaper.login_units", {"system.slice/tailscaled.service": "ssh_x"},
+     "does not match"),
+    ("reaper.login_units", {"": "ssh_x"}, "does not match"),
+    ("reaper.login_units", {"tailscaled.service": "Tailscale SSH"},
+     "does not match"),
+    ("reaper.login_units", {"tailscaled.service": 1}, "string"),
+    ("reaper.login_units", {"tailscaled.service\n": "ssh_x"},
+     "control character"),
+    ("reaper.login_units", ["tailscaled.service"], "object"),
     ("hooks.bash.file", REMOVE, "required (even when"),
     ("hooks.fish.package", "fish", "Additional properties"),
     ("site.display_name", "Example 100% HPC", "pattern"),
@@ -536,3 +562,13 @@ def test_journal_readable_refuses_a_group_systemd_already_grants(group):
     if group != "root":
         data["install"]["journal_readable"] = False
         config.from_dict(data)
+
+
+def test_login_units_are_read_as_a_map_of_unit_leaf_to_label():
+    """ADR-0039: the example names one login unit, and the key is the unit's
+    leaf name whole -- a dot in it is part of the name, not a TOML table."""
+    site = config.load_site(os.path.join(ROOT, "examples", "site.example.toml"))
+    assert site.lookup("reaper.login_units") == {
+        "tailscaled.service": "ssh_tailscale_unregistered"}
+    labels = {o["label"] for o in site.lookup("reaper.origins")}
+    assert "ssh_tailscale_unregistered" not in labels

@@ -129,7 +129,10 @@ cgroup_root = "/sys/fs/cgroup/user.slice"
 slice_prefix = "user-"
 slice_suffix = ".slice"
 # cgroup leaf name -> descriptive origin label; first match wins. One entry
-# per ssh transport or container runtime this site runs (ADR-0003).
+# per session-scope naming scheme or container runtime this site runs
+# (ADR-0003). A transport whose login registers a logind session lands in a
+# session scope; one whose login does not stays in its daemon's own unit and
+# would read as systemd_service here -- name that unit in login_units below.
 origins = [
   { pattern = '^session-\d+\.scope$',      label = "ssh_seated" },
   { pattern = '^session-c\d+\.scope$',     label = "ssh_seatless" },
@@ -137,6 +140,14 @@ origins = [
   { pattern = '^[^/]+\.service$',          label = "systemd_service" },
   { pattern = '^init\.scope$',             label = "init" },
 ]
+# Service unit leaf -> origin label, for a unit that carries logins with no
+# logind session. A process there takes the label only when a login shell
+# (argv[0] starting with "-", or exactly `<shell> -l`) is among itself and
+# its ancestors inside the unit; the daemon itself falls through to origins
+# above. Use a label apart
+# from systemd_service, and apart from the session-scope label the same
+# transport gets when it does register a session (ADR-0039).
+login_units = { "tailscaled.service" = "ssh_tailscale_unregistered" }
 traversal_budget_s = 900
 fanout_n = 4
 io_stall_fraction = 0.01        # differenced over one poll window, never cumulative

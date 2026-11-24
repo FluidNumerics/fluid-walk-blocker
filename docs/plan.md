@@ -128,8 +128,9 @@ branch in the logic (ADR-0007).
 may not. `opaque_traversal` is there because it names an unmodelled tool,
 not evidence of a walk (ADR-0010); `unparsed_traversal` because killing on
 it would be acting on the reaper's own failure. A finding's `origin` — read
-from its cgroup leaf and mapped through `[reaper].origins` — is descriptive
-and never an input to `classify()` (ADR-0003). The unit's exit status
+from its cgroup leaf and mapped through `[reaper].origins`, or through
+`[reaper].login_units` for a login inside a service unit — is descriptive
+and never an input to `classify()` (ADR-0003, ADR-0039). The unit's exit status
 follows the partition: 0 quiet or unactionable, 1 a new actionable
 finding, 2 blind (ADR-0009). Under `--kill`, which the unit carries when
 `[reaper].action` is `kill` (ADR-0034): `SIGTERM`, `kill_grace_s`,

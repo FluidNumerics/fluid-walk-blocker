@@ -544,7 +544,7 @@
               "label": "init"
             }
           ],
-          "description": "Ordered `{pattern, label}` pairs mapping a process's cgroup leaf name to a descriptive origin; first match wins, no match is `other`. Add one per ssh transport or container runtime the site runs. Origin never feeds the kill decision (ADR-0003).",
+          "description": "Ordered `{pattern, label}` pairs mapping a process's cgroup leaf name to a descriptive origin; first match wins, no match is `other`. Add one per session-scope naming scheme or container runtime the site runs; a transport whose login registers no logind session stays in its daemon's unit and is named in `login_units` instead. Origin never feeds the kill decision (ADR-0003).",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -563,6 +563,19 @@
                 "description": "The origin label recorded in the finding, lower-case with underscores."
               }
             }
+          }
+        },
+        "login_units": {
+          "type": "object",
+          "default": {},
+          "description": "Service units that carry logins without registering a logind session, keyed by the bare unit leaf name (for example an ssh transport's own daemon unit) and mapping to an origin label. A process in that unit takes the label only when a login shell (argv[0] starting with `-`, or argv exactly `<shell> -l` or `<shell> --login` for a shell the reaper lists) is among itself and its ancestors inside the unit; otherwise the `origins` table decides, so the daemon itself stays a service. Use a label distinct from the generic service label. Origin never feeds the kill decision (ADR-0039).",
+          "propertyNames": {
+            "pattern": "^[^/]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z_]+$",
+            "description": "The origin label recorded for a login inside this unit, lower-case with underscores."
           }
         },
         "traversal_budget_s": {

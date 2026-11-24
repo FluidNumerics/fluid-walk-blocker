@@ -74,6 +74,7 @@ the ADR it bears on.
 | 0036 An agent hook carries Layer 1's rule table to Claude Code, compiled like the shim, and it denies but never rewrites | n/a: structural; the bypass is a property of the tool |
 | 0037 The reaper's action is a required site value with no default | n/a: structural |
 | 0038 A disabled shell's hook counts toward the injection marker when its file proves it ours | n/a: structural |
+| 0039 A login inside a service unit is labelled from site-named login units | The process tree of a login that stayed in the transport daemon's unit: each process's leaf cgroup, `argv[0]` and audit login uid, and the trail row that labelled it a service |
 
 ## What this file is not
 

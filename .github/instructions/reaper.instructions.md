@@ -53,7 +53,8 @@ drifted; applying it twice is worse than forgetting it once, because a relative
 
 ## Origin is descriptive
 
-Origin labels come from `[reaper].origins`, compiled in. Origin describes how
+Origin labels come from `[reaper].origins`, and from `[reaper].login_units`
+for a login inside a service unit (ADR-0039), compiled in. Origin describes how
 a process arrived — which transport, which session scope — and it never
 reaches `classify()`: the verdict is about what the process is doing, not how
 it got there (ADR-0003). That rule is code with a test, not a convention. A
