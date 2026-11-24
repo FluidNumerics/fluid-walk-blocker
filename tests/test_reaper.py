@@ -1849,7 +1849,7 @@ def test_origin_does_not_change_any_verdict(procfs, mounts_path):
     # cases above are orphans, so they are compared with each other: two
     # labels, one verdict, and one record apart from `origin`. The broken
     # chain changes the walk's ancestry, which is classify()'s business, so
-    # it is compared on the label alone.
+    # its verdict and label are compared but not the rest of its record.
     verdicts, records = [], []
     for shape in ("login", "daemon", "above", "broken"):
         root = procfs / ("origin-" + shape)

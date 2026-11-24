@@ -544,7 +544,7 @@
               "label": "init"
             }
           ],
-          "description": "Ordered `{pattern, label}` pairs mapping a process's cgroup leaf name to a descriptive origin; first match wins, no match is `other`. Add one per ssh transport or container runtime the site runs. Origin never feeds the kill decision (ADR-0003).",
+          "description": "Ordered `{pattern, label}` pairs mapping a process's cgroup leaf name to a descriptive origin; first match wins, no match is `other`. Add one per session-scope naming scheme or container runtime the site runs; a transport whose login registers no logind session stays in its daemon's unit and is named in `login_units` instead. Origin never feeds the kill decision (ADR-0003).",
           "items": {
             "type": "object",
             "additionalProperties": false,

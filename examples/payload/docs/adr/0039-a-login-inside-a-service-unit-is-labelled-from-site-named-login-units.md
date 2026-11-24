@@ -11,8 +11,8 @@ names a seated session `session-<N>.scope` and a seatless one
 `session-c<N>.scope`, and the second ssh transport ADR-0003 describes
 lands under the second form.
 
-That holds only when the transport's login registers a logind session —
-when the daemon starts the shell through PAM and `pam_systemd` runs. At a
+That holds only when the transport's login registers a logind session,
+through PAM's `pam_systemd` or by the daemon's own request to logind. At a
 reference deployment, interactive logins over an ssh transport that
 terminates the connection in its own daemon were found where it did not
 happen. The whole chain stayed in the daemon's own unit cgroup: a
@@ -115,7 +115,7 @@ sees its answer (ADR-0003).
   non-shell's `-l` and a login shell above the unit's boundary to
   `systemd_service`, and the hop cap on a `ppid` cycle. The verdict is
   pinned identical across four shapes, and every other record field across
-  the three whose ancestry is the same (`tests/test_reaper.py`).
+  the three whose chain inside the unit is unbroken (`tests/test_reaper.py`).
 
 ## Re-measure when
 
