@@ -54,12 +54,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Run the test suite as the non-root user
+        # setup-uv@v10.4.0 exports UV_PYTHON_INSTALL_DIR under $RUNNER_TEMP,
+        # which root owns, and runuser passes it on, so ciuser's uv could
+        # not install the matrix interpreter. Both runuser steps name a
+        # directory under ciuser's HOME instead, uv's own default.
         run: |
           runuser -u ciuser -- env \
             HOME=/home/ciuser \
             PATH="$PATH" \
             UV_PYTHON="$UV_PYTHON" \
             UV_CACHE_DIR=/home/ciuser/.cache/uv \
+            UV_PYTHON_INSTALL_DIR=/home/ciuser/.local/share/uv/python \
             uv run --group dev pytest tests/ -q
 
       - name: Run the banner tests with colour forced (3.14 only)
@@ -77,6 +82,7 @@ jobs:
             PATH="$PATH" \
             UV_PYTHON="$UV_PYTHON" \
             UV_CACHE_DIR=/home/ciuser/.cache/uv \
+            UV_PYTHON_INSTALL_DIR=/home/ciuser/.local/share/uv/python \
             FORCE_COLOR=3 \
             uv run --group dev pytest tests/test_banner.py -q
 
