@@ -41,13 +41,16 @@ jobs:
           dnf install -y git python3 dash shadow-utils strace acl systemd
           useradd -m ciuser
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Hand the workspace to the non-root test user
         run: chown -R ciuser:ciuser "$GITHUB_WORKSPACE" /home/ciuser
 
-      - uses: astral-sh/setup-uv@v4
+      # enable-cache defaulted to false through v4 and to auto from v5 on;
+      # stating false keeps every job's uv cache as it was under v4.
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
+          enable-cache: false
           python-version: ${{ matrix.python-version }}
 
       - name: Run the test suite as the non-root user
@@ -80,8 +83,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: false
 
       - name: pymarkdownlnt
         run: |
@@ -110,7 +115,7 @@ jobs:
     # environment, so the two jobs cannot silently overlap.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Scan the tracked tree for structural patterns
         run: python3 tools/check_no_site_literals.py --terms /dev/null --quiet
@@ -131,7 +136,7 @@ jobs:
     if: github.repository == 'FluidNumerics/fluid-walk-blocker'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Say why the term scan cannot run on a fork pull request
         # GitHub withholds secrets from a fork's PR run, by design and with no
@@ -181,8 +186,10 @@ jobs:
     # checks the one rendered page under docs/ by name.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: false
 
       - name: Two builds of the example site are byte-identical
         run: |
@@ -221,10 +228,12 @@ jobs:
     steps:
       # The whole history, because the comparison needs the merge base's
       # tree. The default shallow clone has no such commit.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: false
 
       - name: Build the example site at the merge base and at HEAD
         # The shim is a build product (ADR-0013), so the reference is BUILT
