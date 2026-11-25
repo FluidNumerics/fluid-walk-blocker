@@ -46,8 +46,9 @@ jobs:
       - name: Hand the workspace to the non-root test user
         run: chown -R ciuser:ciuser "$GITHUB_WORKSPACE" /home/ciuser
 
-      # enable-cache defaulted to false through v4 and to auto from v5 on;
-      # stating false keeps every job's uv cache as it was under v4.
+      # enable-cache defaulted to false through v4 and is auto from v5 on,
+      # which turns the cache on for these GitHub-hosted jobs. Stating
+      # false keeps v4's behaviour: no job saves or restores a uv cache.
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: false
