@@ -56,9 +56,8 @@ jobs:
 
       - name: Run the test suite as the non-root user
         # setup-uv@v10.4.0 exports UV_PYTHON_INSTALL_DIR under $RUNNER_TEMP,
-        # which root owns, and runuser passes it on, so ciuser's uv could
-        # not install the matrix interpreter. Both runuser steps name a
-        # directory under ciuser's HOME instead, uv's own default.
+        # where ciuser cannot create a directory, and runuser passes it on.
+        # Both runuser steps name uv's own default under ciuser's HOME.
         run: |
           runuser -u ciuser -- env \
             HOME=/home/ciuser \
